@@ -828,7 +828,7 @@ export default function AdvancedHistoryArchive() {
         {isUploadModalOpen && user?.isAdmin && (
           <div 
             className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 sm:p-6"
-            onClick={closeModal}
+            // onClick={closeModal} <--- REMOVED TO PREVENT CLOSING ON BACKDROP CLICK
           >
             <motion.div 
               initial={{ opacity: 0, scale: 0.95, y: 20 }}

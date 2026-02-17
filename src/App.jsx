@@ -32,22 +32,12 @@ const PAPER_TYPES = ["Paper 1 (DBQ)", "Paper 2 (Essay)"];
 // --- FALLBACK SUPER ADMIN ---
 const SUPER_ADMIN = "ethanng.520021231@gmail.com";
 
-const INITIAL_TOPICS = [
-  "Japan (1900-1945)", "China (Modernization)", "Cold War", 
-  "First World War", "Second World War", "International Cooperation",
-  "Hong Kong (Political)", "Hong Kong (Social)"
-];
+// --- EMPTIED LISTS AS REQUESTED ---
+const INITIAL_TOPICS = [];
 
 const INITIAL_QUESTION_TYPES = {
-  "Paper 1 (DBQ)": [
-    "Attitude", "View", "Message/Cartoon Analysis", "Utility/Usefulness", 
-    "Comparison (Source vs Source)", "Single Factor Relative Importance", 
-    "Do you agree?", "Trace and Explain"
-  ],
-  "Paper 2 (Essay)": [
-    "Dual Factor Relative Importance", "To what extent", "Trace and Explain", 
-    "Significance", "Comparison (Factor vs Factor)"
-  ]
+  "Paper 1 (DBQ)": [],
+  "Paper 2 (Essay)": []
 };
 
 // --- REUSABLE COMPONENT: CREATABLE SELECT ---
@@ -758,7 +748,11 @@ export default function AdvancedHistoryArchive() {
                         <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                           {parent.title} 
                           <span className="bg-slate-800 text-white text-sm px-2 py-0.5 rounded-md">
-                            Q{child.label}
+                            {/* CONDITIONAL DISPLAY LOGIC */}
+                            {parent.paperType === "Paper 2 (Essay)" 
+                              ? `Q${child.label}` 
+                              : `Q${child.label}`
+                            }
                           </span>
                         </h3>
 
@@ -880,7 +874,7 @@ export default function AdvancedHistoryArchive() {
                           </span>
                         </label>
                         <input 
-                          type="text" required placeholder="e.g. 2021E Q2 (Type '2012D' to auto-select DBQ)"
+                          type="text" required placeholder="e.g. 2021E (Type '2012D' to auto-select DBQ)"
                           className="input-field"
                           value={uploadForm.title} 
                           onChange={handleTitleChange}

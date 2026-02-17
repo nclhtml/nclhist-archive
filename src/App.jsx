@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, Tag, Edit, ChevronDown, Check, LogIn, LogOut, User, Lock, ShieldAlert, Loader2 } from 'lucide-react';
+import { Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, Tag, Edit, ChevronDown, Check, LogIn, LogOut, User, Lock, ShieldAlert, Loader2, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // --- FIREBASE IMPORTS ---
@@ -30,7 +30,6 @@ const ORIGINS = ["DSE Pastpaper", "Internal School Exam", "Mock Examination", "Q
 const PAPER_TYPES = ["Paper 1 (DBQ)", "Paper 2 (Essay)"];
 
 // --- FALLBACK SUPER ADMIN ---
-// This email will ALWAYS be admin, regardless of database settings (safety net)
 const SUPER_ADMIN = "ethanng.520021231@gmail.com";
 
 const INITIAL_TOPICS = [
@@ -170,7 +169,7 @@ const CreatableSelect = ({
 
 export default function AdvancedHistoryArchive() {
   // --- STATE ---
-  const [user, setUser] = useState(null); // { uid, email, isAdmin, isViewer }
+  const [user, setUser] = useState(null); 
   const [authLoading, setAuthLoading] = useState(true); 
   const [archives, setArchives] = useState([]); 
   
@@ -203,7 +202,6 @@ export default function AdvancedHistoryArchive() {
 
   // --- FIREBASE LOGIC ---
   
-  // Effect 1: Handle Authentication & Role Checking
   useEffect(() => {
     setAuthLoading(true);
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -212,12 +210,10 @@ export default function AdvancedHistoryArchive() {
         let isAdmin = false;
         let isViewer = false;
 
-        // 1. Check if Super Admin (Hardcoded safety net)
         if (email === SUPER_ADMIN) {
           isAdmin = true;
         }
 
-        // 2. Check Firestore "user_roles" collection
         try {
           const userRoleRef = doc(db, "user_roles", email);
           const userRoleSnap = await getDoc(userRoleRef);
@@ -231,7 +227,6 @@ export default function AdvancedHistoryArchive() {
           console.error("Error fetching user role:", error);
         }
 
-        // 3. Set User State
         setUser({
           uid: currentUser.uid,
           email: email,
@@ -249,7 +244,6 @@ export default function AdvancedHistoryArchive() {
     return () => unsubscribe();
   }, []);
 
-  // Effect 2: Fetch Data (ONLY if Authorized)
   useEffect(() => {
     const fetchArchives = async () => {
       if (!user || !user.isAuthorized) return;
@@ -328,6 +322,55 @@ export default function AdvancedHistoryArchive() {
         }));
         if (value === "Paper 2 (Essay)") newState.topic = ""; 
       }
+      return newState;
+    });
+  };
+
+  /**
+   * NEW FUNCTION: Handles Title Input with Auto-Detection
+   * Detects "2012D" or "2013E" patterns
+   */
+  const handleTitleChange = (e) => {
+    const val = e.target.value;
+
+    setUploadForm(prev => {
+      // 1. Always update the title text
+      let newState = { ...prev, title: val };
+
+      // 2. Run Auto-Detection Regex
+      // Looks for: 4 digits (Year), optional space, D or E (Paper)
+      const dseRegex = /(\d{4})\s*([DEde])/;
+      const match = val.match(dseRegex);
+
+      if (match) {
+        const year = match[1];
+        const letter = match[2].toUpperCase();
+
+        // Auto-fill Origin and Year
+        newState.origin = "DSE Pastpaper";
+        newState.year = year;
+
+        // Auto-fill Paper Type
+        if (letter === 'D') {
+          newState.paperType = "Paper 1 (DBQ)";
+        } else if (letter === 'E') {
+          newState.paperType = "Paper 2 (Essay)";
+        }
+
+        // Apply Side Effects (Labeling) if Paper Type changed
+        if (newState.paperType) {
+          newState.subQuestions = prev.subQuestions.map((sq, idx) => ({
+            ...sq,
+            label: getNextLabel(idx, newState.paperType)
+          }));
+          
+          // Clear topic if Paper 2 (since topics are per-question in Paper 2)
+          if (newState.paperType === "Paper 2 (Essay)") {
+            newState.topic = ""; 
+          }
+        }
+      }
+
       return newState;
     });
   };
@@ -486,7 +529,7 @@ export default function AdvancedHistoryArchive() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col md:flex-row relative">
       
-      {/* DEBUG BAR (Remove in production) */}
+      {/* DEBUG BAR */}
       <div className="fixed bottom-0 right-0 bg-black text-white text-[10px] p-2 z-50 opacity-80 pointer-events-none font-mono">
         STATUS: {user ? (user.isAdmin ? "ADMIN" : (user.isAuthorized ? "VIEWER" : "UNAUTHORIZED")) : "LOGGED OUT"} | {user?.email}
       </div>
@@ -830,11 +873,17 @@ export default function AdvancedHistoryArchive() {
                     
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       <div className="col-span-full">
-                        <label className="label">Document Title</label>
+                        <label className="label flex justify-between items-center">
+                          <span>Document Title</span>
+                          <span className="text-[10px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded font-medium flex items-center gap-1">
+                            <Sparkles size={10} /> Auto-detects "2012D" or "2013E"
+                          </span>
+                        </label>
                         <input 
-                          type="text" required placeholder="e.g. 2021 DSE History Paper 1 Q2"
+                          type="text" required placeholder="e.g. 2021E Q2 (Type '2012D' to auto-select DBQ)"
                           className="input-field"
-                          value={uploadForm.title} onChange={(e) => handleParentChange('title', e.target.value)}
+                          value={uploadForm.title} 
+                          onChange={handleTitleChange}
                         />
                       </div>
 

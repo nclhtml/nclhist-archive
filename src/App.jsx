@@ -1,13 +1,12 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, Tag, Edit, ChevronDown, Check, LogIn, LogOut, User } from 'lucide-react';
+import { Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, Tag, Edit, ChevronDown, Check, LogIn, LogOut, User, Lock, ShieldAlert, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // --- FIREBASE IMPORTS ---
-// We import the specific services we need for the Archive (Auth, Database, Storage)
 import { initializeApp } from "firebase/app";
 import { getAuth, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from "firebase/auth";
-import { getFirestore, collection, getDocs, addDoc, updateDoc, doc } from "firebase/firestore";
-import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { getFirestore, collection, getDocs, addDoc, updateDoc, deleteDoc, doc, getDoc } from "firebase/firestore";
+import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 // --- YOUR CONFIGURATION ---
 const firebaseConfig = {
@@ -30,8 +29,9 @@ const storage = getStorage(app);
 const ORIGINS = ["DSE Pastpaper", "Internal School Exam", "Mock Examination", "Quiz", "Exercise"];
 const PAPER_TYPES = ["Paper 1 (DBQ)", "Paper 2 (Essay)"];
 
-// Hardcoded admins for demo purposes (In production, use Custom Claims or Firestore User roles)
-const ADMIN_EMAILS = ["admin@example.com", "teacher@school.edu"];
+// --- FALLBACK SUPER ADMIN ---
+// This email will ALWAYS be admin, regardless of database settings (safety net)
+const SUPER_ADMIN = "ethanng.520021231@gmail.com";
 
 const INITIAL_TOPICS = [
   "Japan (1900-1945)", "China (Modernization)", "Cold War", 
@@ -50,44 +50,6 @@ const INITIAL_QUESTION_TYPES = {
     "Significance", "Comparison (Factor vs Factor)"
   ]
 };
-
-// --- MOCK DATA (Fallback while database is empty) ---
-const INITIAL_ARCHIVE = [
-  {
-    id: 'parent_1',
-    title: '2019 DSE History Paper 1 Q2',
-    origin: 'DSE Pastpaper',
-    year: '2019',
-    paperType: 'Paper 1 (DBQ)',
-    topic: 'Japan (1900-1945)', 
-    hasFile: true,
-    fileUrl: '#',
-    subQuestions: [
-      { id: 'child_1a', label: 'a', questionType: 'Message/Cartoon Analysis', score: '3 marks', content: 'What is the message of the cartoon regarding...', topic: '' },
-      { id: 'child_1b', label: 'b', questionType: 'Utility/Usefulness', score: '4 marks', content: 'How useful is Source B...', topic: '' },
-    ]
-  },
-  {
-    id: 'parent_2',
-    title: 'Mock Exam Essay Set',
-    origin: 'Mock Examination',
-    year: '2023',
-    paperType: 'Paper 2 (Essay)',
-    topic: '', 
-    hasFile: false, 
-    fileUrl: '',
-    subQuestions: [
-      { 
-        id: 'child_2a', 
-        label: '1', 
-        questionType: 'Dual Factor Relative Importance', 
-        score: '25 marks',
-        topic: 'China (Modernization)', 
-        content: 'To what extent was the Great Leap Forward a result of political ideology rather than economic necessity?' 
-      }
-    ]
-  }
-];
 
 // --- REUSABLE COMPONENT: CREATABLE SELECT ---
 const CreatableSelect = ({ 
@@ -208,11 +170,14 @@ const CreatableSelect = ({
 
 export default function AdvancedHistoryArchive() {
   // --- STATE ---
-  const [user, setUser] = useState(null); // { uid, email, isAdmin }
-  const [archives, setArchives] = useState(INITIAL_ARCHIVE);
+  const [user, setUser] = useState(null); // { uid, email, isAdmin, isViewer }
+  const [authLoading, setAuthLoading] = useState(true); 
+  const [archives, setArchives] = useState([]); 
+  
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
   
   // Dynamic Lists State
   const [availableTopics, setAvailableTopics] = useState(INITIAL_TOPICS);
@@ -238,23 +203,57 @@ export default function AdvancedHistoryArchive() {
 
   // --- FIREBASE LOGIC ---
   
+  // Effect 1: Handle Authentication & Role Checking
   useEffect(() => {
-    // 1. Listen for Auth State Changes
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    setAuthLoading(true);
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
+        const email = currentUser.email;
+        let isAdmin = false;
+        let isViewer = false;
+
+        // 1. Check if Super Admin (Hardcoded safety net)
+        if (email === SUPER_ADMIN) {
+          isAdmin = true;
+        }
+
+        // 2. Check Firestore "user_roles" collection
+        try {
+          const userRoleRef = doc(db, "user_roles", email);
+          const userRoleSnap = await getDoc(userRoleRef);
+          
+          if (userRoleSnap.exists()) {
+            const roleData = userRoleSnap.data();
+            if (roleData.role === 'admin') isAdmin = true;
+            if (roleData.role === 'viewer') isViewer = true;
+          }
+        } catch (error) {
+          console.error("Error fetching user role:", error);
+        }
+
+        // 3. Set User State
         setUser({
           uid: currentUser.uid,
-          email: currentUser.email,
+          email: email,
           displayName: currentUser.displayName,
-          isAdmin: ADMIN_EMAILS.includes(currentUser.email) // Simple admin check
+          isAdmin: isAdmin,
+          isViewer: isViewer,
+          isAuthorized: isAdmin || isViewer 
         });
       } else {
         setUser(null);
+        setArchives([]); 
       }
+      setAuthLoading(false);
     });
+    return () => unsubscribe();
+  }, []);
 
-    // 2. Fetch Data from Firestore
+  // Effect 2: Fetch Data (ONLY if Authorized)
+  useEffect(() => {
     const fetchArchives = async () => {
+      if (!user || !user.isAuthorized) return;
+
       try {
         const querySnapshot = await getDocs(collection(db, "archives"));
         const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -263,14 +262,13 @@ export default function AdvancedHistoryArchive() {
         }
       } catch (error) {
         console.error("Error fetching archives:", error);
-        // Fallback to mock data if fetch fails (e.g., permissions error)
       }
     };
-    
-    fetchArchives();
 
-    return () => unsubscribe();
-  }, []);
+    if (user && !authLoading) {
+        fetchArchives();
+    }
+  }, [user, authLoading]);
 
   const handleLogin = async () => {
     try {
@@ -295,6 +293,8 @@ export default function AdvancedHistoryArchive() {
 
   // --- FLATTENED SEARCH LOGIC ---
   const filteredResults = useMemo(() => {
+    if (!user || !user.isAuthorized) return [];
+
     const results = [];
     archives.forEach(parent => {
       const matchOrigin = filters.origin ? parent.origin === filters.origin : true;
@@ -314,7 +314,7 @@ export default function AdvancedHistoryArchive() {
       });
     });
     return results;
-  }, [archives, searchTerm, filters]);
+  }, [archives, searchTerm, filters, user]);
 
   // --- HANDLERS ---
   
@@ -378,27 +378,50 @@ export default function AdvancedHistoryArchive() {
   // --- MODAL HANDLERS ---
 
   const handleEditClick = (parentItem) => {
-    // In real app, check user.isAdmin here
+    if (!user?.isAdmin) return;
     setEditingId(parentItem.id);
     setUploadForm(JSON.parse(JSON.stringify(parentItem)));
+    setDeleteConfirm(false); 
     setIsUploadModalOpen(true);
+  };
+
+  const handleDelete = async () => {
+    if (!user?.isAdmin || !editingId) return;
+    
+    setIsLoading(true);
+    try {
+      if (uploadForm.fileUrl) {
+        try {
+          const fileRef = ref(storage, uploadForm.fileUrl);
+          await deleteObject(fileRef);
+        } catch (fileErr) {
+          console.warn("Could not delete file (might not exist):", fileErr);
+        }
+      }
+
+      await deleteDoc(doc(db, "archives", editingId));
+      setArchives(prev => prev.filter(item => item.id !== editingId));
+      closeModal();
+    } catch (error) {
+      console.error("Error deleting:", error);
+      alert("Failed to delete document. Check console.");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleUploadSubmit = async (e) => {
     e.preventDefault();
+    if (!user?.isAdmin) return; 
     if (!uploadForm.title) return;
     setIsLoading(true);
 
     try {
-      // 1. Upload File to Firebase Storage
       let fileUrl = uploadForm.fileUrl || '';
       
       if (selectedFile) {
-        // Create a storage reference
         const storageRef = ref(storage, `pdfs/${Date.now()}_${selectedFile.name}`);
-        // Upload the file
         await uploadBytes(storageRef, selectedFile);
-        // Get the URL
         fileUrl = await getDownloadURL(storageRef);
       }
 
@@ -411,16 +434,10 @@ export default function AdvancedHistoryArchive() {
       };
 
       if (editingId) {
-        // 2. Update Firestore Doc
         await updateDoc(doc(db, "archives", editingId), payload);
-        
-        // Optimistic UI update
         setArchives(prev => prev.map(item => item.id === editingId ? { ...payload, id: editingId } : item));
       } else {
-        // 3. Add Firestore Doc
         const docRef = await addDoc(collection(db, "archives"), payload);
-        
-        // Optimistic UI update
         const newEntry = {
           id: docRef.id,
           ...payload,
@@ -430,7 +447,7 @@ export default function AdvancedHistoryArchive() {
       closeModal();
     } catch (error) {
       console.error("Error uploading:", error);
-      alert("Failed to save document. Check console for details (likely permission issues if not logged in).");
+      alert("Failed to save document. Ensure you are an Admin.");
     } finally {
       setIsLoading(false);
     }
@@ -440,6 +457,7 @@ export default function AdvancedHistoryArchive() {
     setIsUploadModalOpen(false);
     setTimeout(() => {
       setEditingId(null);
+      setDeleteConfirm(false);
       setUploadForm({
         title: '', origin: '', year: new Date().getFullYear().toString(), paperType: '', topic: '',
         subQuestions: [{ id: Date.now(), label: 'a', questionType: '', content: '', topic: '' }]
@@ -453,9 +471,26 @@ export default function AdvancedHistoryArchive() {
     return () => { document.body.style.overflow = 'unset'; };
   }, [isUploadModalOpen]);
 
+  // --- RENDER CONTENT ---
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="animate-spin text-blue-600" size={40} />
+          <p className="text-slate-500 font-medium">Verifying Access...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col md:flex-row">
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col md:flex-row relative">
       
+      {/* DEBUG BAR (Remove in production) */}
+      <div className="fixed bottom-0 right-0 bg-black text-white text-[10px] p-2 z-50 opacity-80 pointer-events-none font-mono">
+        STATUS: {user ? (user.isAdmin ? "ADMIN" : (user.isAuthorized ? "VIEWER" : "UNAUTHORIZED")) : "LOGGED OUT"} | {user?.email}
+      </div>
+
       {/* --- SIDEBAR FILTERS --- */}
       <aside className={`
         fixed md:sticky top-0 left-0 z-30 h-screen w-72 bg-white border-r border-slate-200 p-6 overflow-y-auto transition-transform duration-300
@@ -476,7 +511,7 @@ export default function AdvancedHistoryArchive() {
             {user ? (
               <div className="space-y-3">
                 <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
-                  <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center">
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center ${user.isAdmin ? 'bg-purple-100 text-purple-600' : 'bg-blue-100 text-blue-600'}`}>
                     <User size={16} />
                   </div>
                   <div className="overflow-hidden">
@@ -484,14 +519,31 @@ export default function AdvancedHistoryArchive() {
                     <p className="text-xs text-slate-400 truncate">{user.email}</p>
                   </div>
                 </div>
+                
+                {/* Role Badge */}
+                <div className="flex justify-start">
+                  {user.isAdmin ? (
+                    <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide">Administrator</span>
+                  ) : user.isAuthorized ? (
+                    <span className="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide">Authorized Viewer</span>
+                  ) : (
+                    <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide flex items-center gap-1">
+                      <ShieldAlert size={10} /> Unauthorized
+                    </span>
+                  )}
+                </div>
+
                 <button onClick={handleLogout} className="w-full flex items-center justify-center gap-2 text-xs text-red-500 hover:bg-red-50 py-2 rounded border border-transparent hover:border-red-100 transition-colors">
                   <LogOut size={14} /> Sign Out
                 </button>
               </div>
             ) : (
-              <button onClick={handleLogin} className="w-full flex items-center justify-center gap-2 bg-slate-800 text-white py-2 rounded-lg text-sm font-medium hover:bg-slate-900 transition-colors">
-                <LogIn size={16} /> Google Login
-              </button>
+              <div className="space-y-2">
+                <p className="text-xs text-slate-500 mb-2">Login to view archive contents.</p>
+                <button onClick={handleLogin} className="w-full flex items-center justify-center gap-2 bg-slate-800 text-white py-2 rounded-lg text-sm font-medium hover:bg-slate-900 transition-colors">
+                  <LogIn size={16} /> Google Login
+                </button>
+              </div>
             )}
           </div>
 
@@ -562,17 +614,29 @@ export default function AdvancedHistoryArchive() {
         {/* Header */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
           <div>
-            <h1 className="text-3xl font-bold text-slate-800">History Archive</h1>
+            <h1 className="text-3xl font-bold text-slate-800 flex items-center gap-3">
+              History Archive
+              {user && user.isAdmin && (
+                <span className="text-xs bg-purple-600 text-white px-2 py-1 rounded-md uppercase tracking-wider font-bold">Admin Mode</span>
+              )}
+              {user && user.isAuthorized && !user.isAdmin && (
+                <span className="text-xs bg-green-600 text-white px-2 py-1 rounded-md uppercase tracking-wider font-bold">Viewer Mode</span>
+              )}
+            </h1>
             <p className="text-slate-500 mt-1">
-              Found {filteredResults.length} sub-questions
+              {user && user.isAuthorized 
+                ? `Found ${filteredResults.length} sub-questions`
+                : 'Secure Database Access'
+              }
             </p>
           </div>
           <div className="flex gap-2 w-full md:w-auto">
             <button onClick={() => setShowFilters(true)} className="md:hidden btn-secondary flex-1">
               <Filter size={18} /> Filter
             </button>
-            {/* Show Upload Button if user is logged in (and ideally admin) */}
-            {user && (
+            
+            {/* STRICT: ONLY SHOW UPLOAD IF ADMIN */}
+            {user && user.isAdmin && (
               <button onClick={() => setIsUploadModalOpen(true)} className="btn-primary flex-1 md:flex-none">
                 <Upload size={18} /> Upload
               </button>
@@ -580,118 +644,151 @@ export default function AdvancedHistoryArchive() {
           </div>
         </div>
 
-        {/* Search Bar */}
-        <div className="relative mb-6">
-          <Search className="absolute left-4 top-3.5 text-slate-400" size={20} />
-          <input
-            type="text"
-            placeholder="Search for topics, question types, or titles..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500 outline-none"
-          />
-        </div>
+        {/* --- CONDITIONAL RENDERING FOR SECURITY --- */}
 
-        {/* Results List */}
-        <div className="space-y-4">
-          <AnimatePresence>
-            {filteredResults.map(({ uniqueId, parent, child }) => (
-              <motion.div
-                key={uniqueId}
-                layout
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                className="bg-white rounded-xl border border-slate-200 p-0 shadow-sm hover:shadow-md transition-shadow overflow-hidden"
-              >
-                <div className="flex flex-col md:flex-row relative">
-                  
-                  {/* Left: Child Details */}
-                  <div className="flex-1 p-5 border-b md:border-b-0 md:border-r border-slate-100 relative">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                        {parent.year} • {parent.origin}
-                      </span>
-                      <span className={`text-xs px-2 py-0.5 rounded font-medium ${parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
-                        {parent.paperType}
-                      </span>
-                    </div>
-                    
-                    <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                       {parent.title} 
-                       <span className="bg-slate-800 text-white text-sm px-2 py-0.5 rounded-md">
-                         Q{child.label}
-                       </span>
-                    </h3>
+        {/* SCENARIO 1: NOT LOGGED IN (Hide everything) */}
+        {!user && (
+          <div className="flex flex-col items-center justify-center py-20 text-slate-400 bg-white rounded-xl border border-slate-200 border-dashed">
+            <Lock size={48} className="mb-4 text-slate-300" />
+            <h3 className="text-lg font-semibold text-slate-600">Access Restricted</h3>
+            <p className="text-sm max-w-xs text-center mt-2 mb-6">
+              You must be logged in to view the archive contents.
+            </p>
+            <button onClick={handleLogin} className="btn-primary">
+              <LogIn size={16} /> Login with Google
+            </button>
+          </div>
+        )}
 
-                    <div className="mt-3 text-slate-600 text-sm line-clamp-3 bg-slate-50 p-3 rounded-lg border border-slate-100 italic">
-                      {child.content || "No text content provided."}
-                    </div>
+        {/* SCENARIO 2: LOGGED IN BUT UNAUTHORIZED (Hide everything) */}
+        {user && !user.isAuthorized && (
+          <div className="flex flex-col items-center justify-center py-20 text-slate-400 bg-red-50 rounded-xl border border-red-100">
+            <ShieldAlert size={48} className="mb-4 text-red-300" />
+            <h3 className="text-lg font-semibold text-red-700">Unauthorized Access</h3>
+            <p className="text-sm max-w-md text-center mt-2 text-red-600">
+              Your account ({user.email}) does not have permission to view these documents. 
+              Please contact the administrator (clng@ktls.edu.hk) to request access.
+            </p>
+          </div>
+        )}
 
-                    <div className="mt-4 flex flex-wrap gap-3">
-                      {(parent.topic || child.topic) && (
-                        <div className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
-                          <Tag size={12} /> {parent.topic || child.topic}
-                        </div>
-                      )}
-                      <div className="badge bg-green-50 text-green-700 border-green-100">
-                        {child.questionType}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Right: Parent Action */}
-                  <div className="p-5 bg-slate-50 md:w-64 flex flex-col justify-center items-center gap-3 relative">
-                    
-                    {/* ID Display - Moved to Top Right */}
-                    <div className="absolute top-2 right-2 text-[10px] text-slate-300 font-mono select-none">
-                      ID: {parent.id}
-                    </div>
-
-                    {parent.hasFile ? (
-                      <a 
-                        href={parent.fileUrl} 
-                        target="_blank" 
-                        rel="noreferrer"
-                        className="w-full flex items-center justify-center gap-2 bg-white border border-slate-300 hover:border-blue-500 hover:text-blue-600 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
-                      >
-                        <Download size={16} />
-                        Download PDF
-                      </a>
-                    ) : (
-                      <div className="text-center text-slate-400 text-sm italic px-4">
-                        <FileText size={24} className="mx-auto mb-2 opacity-50" />
-                        No PDF attached
-                      </div>
-                    )}
-                    
-                    {/* Show Edit if user is logged in */}
-                    {user && (
-                      <button 
-                        onClick={() => handleEditClick(parent)}
-                        className="w-full flex items-center justify-center gap-2 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-                      >
-                        <Edit size={16} />
-                        Edit Parent
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </motion.div>
-            ))}
-          </AnimatePresence>
-
-          {filteredResults.length === 0 && (
-            <div className="text-center py-20 text-slate-500">
-              No questions found matching your criteria.
+        {/* SCENARIO 3: AUTHORIZED (Admin or Viewer) - Show Content */}
+        {user && user.isAuthorized && (
+          <>
+            {/* Search Bar */}
+            <div className="relative mb-6">
+              <Search className="absolute left-4 top-3.5 text-slate-400" size={20} />
+              <input
+                type="text"
+                placeholder="Search for topics, question types, or titles..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500 outline-none"
+              />
             </div>
-          )}
-        </div>
+
+            {/* Results List */}
+            <div className="space-y-4">
+              <AnimatePresence>
+                {filteredResults.map(({ uniqueId, parent, child }) => (
+                  <motion.div
+                    key={uniqueId}
+                    layout
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    className="bg-white rounded-xl border border-slate-200 p-0 shadow-sm hover:shadow-md transition-shadow overflow-hidden"
+                  >
+                    <div className="flex flex-col md:flex-row relative">
+                      
+                      {/* Left: Child Details */}
+                      <div className="flex-1 p-5 border-b md:border-b-0 md:border-r border-slate-100 relative">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                            {parent.year} • {parent.origin}
+                          </span>
+                          <span className={`text-xs px-2 py-0.5 rounded font-medium ${parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
+                            {parent.paperType}
+                          </span>
+                        </div>
+                        
+                        <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                          {parent.title} 
+                          <span className="bg-slate-800 text-white text-sm px-2 py-0.5 rounded-md">
+                            Q{child.label}
+                          </span>
+                        </h3>
+
+                        <div className="mt-3 text-slate-600 text-sm line-clamp-3 bg-slate-50 p-3 rounded-lg border border-slate-100 italic">
+                          {child.content || "No text content provided."}
+                        </div>
+
+                        <div className="mt-4 flex flex-wrap gap-3">
+                          {(parent.topic || child.topic) && (
+                            <div className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
+                              <Tag size={12} /> {parent.topic || child.topic}
+                            </div>
+                          )}
+                          <div className="badge bg-green-50 text-green-700 border-green-100">
+                            {child.questionType}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Right: Parent Action */}
+                      <div className="p-5 bg-slate-50 md:w-64 flex flex-col justify-center items-center gap-3 relative">
+                        
+                        {/* ID Display - Moved to Top Right */}
+                        <div className="absolute top-2 right-2 text-[10px] text-slate-300 font-mono select-none">
+                          ID: {parent.id}
+                        </div>
+
+                        {parent.hasFile ? (
+                          <a 
+                            href={parent.fileUrl} 
+                            target="_blank" 
+                            rel="noreferrer"
+                            className="w-full flex items-center justify-center gap-2 bg-white border border-slate-300 hover:border-blue-500 hover:text-blue-600 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
+                          >
+                            <Download size={16} />
+                            Download PDF
+                          </a>
+                        ) : (
+                          <div className="text-center text-slate-400 text-sm italic px-4">
+                            <FileText size={24} className="mx-auto mb-2 opacity-50" />
+                            No PDF attached
+                          </div>
+                        )}
+                        
+                        {/* STRICT: ONLY SHOW EDIT IF ADMIN */}
+                        {user.isAdmin && (
+                          <button 
+                            onClick={() => handleEditClick(parent)}
+                            className="w-full flex items-center justify-center gap-2 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                          >
+                            <Edit size={16} />
+                            Edit Parent
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+
+              {filteredResults.length === 0 && (
+                <div className="text-center py-20 text-slate-500">
+                  No questions found matching your criteria.
+                </div>
+              )}
+            </div>
+          </>
+        )}
       </main>
 
-      {/* --- UPLOAD / EDIT MODAL --- */}
+      {/* --- UPLOAD / EDIT MODAL (Only renders if admin opens it) --- */}
       <AnimatePresence>
-        {isUploadModalOpen && (
+        {isUploadModalOpen && user?.isAdmin && (
           <div 
             className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 sm:p-6"
             onClick={closeModal}
@@ -888,22 +985,56 @@ export default function AdvancedHistoryArchive() {
               </div>
 
               {/* Modal Footer */}
-              <div className="p-5 border-t border-slate-100 bg-white rounded-b-2xl flex justify-end gap-3 shrink-0">
-                <button 
-                  type="button" 
-                  onClick={closeModal}
-                  className="px-6 py-2 rounded-lg border border-slate-200 text-slate-600 font-medium hover:bg-slate-50 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button 
-                  type="submit" 
-                  form="upload-form"
-                  disabled={isLoading}
-                  className={`px-6 py-2 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-700 shadow-lg shadow-blue-200 transition-all ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
-                >
-                  {isLoading ? 'Processing...' : (editingId ? 'Update Archive' : 'Save to Archive')}
-                </button>
+              <div className="p-5 border-t border-slate-100 bg-white rounded-b-2xl flex justify-between items-center shrink-0">
+                
+                {/* DELETE BUTTON (Only if editing) */}
+                <div>
+                  {editingId && (
+                    !deleteConfirm ? (
+                      <button
+                        type="button"
+                        onClick={() => setDeleteConfirm(true)}
+                        className="text-red-500 hover:bg-red-50 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors"
+                      >
+                        <Trash2 size={16} /> Delete Document
+                      </button>
+                    ) : (
+                      <div className="flex items-center gap-2 animate-in fade-in slide-in-from-left-2 duration-200">
+                        <span className="text-xs font-bold text-red-600 uppercase">Are you sure?</span>
+                        <button 
+                          onClick={handleDelete}
+                          className="bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors"
+                        >
+                          Yes, Delete
+                        </button>
+                        <button 
+                          onClick={() => setDeleteConfirm(false)}
+                          className="text-slate-400 hover:text-slate-600 px-2 py-1 text-xs"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )
+                  )}
+                </div>
+
+                <div className="flex gap-3">
+                  <button 
+                    type="button" 
+                    onClick={closeModal}
+                    className="px-6 py-2 rounded-lg border border-slate-200 text-slate-600 font-medium hover:bg-slate-50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit" 
+                    form="upload-form"
+                    disabled={isLoading}
+                    className={`px-6 py-2 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-700 shadow-lg shadow-blue-200 transition-all ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  >
+                    {isLoading ? 'Processing...' : (editingId ? 'Update Archive' : 'Save to Archive')}
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>

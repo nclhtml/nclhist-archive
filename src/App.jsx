@@ -40,9 +40,8 @@ const SORT_OPTIONS = [
 // --- FALLBACK SUPER ADMIN ---
 const SUPER_ADMIN = "ethanng.520021231@gmail.com";
 
-// --- EMPTIED LISTS AS REQUESTED ---
+// --- EMPTIED LISTS (Will be populated dynamically) ---
 const INITIAL_TOPICS = [];
-
 const INITIAL_QUESTION_TYPES = {
   "Paper 1 (DBQ)": [],
   "Paper 2 (Essay)": []
@@ -58,7 +57,7 @@ const ensureArray = (data) => {
 // --- REUSABLE COMPONENT: MULTI-SELECT CREATABLE ---
 const CreatableSelect = ({ 
   options = [], 
-  value, // Expecting array if isMulti is true
+  value, 
   onChange, 
   onCreate, 
   placeholder, 
@@ -70,7 +69,6 @@ const CreatableSelect = ({
   const [search, setSearch] = useState('');
   const wrapperRef = useRef(null);
 
-  // Ensure value is always an array for internal logic if isMulti
   const selectedValues = isMulti ? ensureArray(value) : (value ? [value] : []);
 
   useEffect(() => {
@@ -85,13 +83,13 @@ const CreatableSelect = ({
 
   const filteredOptions = options.filter(opt => 
     opt.toLowerCase().includes(search.toLowerCase()) && 
-    !selectedValues.includes(opt) // Don't show already selected
+    !selectedValues.includes(opt) 
   );
 
   const handleSelect = (opt) => {
     if (isMulti) {
       onChange([...selectedValues, opt]);
-      setSearch(''); // Clear search after selecting
+      setSearch(''); 
     } else {
       onChange(opt);
       setSearch(opt);
@@ -123,7 +121,6 @@ const CreatableSelect = ({
 
   return (
     <div className="relative" ref={wrapperRef}>
-      {/* Selected Tags Display (For Multi) */}
       {isMulti && selectedValues.length > 0 && (
         <div className="flex flex-wrap gap-2 mb-2">
           {selectedValues.map((val, idx) => (
@@ -153,7 +150,7 @@ const CreatableSelect = ({
           disabled={disabled}
           onChange={(e) => {
             setSearch(e.target.value);
-            if (!isMulti) onChange(e.target.value); // For single select, type = change
+            if (!isMulti) onChange(e.target.value); 
             setIsOpen(true);
           }}
           onFocus={() => !disabled && setIsOpen(true)}
@@ -237,8 +234,8 @@ export default function AdvancedHistoryArchive() {
     origin: '', 
     year: new Date().getFullYear().toString(), 
     paperType: '',
-    topic: [], // Changed to Array
-    subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', topic: [] }] // Changed to Arrays
+    topic: [], 
+    subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', topic: [] }] 
   });
   const [selectedFile, setSelectedFile] = useState(null);
 
@@ -286,6 +283,7 @@ export default function AdvancedHistoryArchive() {
     return () => unsubscribe();
   }, []);
 
+  // --- FETCH & EXTRACT TAGS ---
   useEffect(() => {
     const fetchArchives = async () => {
       if (!user || !user.isAuthorized) return;
@@ -293,8 +291,42 @@ export default function AdvancedHistoryArchive() {
       try {
         const querySnapshot = await getDocs(collection(db, "archives"));
         const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        
         if (data.length > 0) {
             setArchives(data);
+            
+            // --- NEW: EXTRACT TAGS FROM DATA ---
+            const extractedTopics = new Set();
+            const extractedTypes = {
+              "Paper 1 (DBQ)": new Set(),
+              "Paper 2 (Essay)": new Set()
+            };
+
+            data.forEach(item => {
+              // Extract Parent Topics
+              ensureArray(item.topic).forEach(t => {
+                if(t) extractedTopics.add(t);
+              });
+
+              // Extract Child Topics & Types
+              item.subQuestions?.forEach(sq => {
+                ensureArray(sq.topic).forEach(t => {
+                  if(t) extractedTopics.add(t);
+                });
+                
+                ensureArray(sq.questionType).forEach(qt => {
+                  if (qt && item.paperType && extractedTypes[item.paperType]) {
+                    extractedTypes[item.paperType].add(qt);
+                  }
+                });
+              });
+            });
+
+            setAvailableTopics(Array.from(extractedTopics).sort());
+            setAvailableQuestionTypes({
+              "Paper 1 (DBQ)": Array.from(extractedTypes["Paper 1 (DBQ)"]).sort(),
+              "Paper 2 (Essay)": Array.from(extractedTypes["Paper 2 (Essay)"]).sort()
+            });
         }
       } catch (error) {
         console.error("Error fetching archives:", error);
@@ -370,12 +402,10 @@ export default function AdvancedHistoryArchive() {
         case 'title_asc':
           return a.parent.title.localeCompare(b.parent.title);
         case 'added_desc':
-          // Fallback to 0 if updatedBy/At is missing
           const dateA = a.parent.updatedAt ? new Date(a.parent.updatedAt).getTime() : 0;
           const dateB = b.parent.updatedAt ? new Date(b.parent.updatedAt).getTime() : 0;
           return dateB - dateA;
         case 'topic_asc':
-          // Sort by first topic found
           const topicA = ensureArray(a.parent.topic)[0] || ensureArray(a.child.topic)[0] || '';
           const topicB = ensureArray(b.parent.topic)[0] || ensureArray(b.child.topic)[0] || '';
           return topicA.localeCompare(topicB);
@@ -401,7 +431,7 @@ export default function AdvancedHistoryArchive() {
           ...sq,
           label: getNextLabel(idx, value)
         }));
-        if (value === "Paper 2 (Essay)") newState.topic = []; // Clear topic if Paper 2
+        if (value === "Paper 2 (Essay)") newState.topic = []; 
       }
       return newState;
     });
@@ -490,7 +520,6 @@ export default function AdvancedHistoryArchive() {
     if (!user?.isAdmin) return;
     setEditingId(parentItem.id);
     
-    // Deep copy and ensure arrays for editing legacy data
     const itemData = JSON.parse(JSON.stringify(parentItem));
     itemData.topic = ensureArray(itemData.topic);
     itemData.subQuestions = itemData.subQuestions.map(sq => ({
@@ -557,6 +586,14 @@ export default function AdvancedHistoryArchive() {
         const newEntry = { id: docRef.id, ...payload };
         setArchives([newEntry, ...archives]);
       }
+      
+      // Update local lists immediately if new tags were added
+      ensureArray(payload.topic).forEach(t => handleCreateTopic(t));
+      payload.subQuestions.forEach(sq => {
+        ensureArray(sq.topic).forEach(t => handleCreateTopic(t));
+        ensureArray(sq.questionType).forEach(qt => handleCreateQuestionType(qt, payload.paperType));
+      });
+
       closeModal();
     } catch (error) {
       console.error("Error uploading:", error);

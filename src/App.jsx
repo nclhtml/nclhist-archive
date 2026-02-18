@@ -1056,11 +1056,8 @@ export default function AdvancedHistoryArchive() {
                 {/* Right: PDF Preview - Takes up majority of space for 2-page view */}
                 {previewItem.parent.hasFile && (
                   <div className="flex-1 bg-slate-200 flex flex-col h-full relative">
-                    <div className="absolute top-2 right-4 z-10 bg-white/80 backdrop-blur px-3 py-1 rounded-full text-[10px] font-bold text-slate-500 shadow-sm border border-slate-200 pointer-events-none">
-                       PDF PREVIEW MODE
-                    </div>
                     <iframe 
-                      src={`${previewItem.parent.fileUrl}#view=FitH`}
+                      src={`${previewItem.parent.fileUrl}#view=Fit&pagemode=thumbs&page=1&zoom=page-fit`}
                       className="w-full h-full"
                       title="PDF Preview"
                     />

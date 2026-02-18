@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, Tag, Edit, ChevronDown, Check, LogIn, LogOut, User, Lock, ShieldAlert, Loader2, Sparkles, ArrowUpDown } from 'lucide-react';
+import { Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, Tag, Edit, ChevronDown, Check, LogIn, LogOut, User, Lock, ShieldAlert, Loader2, Sparkles, ArrowUpDown, Eye, ExternalLink } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // --- FIREBASE IMPORTS ---
@@ -216,6 +216,9 @@ export default function AdvancedHistoryArchive() {
   const [isLoading, setIsLoading] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   
+  // Preview Modal State
+  const [previewItem, setPreviewItem] = useState(null); // { parent, child }
+
   // Dynamic Lists State
   const [availableTopics, setAvailableTopics] = useState(INITIAL_TOPICS);
   const [availableQuestionTypes, setAvailableQuestionTypes] = useState(INITIAL_QUESTION_TYPES);
@@ -516,7 +519,8 @@ export default function AdvancedHistoryArchive() {
 
   // --- MODAL HANDLERS ---
 
-  const handleEditClick = (parentItem) => {
+  const handleEditClick = (e, parentItem) => {
+    e.stopPropagation(); // Prevent opening preview modal
     if (!user?.isAdmin) return;
     setEditingId(parentItem.id);
     
@@ -617,9 +621,9 @@ export default function AdvancedHistoryArchive() {
   };
 
   useEffect(() => {
-    document.body.style.overflow = isUploadModalOpen ? 'hidden' : 'unset';
+    document.body.style.overflow = (isUploadModalOpen || previewItem) ? 'hidden' : 'unset';
     return () => { document.body.style.overflow = 'unset'; };
-  }, [isUploadModalOpen]);
+  }, [isUploadModalOpen, previewItem]);
 
   // --- RENDER CONTENT ---
   if (authLoading) {
@@ -862,7 +866,8 @@ export default function AdvancedHistoryArchive() {
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.95 }}
-                    className="bg-white rounded-xl border border-slate-200 p-0 shadow-sm hover:shadow-md transition-shadow overflow-hidden"
+                    onClick={() => setPreviewItem({ parent, child })} // CLICK TO OPEN PREVIEW
+                    className="bg-white rounded-xl border border-slate-200 p-0 shadow-sm hover:shadow-lg hover:border-blue-300 cursor-pointer transition-all overflow-hidden group"
                   >
                     <div className="flex flex-col md:flex-row relative">
                       
@@ -877,7 +882,7 @@ export default function AdvancedHistoryArchive() {
                           </span>
                         </div>
                         
-                        <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                        <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 group-hover:text-blue-600 transition-colors">
                           {parent.title} 
                           <span className="bg-slate-800 text-white text-sm px-2 py-0.5 rounded-md">
                             Q{child.label}
@@ -916,27 +921,25 @@ export default function AdvancedHistoryArchive() {
                           ID: {parent.id}
                         </div>
 
+                        {/* View Details Button (Visual Cue) */}
+                        <div className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-md opacity-0 group-hover:opacity-100 transition-all transform translate-y-2 group-hover:translate-y-0">
+                          <Eye size={16} /> View Details
+                        </div>
+
                         {parent.hasFile ? (
-                          <a 
-                            href={parent.fileUrl} 
-                            target="_blank" 
-                            rel="noreferrer"
-                            className="w-full flex items-center justify-center gap-2 bg-white border border-slate-300 hover:border-blue-500 hover:text-blue-600 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
-                          >
-                            <Download size={16} />
-                            Download PDF
-                          </a>
+                          <div className="text-center text-slate-500 text-xs flex items-center gap-1">
+                             <FileText size={12} /> PDF Attached
+                          </div>
                         ) : (
                           <div className="text-center text-slate-400 text-sm italic px-4">
-                            <FileText size={24} className="mx-auto mb-2 opacity-50" />
                             No PDF attached
                           </div>
                         )}
                         
                         {user.isAdmin && (
                           <button 
-                            onClick={() => handleEditClick(parent)}
-                            className="w-full flex items-center justify-center gap-2 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                            onClick={(e) => handleEditClick(e, parent)}
+                            className="w-full flex items-center justify-center gap-2 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
                           >
                             <Edit size={16} />
                             Edit Parent
@@ -957,6 +960,132 @@ export default function AdvancedHistoryArchive() {
           </>
         )}
       </main>
+
+      {/* --- PREVIEW MODAL --- */}
+      <AnimatePresence>
+        {previewItem && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 sm:p-6">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white rounded-2xl w-full max-w-5xl h-[90vh] shadow-2xl flex flex-col overflow-hidden"
+            >
+              {/* Preview Header */}
+              <div className="p-5 border-b border-slate-100 flex justify-between items-start bg-slate-50 shrink-0">
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                      {previewItem.parent.year} • {previewItem.parent.origin}
+                    </span>
+                    <span className={`text-xs px-2 py-0.5 rounded font-medium ${previewItem.parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
+                      {previewItem.parent.paperType}
+                    </span>
+                  </div>
+                  <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
+                    {previewItem.parent.title}
+                    <span className="bg-slate-800 text-white text-lg px-3 py-0.5 rounded-lg">
+                      Q{previewItem.child.label}
+                    </span>
+                  </h2>
+                </div>
+                <button 
+                  onClick={() => setPreviewItem(null)} 
+                  className="text-slate-400 hover:text-slate-800 bg-white hover:bg-slate-200 p-2 rounded-full transition-colors border border-slate-200"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+
+              {/* Preview Body */}
+              <div className="flex-1 overflow-y-auto flex flex-col md:flex-row">
+                
+                {/* Left: Text Content & Metadata */}
+                <div className="flex-1 p-6 md:p-8 overflow-y-auto">
+                  <div className="prose max-w-none">
+                    <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-2">Question Content</h3>
+                    <div className="text-lg text-slate-800 leading-relaxed whitespace-pre-wrap bg-slate-50 p-6 rounded-xl border border-slate-100">
+                      {previewItem.child.content || <span className="text-slate-400 italic">No text content available. Please refer to the PDF.</span>}
+                    </div>
+                  </div>
+
+                  <div className="mt-8 space-y-4">
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Topics</h4>
+                      <div className="flex flex-wrap gap-2">
+                        {[...ensureArray(previewItem.parent.topic), ...ensureArray(previewItem.child.topic)].map((t, i) => (
+                          <span key={i} className="px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-sm font-medium border border-blue-100 flex items-center gap-1">
+                            <Tag size={14} /> {t}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Question Types</h4>
+                      <div className="flex flex-wrap gap-2">
+                        {ensureArray(previewItem.child.questionType).map((qt, i) => (
+                          <span key={i} className="px-3 py-1 bg-green-50 text-green-700 rounded-full text-sm font-medium border border-green-100">
+                            {qt}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right: PDF Preview */}
+                {previewItem.parent.hasFile && (
+                  <div className="md:w-1/2 bg-slate-100 border-l border-slate-200 flex flex-col">
+                    <div className="p-3 bg-white border-b border-slate-200 flex justify-between items-center">
+                      <span className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
+                        <FileText size={14} /> PDF Preview
+                      </span>
+                      <a 
+                        href={previewItem.parent.fileUrl} 
+                        target="_blank" 
+                        rel="noreferrer"
+                        className="text-xs font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                      >
+                        Open in New Tab <ExternalLink size={12} />
+                      </a>
+                    </div>
+                    <div className="flex-1 relative bg-slate-200">
+                      <iframe 
+                        src={`${previewItem.parent.fileUrl}#toolbar=0`}
+                        className="w-full h-full absolute inset-0"
+                        title="PDF Preview"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Preview Footer */}
+              <div className="p-5 border-t border-slate-100 bg-white flex justify-end gap-3 shrink-0">
+                <button 
+                  onClick={() => setPreviewItem(null)}
+                  className="px-6 py-2 rounded-lg border border-slate-200 text-slate-600 font-medium hover:bg-slate-50 transition-colors"
+                >
+                  Close
+                </button>
+                
+                {previewItem.parent.hasFile && (
+                  <a 
+                    href={previewItem.parent.fileUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-6 py-2 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-700 shadow-lg shadow-blue-200 transition-all flex items-center gap-2"
+                  >
+                    <Download size={18} /> Download PDF
+                  </a>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* --- UPLOAD / EDIT MODAL --- */}
       <AnimatePresence>

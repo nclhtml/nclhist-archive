@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, Tag, Edit, ChevronDown, Check, LogIn, LogOut, User, Lock, ShieldAlert, Loader2, Sparkles } from 'lucide-react';
+import { Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, Tag, Edit, ChevronDown, Check, LogIn, LogOut, User, Lock, ShieldAlert, Loader2, Sparkles, ArrowUpDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // --- FIREBASE IMPORTS ---
@@ -28,6 +28,14 @@ const storage = getStorage(app);
 // --- APP CONSTANTS ---
 const ORIGINS = ["DSE Pastpaper", "Internal School Exam", "Mock Examination", "Quiz", "Exercise"];
 const PAPER_TYPES = ["Paper 1 (DBQ)", "Paper 2 (Essay)"];
+const SORT_OPTIONS = [
+  { label: "Year (Newest)", value: "year_desc" },
+  { label: "Year (Oldest)", value: "year_asc" },
+  { label: "Title (A-Z)", value: "title_asc" },
+  { label: "Date Added (Newest)", value: "added_desc" },
+  { label: "Topic (A-Z)", value: "topic_asc" },
+  { label: "Question Type (A-Z)", value: "qtype_asc" },
+];
 
 // --- FALLBACK SUPER ADMIN ---
 const SUPER_ADMIN = "ethanng.520021231@gmail.com";
@@ -40,23 +48,30 @@ const INITIAL_QUESTION_TYPES = {
   "Paper 2 (Essay)": []
 };
 
-// --- REUSABLE COMPONENT: CREATABLE SELECT ---
+// --- HELPER: Ensure data is array (for legacy string data) ---
+const ensureArray = (data) => {
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === 'string') return [data];
+  return [];
+};
+
+// --- REUSABLE COMPONENT: MULTI-SELECT CREATABLE ---
 const CreatableSelect = ({ 
   options = [], 
-  value, 
+  value, // Expecting array if isMulti is true
   onChange, 
   onCreate, 
   placeholder, 
   disabled = false,
-  icon: Icon 
+  icon: Icon,
+  isMulti = false
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
   const wrapperRef = useRef(null);
 
-  useEffect(() => {
-    setSearch(value || '');
-  }, [value]);
+  // Ensure value is always an array for internal logic if isMulti
+  const selectedValues = isMulti ? ensureArray(value) : (value ? [value] : []);
 
   useEffect(() => {
     function handleClickOutside(event) {
@@ -69,25 +84,61 @@ const CreatableSelect = ({
   }, [wrapperRef]);
 
   const filteredOptions = options.filter(opt => 
-    opt.toLowerCase().includes(search.toLowerCase())
+    opt.toLowerCase().includes(search.toLowerCase()) && 
+    !selectedValues.includes(opt) // Don't show already selected
   );
 
   const handleSelect = (opt) => {
-    setSearch(opt);
-    onChange(opt);
-    setIsOpen(false);
+    if (isMulti) {
+      onChange([...selectedValues, opt]);
+      setSearch(''); // Clear search after selecting
+    } else {
+      onChange(opt);
+      setSearch(opt);
+      setIsOpen(false);
+    }
   };
 
   const handleCreate = () => {
     if (search.trim()) {
       onCreate(search); 
-      onChange(search);
-      setIsOpen(false);
+      if (isMulti) {
+        onChange([...selectedValues, search]);
+        setSearch('');
+      } else {
+        onChange(search);
+        setIsOpen(false);
+      }
+    }
+  };
+
+  const removeValue = (valToRemove) => {
+    if (isMulti) {
+      onChange(selectedValues.filter(v => v !== valToRemove));
+    } else {
+      onChange('');
+      setSearch('');
     }
   };
 
   return (
     <div className="relative" ref={wrapperRef}>
+      {/* Selected Tags Display (For Multi) */}
+      {isMulti && selectedValues.length > 0 && (
+        <div className="flex flex-wrap gap-2 mb-2">
+          {selectedValues.map((val, idx) => (
+            <span key={idx} className="bg-blue-100 text-blue-700 text-xs font-medium px-2 py-1 rounded flex items-center gap-1">
+              {val}
+              {!disabled && (
+                <button type="button" onClick={() => removeValue(val)} className="hover:text-blue-900">
+                  <X size={12} />
+                </button>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
+
       <div className="relative">
         {Icon && (
           <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
@@ -97,12 +148,12 @@ const CreatableSelect = ({
         <input
           type="text"
           className={`w-full ${Icon ? 'pl-9' : 'pl-3'} pr-8 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all ${disabled ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : ''}`}
-          placeholder={placeholder}
+          placeholder={isMulti && selectedValues.length > 0 ? "Add another..." : placeholder}
           value={search}
           disabled={disabled}
           onChange={(e) => {
             setSearch(e.target.value);
-            onChange(e.target.value);
+            if (!isMulti) onChange(e.target.value); // For single select, type = change
             setIsOpen(true);
           }}
           onFocus={() => !disabled && setIsOpen(true)}
@@ -131,16 +182,16 @@ const CreatableSelect = ({
                   className="w-full text-left px-4 py-2 text-sm hover:bg-slate-50 text-slate-700 flex items-center justify-between group"
                 >
                   <span>{opt}</span>
-                  {value === opt && <Check size={14} className="text-blue-600" />}
+                  {!isMulti && value === opt && <Check size={14} className="text-blue-600" />}
                 </button>
               ))
             ) : (
               <div className="px-4 py-2 text-xs text-slate-400 italic">
-                No existing tags match
+                {search ? "No matches found" : "Start typing to search"}
               </div>
             )}
 
-            {search && !options.includes(search) && (
+            {search && !options.includes(search) && !selectedValues.includes(search) && (
               <button
                 type="button"
                 onClick={handleCreate}
@@ -172,8 +223,9 @@ export default function AdvancedHistoryArchive() {
   const [availableTopics, setAvailableTopics] = useState(INITIAL_TOPICS);
   const [availableQuestionTypes, setAvailableQuestionTypes] = useState(INITIAL_QUESTION_TYPES);
 
-  // Search State
+  // Search & Sort State
   const [searchTerm, setSearchTerm] = useState('');
+  const [sortOption, setSortOption] = useState('year_desc');
   const [filters, setFilters] = useState({
     origin: '', year: '', paperType: '', questionType: ''
   });
@@ -185,8 +237,8 @@ export default function AdvancedHistoryArchive() {
     origin: '', 
     year: new Date().getFullYear().toString(), 
     paperType: '',
-    topic: '', 
-    subQuestions: [{ id: Date.now(), label: 'a', questionType: '', content: '', topic: '' }] 
+    topic: [], // Changed to Array
+    subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', topic: [] }] // Changed to Arrays
   });
   const [selectedFile, setSelectedFile] = useState(null);
 
@@ -275,11 +327,11 @@ export default function AdvancedHistoryArchive() {
     return '';
   };
 
-  // --- FLATTENED SEARCH LOGIC ---
+  // --- FLATTENED SEARCH & SORT LOGIC ---
   const filteredResults = useMemo(() => {
     if (!user || !user.isAuthorized) return [];
 
-    const results = [];
+    let results = [];
     archives.forEach(parent => {
       const matchOrigin = filters.origin ? parent.origin === filters.origin : true;
       const matchYear = filters.year ? parent.year === filters.year : true;
@@ -288,8 +340,18 @@ export default function AdvancedHistoryArchive() {
       if (!matchOrigin || !matchYear || !matchPaper) return;
 
       parent.subQuestions.forEach(child => {
-        const matchQuestionType = filters.questionType ? child.questionType === filters.questionType : true;
-        const searchString = `${parent.title} ${parent.topic} ${child.topic} ${child.questionType} ${child.content}`.toLowerCase();
+        // Handle Question Type Filter (Array check)
+        const childTypes = ensureArray(child.questionType);
+        const matchQuestionType = filters.questionType 
+          ? childTypes.includes(filters.questionType) 
+          : true;
+
+        // Search String Construction
+        const parentTopics = ensureArray(parent.topic).join(" ");
+        const childTopics = ensureArray(child.topic).join(" ");
+        const qTypes = childTypes.join(" ");
+        
+        const searchString = `${parent.title} ${parentTopics} ${childTopics} ${qTypes} ${child.content}`.toLowerCase();
         const matchSearch = searchTerm === '' || searchString.includes(searchTerm.toLowerCase());
 
         if (matchQuestionType && matchSearch) {
@@ -297,8 +359,37 @@ export default function AdvancedHistoryArchive() {
         }
       });
     });
+
+    // --- SORTING LOGIC ---
+    results.sort((a, b) => {
+      switch (sortOption) {
+        case 'year_desc':
+          return b.parent.year - a.parent.year;
+        case 'year_asc':
+          return a.parent.year - b.parent.year;
+        case 'title_asc':
+          return a.parent.title.localeCompare(b.parent.title);
+        case 'added_desc':
+          // Fallback to 0 if updatedBy/At is missing
+          const dateA = a.parent.updatedAt ? new Date(a.parent.updatedAt).getTime() : 0;
+          const dateB = b.parent.updatedAt ? new Date(b.parent.updatedAt).getTime() : 0;
+          return dateB - dateA;
+        case 'topic_asc':
+          // Sort by first topic found
+          const topicA = ensureArray(a.parent.topic)[0] || ensureArray(a.child.topic)[0] || '';
+          const topicB = ensureArray(b.parent.topic)[0] || ensureArray(b.child.topic)[0] || '';
+          return topicA.localeCompare(topicB);
+        case 'qtype_asc':
+          const typeA = ensureArray(a.child.questionType)[0] || '';
+          const typeB = ensureArray(b.child.questionType)[0] || '';
+          return typeA.localeCompare(typeB);
+        default:
+          return 0;
+      }
+    });
+
     return results;
-  }, [archives, searchTerm, filters, user]);
+  }, [archives, searchTerm, filters, user, sortOption]);
 
   // --- HANDLERS ---
   
@@ -310,57 +401,42 @@ export default function AdvancedHistoryArchive() {
           ...sq,
           label: getNextLabel(idx, value)
         }));
-        if (value === "Paper 2 (Essay)") newState.topic = ""; 
+        if (value === "Paper 2 (Essay)") newState.topic = []; // Clear topic if Paper 2
       }
       return newState;
     });
   };
 
-  /**
-   * NEW FUNCTION: Handles Title Input with Auto-Detection
-   * Detects "2012D" or "2013E" patterns
-   */
   const handleTitleChange = (e) => {
     const val = e.target.value;
 
     setUploadForm(prev => {
-      // 1. Always update the title text
       let newState = { ...prev, title: val };
-
-      // 2. Run Auto-Detection Regex
-      // Looks for: 4 digits (Year), optional space, D or E (Paper)
       const dseRegex = /(\d{4})\s*([DEde])/;
       const match = val.match(dseRegex);
 
       if (match) {
         const year = match[1];
         const letter = match[2].toUpperCase();
-
-        // Auto-fill Origin and Year
         newState.origin = "DSE Pastpaper";
         newState.year = year;
 
-        // Auto-fill Paper Type
         if (letter === 'D') {
           newState.paperType = "Paper 1 (DBQ)";
         } else if (letter === 'E') {
           newState.paperType = "Paper 2 (Essay)";
         }
 
-        // Apply Side Effects (Labeling) if Paper Type changed
         if (newState.paperType) {
           newState.subQuestions = prev.subQuestions.map((sq, idx) => ({
             ...sq,
             label: getNextLabel(idx, newState.paperType)
           }));
-          
-          // Clear topic if Paper 2 (since topics are per-question in Paper 2)
           if (newState.paperType === "Paper 2 (Essay)") {
-            newState.topic = ""; 
+            newState.topic = []; 
           }
         }
       }
-
       return newState;
     });
   };
@@ -371,7 +447,7 @@ export default function AdvancedHistoryArchive() {
       const nextLabel = getNextLabel(nextIndex, prev.paperType);
       return {
         ...prev,
-        subQuestions: [...prev.subQuestions, { id: Date.now(), label: nextLabel, questionType: '', content: '', topic: '' }]
+        subQuestions: [...prev.subQuestions, { id: Date.now(), label: nextLabel, questionType: [], content: '', topic: [] }]
       };
     });
   };
@@ -413,14 +489,23 @@ export default function AdvancedHistoryArchive() {
   const handleEditClick = (parentItem) => {
     if (!user?.isAdmin) return;
     setEditingId(parentItem.id);
-    setUploadForm(JSON.parse(JSON.stringify(parentItem)));
+    
+    // Deep copy and ensure arrays for editing legacy data
+    const itemData = JSON.parse(JSON.stringify(parentItem));
+    itemData.topic = ensureArray(itemData.topic);
+    itemData.subQuestions = itemData.subQuestions.map(sq => ({
+      ...sq,
+      questionType: ensureArray(sq.questionType),
+      topic: ensureArray(sq.topic)
+    }));
+
+    setUploadForm(itemData);
     setDeleteConfirm(false); 
     setIsUploadModalOpen(true);
   };
 
   const handleDelete = async () => {
     if (!user?.isAdmin || !editingId) return;
-    
     setIsLoading(true);
     try {
       if (uploadForm.fileUrl) {
@@ -431,7 +516,6 @@ export default function AdvancedHistoryArchive() {
           console.warn("Could not delete file (might not exist):", fileErr);
         }
       }
-
       await deleteDoc(doc(db, "archives", editingId));
       setArchives(prev => prev.filter(item => item.id !== editingId));
       closeModal();
@@ -451,7 +535,6 @@ export default function AdvancedHistoryArchive() {
 
     try {
       let fileUrl = uploadForm.fileUrl || '';
-      
       if (selectedFile) {
         const storageRef = ref(storage, `pdfs/${Date.now()}_${selectedFile.name}`);
         await uploadBytes(storageRef, selectedFile);
@@ -471,10 +554,7 @@ export default function AdvancedHistoryArchive() {
         setArchives(prev => prev.map(item => item.id === editingId ? { ...payload, id: editingId } : item));
       } else {
         const docRef = await addDoc(collection(db, "archives"), payload);
-        const newEntry = {
-          id: docRef.id,
-          ...payload,
-        };
+        const newEntry = { id: docRef.id, ...payload };
         setArchives([newEntry, ...archives]);
       }
       closeModal();
@@ -492,8 +572,8 @@ export default function AdvancedHistoryArchive() {
       setEditingId(null);
       setDeleteConfirm(false);
       setUploadForm({
-        title: '', origin: '', year: new Date().getFullYear().toString(), paperType: '', topic: '',
-        subQuestions: [{ id: Date.now(), label: 'a', questionType: '', content: '', topic: '' }]
+        title: '', origin: '', year: new Date().getFullYear().toString(), paperType: '', topic: [],
+        subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', topic: [] }]
       });
       setSelectedFile(null);
     }, 300);
@@ -553,7 +633,6 @@ export default function AdvancedHistoryArchive() {
                   </div>
                 </div>
                 
-                {/* Role Badge */}
                 <div className="flex justify-start">
                   {user.isAdmin ? (
                     <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide">Administrator</span>
@@ -668,7 +747,6 @@ export default function AdvancedHistoryArchive() {
               <Filter size={18} /> Filter
             </button>
             
-            {/* STRICT: ONLY SHOW UPLOAD IF ADMIN */}
             {user && user.isAdmin && (
               <button onClick={() => setIsUploadModalOpen(true)} className="btn-primary flex-1 md:flex-none">
                 <Upload size={18} /> Upload
@@ -679,7 +757,6 @@ export default function AdvancedHistoryArchive() {
 
         {/* --- CONDITIONAL RENDERING FOR SECURITY --- */}
 
-        {/* SCENARIO 1: NOT LOGGED IN (Hide everything) */}
         {!user && (
           <div className="flex flex-col items-center justify-center py-20 text-slate-400 bg-white rounded-xl border border-slate-200 border-dashed">
             <Lock size={48} className="mb-4 text-slate-300" />
@@ -693,7 +770,6 @@ export default function AdvancedHistoryArchive() {
           </div>
         )}
 
-        {/* SCENARIO 2: LOGGED IN BUT UNAUTHORIZED (Hide everything) */}
         {user && !user.isAuthorized && (
           <div className="flex flex-col items-center justify-center py-20 text-slate-400 bg-red-50 rounded-xl border border-red-100">
             <ShieldAlert size={48} className="mb-4 text-red-300" />
@@ -705,19 +781,38 @@ export default function AdvancedHistoryArchive() {
           </div>
         )}
 
-        {/* SCENARIO 3: AUTHORIZED (Admin or Viewer) - Show Content */}
         {user && user.isAuthorized && (
           <>
-            {/* Search Bar */}
-            <div className="relative mb-6">
-              <Search className="absolute left-4 top-3.5 text-slate-400" size={20} />
-              <input
-                type="text"
-                placeholder="Search for topics, question types, or titles..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500 outline-none"
-              />
+            {/* Search Bar & Sort */}
+            <div className="flex flex-col md:flex-row gap-4 mb-6">
+              <div className="relative flex-1">
+                <Search className="absolute left-4 top-3.5 text-slate-400" size={20} />
+                <input
+                  type="text"
+                  placeholder="Search for topics, question types, or titles..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+              </div>
+              
+              <div className="relative w-full md:w-56">
+                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
+                  <ArrowUpDown size={16} />
+                </div>
+                <select
+                  value={sortOption}
+                  onChange={(e) => setSortOption(e.target.value)}
+                  className="w-full pl-10 pr-8 py-3 bg-white border border-slate-200 rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500 outline-none appearance-none cursor-pointer text-sm font-medium text-slate-700"
+                >
+                  {SORT_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
+                  <ChevronDown size={14} />
+                </div>
+              </div>
             </div>
 
             {/* Results List */}
@@ -748,11 +843,7 @@ export default function AdvancedHistoryArchive() {
                         <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                           {parent.title} 
                           <span className="bg-slate-800 text-white text-sm px-2 py-0.5 rounded-md">
-                            {/* CONDITIONAL DISPLAY LOGIC */}
-                            {parent.paperType === "Paper 2 (Essay)" 
-                              ? `Q${child.label}` 
-                              : `Q${child.label}`
-                            }
+                            Q{child.label}
                           </span>
                         </h3>
 
@@ -760,22 +851,30 @@ export default function AdvancedHistoryArchive() {
                           {child.content || "No text content provided."}
                         </div>
 
-                        <div className="mt-4 flex flex-wrap gap-3">
-                          {(parent.topic || child.topic) && (
-                            <div className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
-                              <Tag size={12} /> {parent.topic || child.topic}
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          {/* Parent Topics */}
+                          {ensureArray(parent.topic).map((t, i) => (
+                            <div key={`pt-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
+                              <Tag size={12} /> {t}
                             </div>
-                          )}
-                          <div className="badge bg-green-50 text-green-700 border-green-100">
-                            {child.questionType}
-                          </div>
+                          ))}
+                          {/* Child Topics */}
+                          {ensureArray(child.topic).map((t, i) => (
+                            <div key={`ct-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
+                              <Tag size={12} /> {t}
+                            </div>
+                          ))}
+                          {/* Question Types */}
+                          {ensureArray(child.questionType).map((qt, i) => (
+                            <div key={`qt-${i}`} className="badge bg-green-50 text-green-700 border-green-100">
+                              {qt}
+                            </div>
+                          ))}
                         </div>
                       </div>
 
                       {/* Right: Parent Action */}
                       <div className="p-5 bg-slate-50 md:w-64 flex flex-col justify-center items-center gap-3 relative">
-                        
-                        {/* ID Display - Moved to Top Right */}
                         <div className="absolute top-2 right-2 text-[10px] text-slate-300 font-mono select-none">
                           ID: {parent.id}
                         </div>
@@ -797,7 +896,6 @@ export default function AdvancedHistoryArchive() {
                           </div>
                         )}
                         
-                        {/* STRICT: ONLY SHOW EDIT IF ADMIN */}
                         {user.isAdmin && (
                           <button 
                             onClick={() => handleEditClick(parent)}
@@ -823,12 +921,11 @@ export default function AdvancedHistoryArchive() {
         )}
       </main>
 
-      {/* --- UPLOAD / EDIT MODAL (Only renders if admin opens it) --- */}
+      {/* --- UPLOAD / EDIT MODAL --- */}
       <AnimatePresence>
         {isUploadModalOpen && user?.isAdmin && (
           <div 
             className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 sm:p-6"
-            // onClick={closeModal} <--- REMOVED TO PREVENT CLOSING ON BACKDROP CLICK
           >
             <motion.div 
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -892,7 +989,7 @@ export default function AdvancedHistoryArchive() {
                       {/* Parent Topic - Disabled for Paper 2 */}
                       <div>
                         <label className={`label flex items-center gap-2 ${uploadForm.paperType === "Paper 2 (Essay)" ? 'text-slate-300' : ''}`}>
-                          <Tag size={14} /> Main Topic (Paper 1 Only)
+                          <Tag size={14} /> Main Topic(s) (Paper 1 Only)
                         </label>
                         <CreatableSelect 
                           options={availableTopics}
@@ -902,6 +999,7 @@ export default function AdvancedHistoryArchive() {
                           placeholder={uploadForm.paperType === "Paper 2 (Essay)" ? "Not applicable" : "Select or type new topic..."}
                           disabled={uploadForm.paperType === "Paper 2 (Essay)"}
                           icon={Tag}
+                          isMulti={true} // ENABLE MULTI SELECT
                         />
                       </div>
 
@@ -968,7 +1066,7 @@ export default function AdvancedHistoryArchive() {
                           <div className="flex-1 space-y-4">
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                               <div>
-                                <label className="text-xs font-bold text-slate-500 mb-1 block">Question Type</label>
+                                <label className="text-xs font-bold text-slate-500 mb-1 block">Question Type(s)</label>
                                 <CreatableSelect 
                                   options={uploadForm.paperType ? availableQuestionTypes[uploadForm.paperType] : []}
                                   value={sub.questionType}
@@ -976,6 +1074,7 @@ export default function AdvancedHistoryArchive() {
                                   onCreate={(val) => handleCreateQuestionType(val, uploadForm.paperType)}
                                   placeholder="Select or add type..."
                                   disabled={!uploadForm.paperType}
+                                  isMulti={true} // ENABLE MULTI SELECT
                                 />
                               </div>
 
@@ -983,7 +1082,7 @@ export default function AdvancedHistoryArchive() {
                               {uploadForm.paperType === "Paper 2 (Essay)" && (
                                 <div>
                                   <label className="text-xs font-bold text-blue-600 mb-1 block flex items-center gap-1">
-                                    <Tag size={10} /> Essay Topic
+                                    <Tag size={10} /> Essay Topic(s)
                                   </label>
                                   <CreatableSelect 
                                     options={availableTopics}
@@ -992,6 +1091,7 @@ export default function AdvancedHistoryArchive() {
                                     onCreate={handleCreateTopic}
                                     placeholder="Select or type topic..."
                                     icon={Tag}
+                                    isMulti={true} // ENABLE MULTI SELECT
                                   />
                                 </div>
                               )}

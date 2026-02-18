@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, Tag, Edit, ChevronDown, Check, LogIn, LogOut, User, Lock, ShieldAlert, Loader2, Sparkles, ArrowUpDown, Eye, ExternalLink } from 'lucide-react';
+import { Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, Tag, Edit, ChevronDown, Check, LogIn, LogOut, User, Lock, ShieldAlert, Loader2, Sparkles, ArrowUpDown, Eye, ExternalLink, Maximize2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // --- FIREBASE IMPORTS ---
@@ -964,59 +964,77 @@ export default function AdvancedHistoryArchive() {
       {/* --- PREVIEW MODAL --- */}
       <AnimatePresence>
         {previewItem && (
-          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 sm:p-6">
+          <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-white rounded-2xl w-full max-w-5xl h-[90vh] shadow-2xl flex flex-col overflow-hidden"
+              // MODIFIED: Maximize width and height for 2-page view
+              className="bg-white rounded-xl w-full max-w-[98vw] h-[95vh] shadow-2xl flex flex-col overflow-hidden"
             >
               {/* Preview Header */}
-              <div className="p-5 border-b border-slate-100 flex justify-between items-start bg-slate-50 shrink-0">
-                <div>
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                      {previewItem.parent.year} • {previewItem.parent.origin}
-                    </span>
-                    <span className={`text-xs px-2 py-0.5 rounded font-medium ${previewItem.parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
-                      {previewItem.parent.paperType}
-                    </span>
+              <div className="px-6 py-3 border-b border-slate-200 flex justify-between items-center bg-white shrink-0 z-10">
+                <div className="flex items-center gap-4">
+                  <div className="flex flex-col">
+                    <div className="flex items-center gap-2">
+                       <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                        {previewItem.parent.year} • {previewItem.parent.origin}
+                      </span>
+                      <span className={`text-xs px-2 py-0.5 rounded font-medium ${previewItem.parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
+                        {previewItem.parent.paperType}
+                      </span>
+                    </div>
+                    <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                      {previewItem.parent.title}
+                      <span className="bg-slate-800 text-white text-sm px-2 py-0.5 rounded-md">
+                        Q{previewItem.child.label}
+                      </span>
+                    </h2>
                   </div>
-                  <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-                    {previewItem.parent.title}
-                    <span className="bg-slate-800 text-white text-lg px-3 py-0.5 rounded-lg">
-                      Q{previewItem.child.label}
-                    </span>
-                  </h2>
                 </div>
-                <button 
-                  onClick={() => setPreviewItem(null)} 
-                  className="text-slate-400 hover:text-slate-800 bg-white hover:bg-slate-200 p-2 rounded-full transition-colors border border-slate-200"
-                >
-                  <X size={24} />
-                </button>
+
+                <div className="flex items-center gap-3">
+                   {previewItem.parent.hasFile && (
+                    <a 
+                      href={previewItem.parent.fileUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="hidden sm:flex px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 transition-all items-center gap-2"
+                    >
+                      <Download size={16} /> Download
+                    </a>
+                  )}
+                  <button 
+                    onClick={() => setPreviewItem(null)} 
+                    className="text-slate-400 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 p-2 rounded-full transition-colors"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
               </div>
 
-              {/* Preview Body */}
-              <div className="flex-1 overflow-y-auto flex flex-col md:flex-row">
+              {/* Preview Body - MODIFIED LAYOUT */}
+              <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
                 
-                {/* Left: Text Content & Metadata */}
-                <div className="flex-1 p-6 md:p-8 overflow-y-auto">
+                {/* Left: Text Content & Metadata (Sidebar style) */}
+                <div className={`${previewItem.parent.hasFile ? 'md:w-1/4 border-r border-slate-200' : 'w-full'} p-6 overflow-y-auto bg-white`}>
                   <div className="prose max-w-none">
-                    <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-2">Question Content</h3>
-                    <div className="text-lg text-slate-800 leading-relaxed whitespace-pre-wrap bg-slate-50 p-6 rounded-xl border border-slate-100">
+                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                      <FileText size={14} /> Question Content
+                    </h3>
+                    <div className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap bg-slate-50 p-4 rounded-lg border border-slate-100">
                       {previewItem.child.content || <span className="text-slate-400 italic">No text content available. Please refer to the PDF.</span>}
                     </div>
                   </div>
 
-                  <div className="mt-8 space-y-4">
+                  <div className="mt-6 space-y-4">
                     <div>
                       <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Topics</h4>
                       <div className="flex flex-wrap gap-2">
                         {[...ensureArray(previewItem.parent.topic), ...ensureArray(previewItem.child.topic)].map((t, i) => (
-                          <span key={i} className="px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-sm font-medium border border-blue-100 flex items-center gap-1">
-                            <Tag size={14} /> {t}
+                          <span key={i} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1">
+                            <Tag size={12} /> {t}
                           </span>
                         ))}
                       </div>
@@ -1026,7 +1044,7 @@ export default function AdvancedHistoryArchive() {
                       <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Question Types</h4>
                       <div className="flex flex-wrap gap-2">
                         {ensureArray(previewItem.child.questionType).map((qt, i) => (
-                          <span key={i} className="px-3 py-1 bg-green-50 text-green-700 rounded-full text-sm font-medium border border-green-100">
+                          <span key={i} className="px-2 py-1 bg-green-50 text-green-700 rounded-md text-xs font-medium border border-green-100">
                             {qt}
                           </span>
                         ))}
@@ -1035,51 +1053,18 @@ export default function AdvancedHistoryArchive() {
                   </div>
                 </div>
 
-                {/* Right: PDF Preview */}
+                {/* Right: PDF Preview - Takes up majority of space for 2-page view */}
                 {previewItem.parent.hasFile && (
-                  <div className="md:w-1/2 bg-slate-100 border-l border-slate-200 flex flex-col">
-                    <div className="p-3 bg-white border-b border-slate-200 flex justify-between items-center">
-                      <span className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
-                        <FileText size={14} /> PDF Preview
-                      </span>
-                      <a 
-                        href={previewItem.parent.fileUrl} 
-                        target="_blank" 
-                        rel="noreferrer"
-                        className="text-xs font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1"
-                      >
-                        Open in New Tab <ExternalLink size={12} />
-                      </a>
+                  <div className="flex-1 bg-slate-200 flex flex-col h-full relative">
+                    <div className="absolute top-2 right-4 z-10 bg-white/80 backdrop-blur px-3 py-1 rounded-full text-[10px] font-bold text-slate-500 shadow-sm border border-slate-200 pointer-events-none">
+                       PDF PREVIEW MODE
                     </div>
-                    <div className="flex-1 relative bg-slate-200">
-                      <iframe 
-                        src={`${previewItem.parent.fileUrl}#toolbar=0`}
-                        className="w-full h-full absolute inset-0"
-                        title="PDF Preview"
-                      />
-                    </div>
+                    <iframe 
+                      src={`${previewItem.parent.fileUrl}#view=FitH`}
+                      className="w-full h-full"
+                      title="PDF Preview"
+                    />
                   </div>
-                )}
-              </div>
-
-              {/* Preview Footer */}
-              <div className="p-5 border-t border-slate-100 bg-white flex justify-end gap-3 shrink-0">
-                <button 
-                  onClick={() => setPreviewItem(null)}
-                  className="px-6 py-2 rounded-lg border border-slate-200 text-slate-600 font-medium hover:bg-slate-50 transition-colors"
-                >
-                  Close
-                </button>
-                
-                {previewItem.parent.hasFile && (
-                  <a 
-                    href={previewItem.parent.fileUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="px-6 py-2 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-700 shadow-lg shadow-blue-200 transition-all flex items-center gap-2"
-                  >
-                    <Download size={18} /> Download PDF
-                  </a>
                 )}
               </div>
             </motion.div>

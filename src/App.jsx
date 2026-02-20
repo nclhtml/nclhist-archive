@@ -637,8 +637,10 @@ export default function AdvancedHistoryArchive() {
         const storageRef = ref(storage, storagePath);
         
         // 5. Upload with metadata to force the download name
+        // FIXED: Changed contentDisposition from 'attachment' to 'inline' to allow preview
         const metadata = {
-          contentDisposition: `attachment; filename="${newFileName}"`
+          contentType: 'application/pdf',
+          contentDisposition: `inline; filename="${newFileName}"`
         };
 
         await uploadBytes(storageRef, selectedFile, metadata);

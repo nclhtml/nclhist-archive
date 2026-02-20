@@ -664,8 +664,10 @@ export default function AdvancedHistoryArchive() {
       // --- HANDLE ANSWER FILE UPLOAD ---
       if (selectedAnswerFile) {
         const ansExtension = selectedAnswerFile.name.split('.').pop();
-        const ansFileName = `${safeTitle}_ANS.${ansExtension}`;
-        // Path: pdfs/{Origin}/answer/{Title}_ANS.pdf
+        // Naming requirement: "{Title} answer"
+        const ansFileName = `${safeTitle} answer.${ansExtension}`;
+        // Folder requirement: "inside the dse past paper folder and inside that there should be an answer folder"
+        // We use safeOrigin to determine the parent folder (e.g., DSE Pastpaper)
         const ansStoragePath = `pdfs/${safeOrigin}/answer/${ansFileName}`;
         const ansRef = ref(storage, ansStoragePath);
 
@@ -680,7 +682,7 @@ export default function AdvancedHistoryArchive() {
          // Sync answer filename metadata if title changed
          try {
           const ansRef = ref(storage, uploadForm.answerFileUrl);
-          const newAnsName = `${safeTitle}_ANS.pdf`;
+          const newAnsName = `${safeTitle} answer.pdf`;
           await updateMetadata(ansRef, { contentDisposition: `inline; filename="${newAnsName}"` });
         } catch (metaErr) { console.warn("Answer Meta update failed", metaErr); }
       }

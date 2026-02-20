@@ -6,7 +6,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { initializeApp } from "firebase/app";
 import { getAuth, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from "firebase/auth";
 import { getFirestore, collection, getDocs, addDoc, updateDoc, deleteDoc, doc, getDoc } from "firebase/firestore";
-import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+// Added updateMetadata to imports
+import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject, updateMetadata } from "firebase/storage";
 
 // --- YOUR CONFIGURATION ---
 const firebaseConfig = {
@@ -620,24 +621,27 @@ export default function AdvancedHistoryArchive() {
     try {
       let fileUrl = uploadForm.fileUrl || '';
       
+      // 1. Sanitize the title to create a safe filename
+      const safeTitle = uploadForm.title.replace(/[^a-zA-Z0-9\s\-_]/g, '').trim();
+
       if (selectedFile) {
-        // 1. Sanitize the title to create a safe filename
-        // Removes anything that isn't a letter, number, space, dash, or underscore
-        const safeTitle = uploadForm.title.replace(/[^a-zA-Z0-9\s\-_]/g, '').trim();
+        // --- SCENARIO A: NEW FILE UPLOAD ---
+        
+        // 1. Sanitize Origin for Folder Name
+        const safeOrigin = (uploadForm.origin || 'Uncategorized').replace(/[^a-zA-Z0-9\s\-_]/g, '_');
         
         // 2. Get original extension
         const fileExtension = selectedFile.name.split('.').pop();
         
-        // 3. Create the new filename (e.g., "2013D Q1.pdf")
+        // 3. Create the new filename
         const newFileName = `${safeTitle}.${fileExtension}`;
         
-        // 4. Create a unique path (using timestamp folder) so we don't overwrite if titles are same
-        // Path: pdfs/123456789/2013D Q1.pdf
-        const storagePath = `pdfs/${Date.now()}/${newFileName}`;
+        // 4. Create path with Origin Folder and Timestamp
+        // Path: pdfs/DSE_Pastpaper/123456789_2013D.pdf
+        const storagePath = `pdfs/${safeOrigin}/${Date.now()}_${newFileName}`;
         const storageRef = ref(storage, storagePath);
         
-        // 5. Upload with metadata to force the download name
-        // FIXED: Changed contentDisposition from 'attachment' to 'inline' to allow preview
+        // 5. Upload with metadata
         const metadata = {
           contentType: 'application/pdf',
           contentDisposition: `inline; filename="${newFileName}"`
@@ -645,6 +649,24 @@ export default function AdvancedHistoryArchive() {
 
         await uploadBytes(storageRef, selectedFile, metadata);
         fileUrl = await getDownloadURL(storageRef);
+
+      } else if (editingId && uploadForm.fileUrl) {
+        // --- SCENARIO B: EDITING TITLE (SYNC FILENAME) ---
+        // We cannot move the file to a new folder easily, 
+        // but we CAN update the metadata so the download name matches the new title.
+        
+        try {
+          const fileRef = ref(storage, uploadForm.fileUrl);
+          // Assume PDF extension for existing files if we don't know better
+          const newFileName = `${safeTitle}.pdf`;
+          
+          await updateMetadata(fileRef, {
+            contentDisposition: `inline; filename="${newFileName}"`
+          });
+          // console.log("File metadata updated to match new title");
+        } catch (metaErr) {
+          console.warn("Could not update file metadata (file might be missing):", metaErr);
+        }
       }
 
       const payload = {

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, Tag, Edit, ChevronDown, Check, LogIn, LogOut, User, Lock, ShieldAlert, Loader2, Sparkles, ArrowUpDown, Eye, ExternalLink, Maximize2, Hash, BookOpen, ArrowLeft } from 'lucide-react';
+import { Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, Tag, Edit, ChevronDown, Check, LogIn, LogOut, User, Lock, ShieldAlert, Loader2, Sparkles, ArrowUpDown, Eye, ExternalLink, Maximize2, Hash, BookOpen, ArrowLeft, FileDigit } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // --- FIREBASE IMPORTS ---
@@ -56,6 +56,7 @@ const SUPER_ADMIN = "ethanng.520021231@gmail.com";
 
 // --- EMPTIED LISTS (Will be populated dynamically) ---
 const INITIAL_TOPICS = [];
+const INITIAL_SOURCE_TYPES = []; // NEW: Source Types List
 const INITIAL_QUESTION_TYPES = {
   "Paper 1 (DBQ)": [],
   "Paper 2 (Essay)": []
@@ -236,13 +237,14 @@ export default function AdvancedHistoryArchive() {
 
   // Dynamic Lists State
   const [availableTopics, setAvailableTopics] = useState(INITIAL_TOPICS);
+  const [availableSourceTypes, setAvailableSourceTypes] = useState(INITIAL_SOURCE_TYPES); // NEW
   const [availableQuestionTypes, setAvailableQuestionTypes] = useState(INITIAL_QUESTION_TYPES);
 
   // Search & Sort State
   const [searchTerm, setSearchTerm] = useState('');
   const [sortOption, setSortOption] = useState('year_desc');
   const [filters, setFilters] = useState({
-    origin: '', year: '', paperType: '', questionType: '', marks: ''
+    origin: '', year: '', paperType: '', questionType: '', sourceType: '', marks: '' // ADDED sourceType
   });
 
   // Upload/Edit Form State
@@ -253,10 +255,10 @@ export default function AdvancedHistoryArchive() {
     year: new Date().getFullYear().toString(), 
     paperType: '',
     topic: [], 
-    subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', topic: [], marks: '' }] 
+    subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' }] // ADDED sourceType
   });
   const [selectedFile, setSelectedFile] = useState(null);
-  const [selectedAnswerFile, setSelectedAnswerFile] = useState(null); // NEW: Answer File
+  const [selectedAnswerFile, setSelectedAnswerFile] = useState(null); 
 
   // --- FIREBASE LOGIC ---
   
@@ -316,6 +318,7 @@ export default function AdvancedHistoryArchive() {
             
             // --- NEW: EXTRACT TAGS FROM DATA ---
             const extractedTopics = new Set();
+            const extractedSourceTypes = new Set(); // NEW
             const extractedTypes = {
               "Paper 1 (DBQ)": new Set(),
               "Paper 2 (Essay)": new Set()
@@ -333,6 +336,11 @@ export default function AdvancedHistoryArchive() {
                   if(t) extractedTopics.add(t);
                 });
                 
+                // NEW: Extract Source Types
+                ensureArray(sq.sourceType).forEach(st => {
+                  if(st) extractedSourceTypes.add(st);
+                });
+
                 ensureArray(sq.questionType).forEach(qt => {
                   if (qt && item.paperType && extractedTypes[item.paperType]) {
                     extractedTypes[item.paperType].add(qt);
@@ -342,6 +350,7 @@ export default function AdvancedHistoryArchive() {
             });
 
             setAvailableTopics(Array.from(extractedTopics).sort());
+            setAvailableSourceTypes(Array.from(extractedSourceTypes).sort()); // NEW
             setAvailableQuestionTypes({
               "Paper 1 (DBQ)": Array.from(extractedTypes["Paper 1 (DBQ)"]).sort(),
               "Paper 2 (Essay)": Array.from(extractedTypes["Paper 2 (Essay)"]).sort()
@@ -397,6 +406,12 @@ export default function AdvancedHistoryArchive() {
           ? childTypes.includes(filters.questionType) 
           : true;
 
+        // NEW: Handle Source Type Filter (Array check)
+        const childSourceTypes = ensureArray(child.sourceType);
+        const matchSourceType = filters.sourceType
+          ? childSourceTypes.includes(filters.sourceType)
+          : true;
+
         // Handle Marks Filter
         let matchMarks = true;
         if (filters.marks) {
@@ -414,11 +429,12 @@ export default function AdvancedHistoryArchive() {
         const parentTopics = ensureArray(parent.topic).join(" ");
         const childTopics = ensureArray(child.topic).join(" ");
         const qTypes = childTypes.join(" ");
+        const sTypes = childSourceTypes.join(" "); // Add source types to search
         
-        const searchString = `${parent.title} ${parentTopics} ${childTopics} ${qTypes} ${child.content}`.toLowerCase();
+        const searchString = `${parent.title} ${parentTopics} ${childTopics} ${qTypes} ${sTypes} ${child.content}`.toLowerCase();
         const matchSearch = searchTerm === '' || searchString.includes(searchTerm.toLowerCase());
 
-        if (matchQuestionType && matchMarks && matchSearch) {
+        if (matchQuestionType && matchSourceType && matchMarks && matchSearch) {
           results.push({ uniqueId: `${parent.id}_${child.id}`, parent, child });
         }
       });
@@ -469,9 +485,9 @@ export default function AdvancedHistoryArchive() {
         // 2. Auto-populate 3 slots if DBQ and currently empty or default
         if (value === "Paper 1 (DBQ)" && newSubQuestions.length <= 1 && !newSubQuestions[0].content) {
           newSubQuestions = [
-            { id: Date.now(), label: 'a', questionType: [], content: '', topic: [], marks: '' },
-            { id: Date.now() + 1, label: 'b', questionType: [], content: '', topic: [], marks: '' },
-            { id: Date.now() + 2, label: 'c', questionType: [], content: '', topic: [], marks: '' }
+            { id: Date.now(), label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' },
+            { id: Date.now() + 1, label: 'b', questionType: [], content: '', topic: [], sourceType: [], marks: '' },
+            { id: Date.now() + 2, label: 'c', questionType: [], content: '', topic: [], sourceType: [], marks: '' }
           ];
         }
 
@@ -507,9 +523,9 @@ export default function AdvancedHistoryArchive() {
           // Trigger the same logic as handleParentChange for DBQ defaults
           if (newState.paperType === "Paper 1 (DBQ)" && prev.subQuestions.length <= 1 && !prev.subQuestions[0].content) {
              newState.subQuestions = [
-              { id: Date.now(), label: 'a', questionType: [], content: '', topic: [], marks: '' },
-              { id: Date.now() + 1, label: 'b', questionType: [], content: '', topic: [], marks: '' },
-              { id: Date.now() + 2, label: 'c', questionType: [], content: '', topic: [], marks: '' }
+              { id: Date.now(), label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' },
+              { id: Date.now() + 1, label: 'b', questionType: [], content: '', topic: [], sourceType: [], marks: '' },
+              { id: Date.now() + 2, label: 'c', questionType: [], content: '', topic: [], sourceType: [], marks: '' }
             ];
           } else {
              newState.subQuestions = prev.subQuestions.map((sq, idx) => ({
@@ -533,7 +549,7 @@ export default function AdvancedHistoryArchive() {
       const nextLabel = getNextLabel(nextIndex, prev.paperType);
       return {
         ...prev,
-        subQuestions: [...prev.subQuestions, { id: Date.now(), label: nextLabel, questionType: [], content: '', topic: [], marks: '' }]
+        subQuestions: [...prev.subQuestions, { id: Date.now(), label: nextLabel, questionType: [], content: '', topic: [], sourceType: [], marks: '' }]
       };
     });
   };
@@ -561,6 +577,13 @@ export default function AdvancedHistoryArchive() {
     }
   };
 
+  // NEW: Handler for Source Type creation
+  const handleCreateSourceType = (newSourceType) => {
+    if (!availableSourceTypes.includes(newSourceType)) {
+      setAvailableSourceTypes(prev => [...prev, newSourceType].sort());
+    }
+  };
+
   const handleCreateQuestionType = (newType, paperType) => {
     if (paperType && !availableQuestionTypes[paperType].includes(newType)) {
       setAvailableQuestionTypes(prev => ({
@@ -582,7 +605,8 @@ export default function AdvancedHistoryArchive() {
     itemData.subQuestions = itemData.subQuestions.map(sq => ({
       ...sq,
       questionType: ensureArray(sq.questionType),
-      topic: ensureArray(sq.topic)
+      topic: ensureArray(sq.topic),
+      sourceType: ensureArray(sq.sourceType) // Ensure array for source types
     }));
 
     setUploadForm(itemData);
@@ -710,6 +734,7 @@ export default function AdvancedHistoryArchive() {
       ensureArray(payload.topic).forEach(t => handleCreateTopic(t));
       payload.subQuestions.forEach(sq => {
         ensureArray(sq.topic).forEach(t => handleCreateTopic(t));
+        ensureArray(sq.sourceType).forEach(st => handleCreateSourceType(st)); // NEW
         ensureArray(sq.questionType).forEach(qt => handleCreateQuestionType(qt, payload.paperType));
       });
 
@@ -729,7 +754,7 @@ export default function AdvancedHistoryArchive() {
       setDeleteConfirm(false);
       setUploadForm({
         title: '', origin: '', year: new Date().getFullYear().toString(), paperType: '', topic: [],
-        subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', topic: [], marks: '' }]
+        subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' }]
       });
       setSelectedFile(null);
       setSelectedAnswerFile(null);
@@ -839,7 +864,7 @@ export default function AdvancedHistoryArchive() {
             <label className="filter-label">Paper Type</label>
             <select 
               value={filters.paperType}
-              onChange={(e) => setFilters({...filters, paperType: e.target.value, questionType: ''})}
+              onChange={(e) => setFilters({...filters, paperType: e.target.value, questionType: '', sourceType: ''})}
               className="filter-select"
             >
               <option value="">All Papers</option>
@@ -858,6 +883,22 @@ export default function AdvancedHistoryArchive() {
               <option value="">All Questions</option>
               {filters.paperType && availableQuestionTypes[filters.paperType]?.map(q => (
                 <option key={q} value={q}>{q}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* NEW: Source Type Filter (Only for DBQ) */}
+          <div className={filters.paperType !== "Paper 1 (DBQ)" ? 'opacity-50 pointer-events-none' : ''}>
+            <label className="filter-label">Source Type</label>
+            <select 
+              value={filters.sourceType}
+              onChange={(e) => setFilters({...filters, sourceType: e.target.value})}
+              disabled={filters.paperType !== "Paper 1 (DBQ)"}
+              className="filter-select"
+            >
+              <option value="">All Source Types</option>
+              {availableSourceTypes.map(st => (
+                <option key={st} value={st}>{st}</option>
               ))}
             </select>
           </div>
@@ -888,7 +929,7 @@ export default function AdvancedHistoryArchive() {
           </div>
 
           <button 
-            onClick={() => setFilters({ origin: '', year: '', paperType: '', questionType: '', marks: '' })}
+            onClick={() => setFilters({ origin: '', year: '', paperType: '', questionType: '', sourceType: '', marks: '' })}
             className="w-full py-2 text-sm text-slate-500 hover:text-red-500 border border-slate-200 rounded-lg hover:bg-red-50 transition-colors"
           >
             Reset Filters
@@ -1050,6 +1091,12 @@ export default function AdvancedHistoryArchive() {
                           {ensureArray(child.questionType).map((qt, i) => (
                             <div key={`qt-${i}`} className="badge bg-green-50 text-green-700 border-green-100">
                               {qt}
+                            </div>
+                          ))}
+                          {/* NEW: Source Types */}
+                          {ensureArray(child.sourceType).map((st, i) => (
+                            <div key={`st-${i}`} className="badge bg-slate-100 text-slate-600 border-slate-200 flex items-center gap-1">
+                              <FileDigit size={12} /> {st}
                             </div>
                           ))}
                         </div>
@@ -1228,6 +1275,20 @@ export default function AdvancedHistoryArchive() {
                           ))}
                         </div>
                       </div>
+
+                      {/* NEW: Source Types in Preview */}
+                      {ensureArray(previewItem.child.sourceType).length > 0 && (
+                        <div>
+                          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Source Types</h4>
+                          <div className="flex flex-wrap gap-2">
+                            {ensureArray(previewItem.child.sourceType).map((st, i) => (
+                              <span key={i} className="px-2 py-1 bg-slate-100 text-slate-600 rounded-md text-xs font-medium border border-slate-200 flex items-center gap-1">
+                                <FileDigit size={12} /> {st}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1449,6 +1510,24 @@ export default function AdvancedHistoryArchive() {
                                     className="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                                     value={sub.marks || ''}
                                     onChange={(e) => updateSubQuestion(index, 'marks', e.target.value)}
+                                  />
+                                </div>
+                              )}
+
+                              {/* NEW: Source Type Input - Only for Paper 1 (DBQ) */}
+                              {uploadForm.paperType === "Paper 1 (DBQ)" && (
+                                <div>
+                                  <label className="text-xs font-bold text-slate-500 mb-1 block flex items-center gap-1">
+                                    <FileDigit size={10} /> Source Type
+                                  </label>
+                                  <CreatableSelect 
+                                    options={availableSourceTypes}
+                                    value={sub.sourceType}
+                                    onChange={(val) => updateSubQuestion(index, 'sourceType', val)}
+                                    onCreate={handleCreateSourceType}
+                                    placeholder="e.g. Cartoon, Table..."
+                                    icon={FileDigit}
+                                    isMulti={true} 
                                   />
                                 </div>
                               )}

@@ -568,9 +568,29 @@ export default function AdvancedHistoryArchive() {
 
     try {
       let fileUrl = uploadForm.fileUrl || '';
+      
       if (selectedFile) {
-        const storageRef = ref(storage, `pdfs/${Date.now()}_${selectedFile.name}`);
-        await uploadBytes(storageRef, selectedFile);
+        // 1. Sanitize the title to create a safe filename
+        // Removes anything that isn't a letter, number, space, dash, or underscore
+        const safeTitle = uploadForm.title.replace(/[^a-zA-Z0-9\s\-_]/g, '').trim();
+        
+        // 2. Get original extension
+        const fileExtension = selectedFile.name.split('.').pop();
+        
+        // 3. Create the new filename (e.g., "2013D Q1.pdf")
+        const newFileName = `${safeTitle}.${fileExtension}`;
+        
+        // 4. Create a unique path (using timestamp folder) so we don't overwrite if titles are same
+        // Path: pdfs/123456789/2013D Q1.pdf
+        const storagePath = `pdfs/${Date.now()}/${newFileName}`;
+        const storageRef = ref(storage, storagePath);
+        
+        // 5. Upload with metadata to force the download name
+        const metadata = {
+          contentDisposition: `attachment; filename="${newFileName}"`
+        };
+
+        await uploadBytes(storageRef, selectedFile, metadata);
         fileUrl = await getDownloadURL(storageRef);
       }
 

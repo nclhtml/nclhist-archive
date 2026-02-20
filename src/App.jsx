@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, Tag, Edit, ChevronDown, Check, LogIn, LogOut, User, Lock, ShieldAlert, Loader2, Sparkles, ArrowUpDown, Eye, ExternalLink, Maximize2, Hash } from 'lucide-react';
+import { Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, Tag, Edit, ChevronDown, Check, LogIn, LogOut, User, Lock, ShieldAlert, Loader2, Sparkles, ArrowUpDown, Eye, ExternalLink, Maximize2, Hash, BookOpen, ArrowLeft } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // --- FIREBASE IMPORTS ---
@@ -232,6 +232,7 @@ export default function AdvancedHistoryArchive() {
   
   // Preview Modal State
   const [previewItem, setPreviewItem] = useState(null); // { parent, child }
+  const [viewingAnswer, setViewingAnswer] = useState(false); // Toggle for Answer View
 
   // Dynamic Lists State
   const [availableTopics, setAvailableTopics] = useState(INITIAL_TOPICS);
@@ -255,6 +256,7 @@ export default function AdvancedHistoryArchive() {
     subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', topic: [], marks: '' }] 
   });
   const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedAnswerFile, setSelectedAnswerFile] = useState(null); // NEW: Answer File
 
   // --- FIREBASE LOGIC ---
   
@@ -592,14 +594,25 @@ export default function AdvancedHistoryArchive() {
     if (!user?.isAdmin || !editingId) return;
     setIsLoading(true);
     try {
+      // Delete Question PDF
       if (uploadForm.fileUrl) {
         try {
           const fileRef = ref(storage, uploadForm.fileUrl);
           await deleteObject(fileRef);
         } catch (fileErr) {
-          console.warn("Could not delete file (might not exist):", fileErr);
+          console.warn("Could not delete question file (might not exist):", fileErr);
         }
       }
+      // Delete Answer PDF
+      if (uploadForm.answerFileUrl) {
+        try {
+          const ansRef = ref(storage, uploadForm.answerFileUrl);
+          await deleteObject(ansRef);
+        } catch (ansErr) {
+          console.warn("Could not delete answer file (might not exist):", ansErr);
+        }
+      }
+
       await deleteDoc(doc(db, "archives", editingId));
       setArchives(prev => prev.filter(item => item.id !== editingId));
       closeModal();
@@ -619,28 +632,19 @@ export default function AdvancedHistoryArchive() {
 
     try {
       let fileUrl = uploadForm.fileUrl || '';
+      let answerFileUrl = uploadForm.answerFileUrl || '';
       
       // 1. Sanitize the title to create a safe filename
       const safeTitle = uploadForm.title.replace(/[^a-zA-Z0-9\s\-_]/g, '').trim();
+      const safeOrigin = (uploadForm.origin || 'Uncategorized').replace(/[^a-zA-Z0-9\s\-_]/g, '_');
 
+      // --- HANDLE QUESTION FILE UPLOAD ---
       if (selectedFile) {
-        // --- SCENARIO A: NEW FILE UPLOAD ---
-        
-        // 1. Sanitize Origin for Folder Name
-        const safeOrigin = (uploadForm.origin || 'Uncategorized').replace(/[^a-zA-Z0-9\s\-_]/g, '_');
-        
-        // 2. Get original extension
         const fileExtension = selectedFile.name.split('.').pop();
-        
-        // 3. Create the new filename
         const newFileName = `${safeTitle}.${fileExtension}`;
-        
-        // 4. Create path with Origin Folder (NO TIMESTAMP)
-        // Path: pdfs/DSE_Pastpaper/2012D Q1.pdf
         const storagePath = `pdfs/${safeOrigin}/${newFileName}`;
         const storageRef = ref(storage, storagePath);
         
-        // 5. Upload with metadata
         const metadata = {
           contentType: 'application/pdf',
           contentDisposition: `inline; filename="${newFileName}"`
@@ -648,30 +652,45 @@ export default function AdvancedHistoryArchive() {
 
         await uploadBytes(storageRef, selectedFile, metadata);
         fileUrl = await getDownloadURL(storageRef);
-
       } else if (editingId && uploadForm.fileUrl) {
-        // --- SCENARIO B: EDITING TITLE (SYNC FILENAME) ---
-        // We cannot move the file to a new folder easily, 
-        // but we CAN update the metadata so the download name matches the new title.
-        
+        // Sync filename metadata if title changed
         try {
           const fileRef = ref(storage, uploadForm.fileUrl);
-          // Assume PDF extension for existing files if we don't know better
           const newFileName = `${safeTitle}.pdf`;
-          
-          await updateMetadata(fileRef, {
-            contentDisposition: `inline; filename="${newFileName}"`
-          });
-          // console.log("File metadata updated to match new title");
-        } catch (metaErr) {
-          console.warn("Could not update file metadata (file might be missing):", metaErr);
-        }
+          await updateMetadata(fileRef, { contentDisposition: `inline; filename="${newFileName}"` });
+        } catch (metaErr) { console.warn("Meta update failed", metaErr); }
+      }
+
+      // --- HANDLE ANSWER FILE UPLOAD ---
+      if (selectedAnswerFile) {
+        const ansExtension = selectedAnswerFile.name.split('.').pop();
+        const ansFileName = `${safeTitle}_ANS.${ansExtension}`;
+        // Path: pdfs/{Origin}/answer/{Title}_ANS.pdf
+        const ansStoragePath = `pdfs/${safeOrigin}/answer/${ansFileName}`;
+        const ansRef = ref(storage, ansStoragePath);
+
+        const ansMetadata = {
+          contentType: 'application/pdf',
+          contentDisposition: `inline; filename="${ansFileName}"`
+        };
+
+        await uploadBytes(ansRef, selectedAnswerFile, ansMetadata);
+        answerFileUrl = await getDownloadURL(ansRef);
+      } else if (editingId && uploadForm.answerFileUrl) {
+         // Sync answer filename metadata if title changed
+         try {
+          const ansRef = ref(storage, uploadForm.answerFileUrl);
+          const newAnsName = `${safeTitle}_ANS.pdf`;
+          await updateMetadata(ansRef, { contentDisposition: `inline; filename="${newAnsName}"` });
+        } catch (metaErr) { console.warn("Answer Meta update failed", metaErr); }
       }
 
       const payload = {
         ...uploadForm,
         hasFile: !!fileUrl,
         fileUrl: fileUrl,
+        hasAnswer: !!answerFileUrl,
+        answerFileUrl: answerFileUrl,
         updatedAt: new Date().toISOString(),
         updatedBy: user?.email || 'anonymous'
       };
@@ -685,7 +704,7 @@ export default function AdvancedHistoryArchive() {
         setArchives([newEntry, ...archives]);
       }
       
-      // Update local lists immediately if new tags were added
+      // Update local lists immediately
       ensureArray(payload.topic).forEach(t => handleCreateTopic(t));
       payload.subQuestions.forEach(sq => {
         ensureArray(sq.topic).forEach(t => handleCreateTopic(t));
@@ -711,7 +730,13 @@ export default function AdvancedHistoryArchive() {
         subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', topic: [], marks: '' }]
       });
       setSelectedFile(null);
+      setSelectedAnswerFile(null);
     }, 300);
+  };
+
+  const closePreview = () => {
+    setPreviewItem(null);
+    setViewingAnswer(false);
   };
 
   useEffect(() => {
@@ -1048,6 +1073,12 @@ export default function AdvancedHistoryArchive() {
                             No PDF attached
                           </div>
                         )}
+
+                        {parent.hasAnswer && (
+                          <div className="text-center text-green-600 text-xs flex items-center gap-1 font-medium mt-1">
+                             <BookOpen size={12} /> Answer Key Available
+                          </div>
+                        )}
                         
                         {user.isAdmin && (
                           <button 
@@ -1099,32 +1130,58 @@ export default function AdvancedHistoryArchive() {
                       </span>
                     </div>
                     <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                      {previewItem.parent.title}
-                      <span className="bg-slate-800 text-white text-sm px-2 py-0.5 rounded-md">
-                        Q{previewItem.child.label}
-                      </span>
-                      {previewItem.child.marks && (
-                        <span className="text-xs text-slate-500 font-normal border border-slate-200 px-2 py-0.5 rounded bg-slate-50">
-                          {previewItem.child.marks} Marks
-                        </span>
+                      {viewingAnswer ? "Answer Key: " : ""}{previewItem.parent.title}
+                      {!viewingAnswer && (
+                        <>
+                          <span className="bg-slate-800 text-white text-sm px-2 py-0.5 rounded-md">
+                            Q{previewItem.child.label}
+                          </span>
+                          {previewItem.child.marks && (
+                            <span className="text-xs text-slate-500 font-normal border border-slate-200 px-2 py-0.5 rounded bg-slate-50">
+                              {previewItem.child.marks} Marks
+                            </span>
+                          )}
+                        </>
                       )}
                     </h2>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-3">
-                   {previewItem.parent.hasFile && (
+                  {/* TOGGLE ANSWER BUTTON */}
+                  {!viewingAnswer && previewItem.parent.hasAnswer && (
+                    <button 
+                      onClick={() => setViewingAnswer(true)}
+                      className="hidden sm:flex px-4 py-2 rounded-lg bg-green-600 text-white text-sm font-bold hover:bg-green-700 transition-all items-center gap-2"
+                    >
+                      <BookOpen size={16} /> Show Answer
+                    </button>
+                  )}
+
+                  {/* RETURN BUTTON */}
+                  {viewingAnswer && (
+                    <button 
+                      onClick={() => setViewingAnswer(false)}
+                      className="hidden sm:flex px-4 py-2 rounded-lg bg-slate-600 text-white text-sm font-bold hover:bg-slate-700 transition-all items-center gap-2"
+                    >
+                      <ArrowLeft size={16} /> Return to Question
+                    </button>
+                  )}
+
+                  {/* DOWNLOAD BUTTON (Context Aware) */}
+                  {((!viewingAnswer && previewItem.parent.hasFile) || (viewingAnswer && previewItem.parent.hasAnswer)) && (
                     <a 
-                      href={previewItem.parent.fileUrl}
+                      href={viewingAnswer ? previewItem.parent.answerFileUrl : previewItem.parent.fileUrl}
                       target="_blank"
                       rel="noreferrer"
                       className="hidden sm:flex px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 transition-all items-center gap-2"
                     >
-                      <Download size={16} /> Download
+                      <Download size={16} /> {viewingAnswer ? "Download Answer" : "Download PDF"}
                     </a>
                   )}
+                  
                   <button 
-                    onClick={() => setPreviewItem(null)} 
+                    onClick={closePreview} 
                     className="text-slate-400 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 p-2 rounded-full transition-colors"
                   >
                     <X size={20} />
@@ -1135,52 +1192,70 @@ export default function AdvancedHistoryArchive() {
               {/* Preview Body - MODIFIED LAYOUT */}
               <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
                 
-                {/* Left: Text Content & Metadata (Sidebar style) */}
-                <div className={`${previewItem.parent.hasFile ? 'md:w-1/4 border-r border-slate-200' : 'w-full'} p-6 overflow-y-auto bg-white`}>
-                  <div className="prose max-w-none">
-                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
-                      <FileText size={14} /> Question Content
-                    </h3>
-                    <div className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap bg-slate-50 p-4 rounded-lg border border-slate-100">
-                      {previewItem.child.content || <span className="text-slate-400 italic">No text content available. Please refer to the PDF.</span>}
-                    </div>
-                  </div>
-
-                  <div className="mt-6 space-y-4">
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Topics</h4>
-                      <div className="flex flex-wrap gap-2">
-                        {[...ensureArray(previewItem.parent.topic), ...ensureArray(previewItem.child.topic)].map((t, i) => (
-                          <span key={i} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1">
-                            <Tag size={12} /> {t}
-                          </span>
-                        ))}
+                {/* Left: Text Content & Metadata (Sidebar style) - Only show in Question Mode */}
+                {!viewingAnswer && (
+                  <div className={`${previewItem.parent.hasFile ? 'md:w-1/4 border-r border-slate-200' : 'w-full'} p-6 overflow-y-auto bg-white`}>
+                    <div className="prose max-w-none">
+                      <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                        <FileText size={14} /> Question Content
+                      </h3>
+                      <div className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap bg-slate-50 p-4 rounded-lg border border-slate-100">
+                        {previewItem.child.content || <span className="text-slate-400 italic">No text content available. Please refer to the PDF.</span>}
                       </div>
                     </div>
-                    
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Question Types</h4>
-                      <div className="flex flex-wrap gap-2">
-                        {ensureArray(previewItem.child.questionType).map((qt, i) => (
-                          <span key={i} className="px-2 py-1 bg-green-50 text-green-700 rounded-md text-xs font-medium border border-green-100">
-                            {qt}
-                          </span>
-                        ))}
+
+                    <div className="mt-6 space-y-4">
+                      <div>
+                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Topics</h4>
+                        <div className="flex flex-wrap gap-2">
+                          {[...ensureArray(previewItem.parent.topic), ...ensureArray(previewItem.child.topic)].map((t, i) => (
+                            <span key={i} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1">
+                              <Tag size={12} /> {t}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      
+                      <div>
+                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Question Types</h4>
+                        <div className="flex flex-wrap gap-2">
+                          {ensureArray(previewItem.child.questionType).map((qt, i) => (
+                            <span key={i} className="px-2 py-1 bg-green-50 text-green-700 rounded-md text-xs font-medium border border-green-100">
+                              {qt}
+                            </span>
+                          ))}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </div>
-
-                {/* Right: PDF Preview - Takes up majority of space for 2-page view */}
-                {previewItem.parent.hasFile && (
-                  <div className="flex-1 bg-slate-200 flex flex-col h-full relative">
-                    <iframe 
-                      src={`${previewItem.parent.fileUrl}#view=Fit&pagemode=thumbs&page=1&zoom=page-fit`}
-                      className="w-full h-full"
-                      title="PDF Preview"
-                    />
                   </div>
                 )}
+
+                {/* Right: PDF Preview - Takes up majority of space for 2-page view */}
+                <div className="flex-1 bg-slate-200 flex flex-col h-full relative">
+                  {viewingAnswer ? (
+                    // ANSWER PDF VIEW
+                    previewItem.parent.hasAnswer ? (
+                      <iframe 
+                        src={`${previewItem.parent.answerFileUrl}#view=Fit&pagemode=thumbs&page=1&zoom=page-fit`}
+                        className="w-full h-full"
+                        title="Answer Preview"
+                      />
+                    ) : (
+                      <div className="flex items-center justify-center h-full text-slate-500">No answer file available.</div>
+                    )
+                  ) : (
+                    // QUESTION PDF VIEW
+                    previewItem.parent.hasFile ? (
+                      <iframe 
+                        src={`${previewItem.parent.fileUrl}#view=Fit&pagemode=thumbs&page=1&zoom=page-fit`}
+                        className="w-full h-full"
+                        title="PDF Preview"
+                      />
+                    ) : (
+                      <div className="flex items-center justify-center h-full text-slate-500">No question file available.</div>
+                    )
+                  )}
+                </div>
               </div>
             </motion.div>
           </div>
@@ -1284,7 +1359,7 @@ export default function AdvancedHistoryArchive() {
 
                       <div>
                         <label className="label flex justify-between">
-                          <span>PDF Document</span>
+                          <span>PDF Document (Question)</span>
                           <span className="text-slate-400 font-normal italic">Optional</span>
                         </label>
                         <div className="relative">
@@ -1295,6 +1370,22 @@ export default function AdvancedHistoryArchive() {
                           />
                         </div>
                       </div>
+
+                      {/* NEW: ANSWER UPLOAD */}
+                      <div>
+                        <label className="label flex justify-between">
+                          <span className="text-green-700">Answer Document (PDF)</span>
+                          <span className="text-slate-400 font-normal italic">Optional</span>
+                        </label>
+                        <div className="relative">
+                          <input 
+                            type="file" accept=".pdf"
+                            onChange={(e) => setSelectedAnswerFile(e.target.files[0])}
+                            className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-green-50 file:text-green-700 hover:file:bg-green-100"
+                          />
+                        </div>
+                      </div>
+
                     </div>
                   </div>
 

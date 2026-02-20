@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, Tag, Edit, ChevronDown, Check, LogIn, LogOut, User, Lock, ShieldAlert, Loader2, Sparkles, ArrowUpDown, Eye, ExternalLink, Maximize2 } from 'lucide-react';
+import { Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, Tag, Edit, ChevronDown, Check, LogIn, LogOut, User, Lock, ShieldAlert, Loader2, Sparkles, ArrowUpDown, Eye, ExternalLink, Maximize2, Hash } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // --- FIREBASE IMPORTS ---
@@ -35,6 +35,20 @@ const SORT_OPTIONS = [
   { label: "Date Added (Newest)", value: "added_desc" },
   { label: "Topic (A-Z)", value: "topic_asc" },
   { label: "Question Type (A-Z)", value: "qtype_asc" },
+];
+
+// --- MARK OPTIONS FOR FILTER ---
+const MARK_OPTIONS = [
+  { label: "1 Mark", value: "1" },
+  { label: "2 Marks", value: "2" },
+  { label: "3 Marks", value: "3" },
+  { label: "4 Marks", value: "4" },
+  { label: "5 Marks", value: "5" },
+  { label: "6 Marks", value: "6" },
+  { label: "7 Marks", value: "7" },
+  { label: "8 Marks", value: "8" },
+  { label: "7/8 Marks", value: "7/8" }, // Special combined filter
+  { label: "9+ Marks", value: "9+" },
 ];
 
 // --- FALLBACK SUPER ADMIN ---
@@ -227,7 +241,7 @@ export default function AdvancedHistoryArchive() {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortOption, setSortOption] = useState('year_desc');
   const [filters, setFilters] = useState({
-    origin: '', year: '', paperType: '', questionType: ''
+    origin: '', year: '', paperType: '', questionType: '', marks: ''
   });
 
   // Upload/Edit Form State
@@ -238,7 +252,7 @@ export default function AdvancedHistoryArchive() {
     year: new Date().getFullYear().toString(), 
     paperType: '',
     topic: [], 
-    subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', topic: [] }] 
+    subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', topic: [], marks: '' }] 
   });
   const [selectedFile, setSelectedFile] = useState(null);
 
@@ -381,6 +395,19 @@ export default function AdvancedHistoryArchive() {
           ? childTypes.includes(filters.questionType) 
           : true;
 
+        // Handle Marks Filter
+        let matchMarks = true;
+        if (filters.marks) {
+          const childMark = String(child.marks || '');
+          if (filters.marks === '7/8') {
+             matchMarks = childMark === '7' || childMark === '8';
+          } else if (filters.marks === '9+') {
+             matchMarks = parseInt(childMark) >= 9;
+          } else {
+             matchMarks = childMark === filters.marks;
+          }
+        }
+
         // Search String Construction
         const parentTopics = ensureArray(parent.topic).join(" ");
         const childTopics = ensureArray(child.topic).join(" ");
@@ -389,7 +416,7 @@ export default function AdvancedHistoryArchive() {
         const searchString = `${parent.title} ${parentTopics} ${childTopics} ${qTypes} ${child.content}`.toLowerCase();
         const matchSearch = searchTerm === '' || searchString.includes(searchTerm.toLowerCase());
 
-        if (matchQuestionType && matchSearch) {
+        if (matchQuestionType && matchMarks && matchSearch) {
           results.push({ uniqueId: `${parent.id}_${child.id}`, parent, child });
         }
       });
@@ -429,11 +456,25 @@ export default function AdvancedHistoryArchive() {
   const handleParentChange = (field, value) => {
     setUploadForm(prev => {
       const newState = { ...prev, [field]: value };
+      
       if (field === 'paperType') {
-        newState.subQuestions = prev.subQuestions.map((sq, idx) => ({
+        // 1. Relabel existing questions
+        let newSubQuestions = prev.subQuestions.map((sq, idx) => ({
           ...sq,
           label: getNextLabel(idx, value)
         }));
+
+        // 2. Auto-populate 3 slots if DBQ and currently empty or default
+        if (value === "Paper 1 (DBQ)" && newSubQuestions.length <= 1 && !newSubQuestions[0].content) {
+          newSubQuestions = [
+            { id: Date.now(), label: 'a', questionType: [], content: '', topic: [], marks: '' },
+            { id: Date.now() + 1, label: 'b', questionType: [], content: '', topic: [], marks: '' },
+            { id: Date.now() + 2, label: 'c', questionType: [], content: '', topic: [], marks: '' }
+          ];
+        }
+
+        newState.subQuestions = newSubQuestions;
+
         if (value === "Paper 2 (Essay)") newState.topic = []; 
       }
       return newState;
@@ -461,10 +502,20 @@ export default function AdvancedHistoryArchive() {
         }
 
         if (newState.paperType) {
-          newState.subQuestions = prev.subQuestions.map((sq, idx) => ({
-            ...sq,
-            label: getNextLabel(idx, newState.paperType)
-          }));
+          // Trigger the same logic as handleParentChange for DBQ defaults
+          if (newState.paperType === "Paper 1 (DBQ)" && prev.subQuestions.length <= 1 && !prev.subQuestions[0].content) {
+             newState.subQuestions = [
+              { id: Date.now(), label: 'a', questionType: [], content: '', topic: [], marks: '' },
+              { id: Date.now() + 1, label: 'b', questionType: [], content: '', topic: [], marks: '' },
+              { id: Date.now() + 2, label: 'c', questionType: [], content: '', topic: [], marks: '' }
+            ];
+          } else {
+             newState.subQuestions = prev.subQuestions.map((sq, idx) => ({
+              ...sq,
+              label: getNextLabel(idx, newState.paperType)
+            }));
+          }
+
           if (newState.paperType === "Paper 2 (Essay)") {
             newState.topic = []; 
           }
@@ -480,7 +531,7 @@ export default function AdvancedHistoryArchive() {
       const nextLabel = getNextLabel(nextIndex, prev.paperType);
       return {
         ...prev,
-        subQuestions: [...prev.subQuestions, { id: Date.now(), label: nextLabel, questionType: [], content: '', topic: [] }]
+        subQuestions: [...prev.subQuestions, { id: Date.now(), label: nextLabel, questionType: [], content: '', topic: [], marks: '' }]
       };
     });
   };
@@ -634,7 +685,7 @@ export default function AdvancedHistoryArchive() {
       setDeleteConfirm(false);
       setUploadForm({
         title: '', origin: '', year: new Date().getFullYear().toString(), paperType: '', topic: [],
-        subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', topic: [] }]
+        subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', topic: [], marks: '' }]
       });
       setSelectedFile(null);
     }, 300);
@@ -762,6 +813,20 @@ export default function AdvancedHistoryArchive() {
           </div>
 
           <div>
+            <label className="filter-label">Marks</label>
+            <select 
+              value={filters.marks}
+              onChange={(e) => setFilters({...filters, marks: e.target.value})}
+              className="filter-select"
+            >
+              <option value="">All Marks</option>
+              {MARK_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
             <label className="filter-label">Year</label>
             <input 
               type="number" 
@@ -773,7 +838,7 @@ export default function AdvancedHistoryArchive() {
           </div>
 
           <button 
-            onClick={() => setFilters({ origin: '', year: '', paperType: '', questionType: '' })}
+            onClick={() => setFilters({ origin: '', year: '', paperType: '', questionType: '', marks: '' })}
             className="w-full py-2 text-sm text-slate-500 hover:text-red-500 border border-slate-200 rounded-lg hover:bg-red-50 transition-colors"
           >
             Reset Filters
@@ -907,6 +972,11 @@ export default function AdvancedHistoryArchive() {
                           <span className="bg-slate-800 text-white text-sm px-2 py-0.5 rounded-md">
                             Q{child.label}
                           </span>
+                          {child.marks && (
+                            <span className="text-xs text-slate-400 font-normal border border-slate-200 px-1.5 py-0.5 rounded">
+                              {child.marks} Marks
+                            </span>
+                          )}
                         </h3>
 
                         <div className="mt-3 text-slate-600 text-sm line-clamp-3 bg-slate-50 p-3 rounded-lg border border-slate-100 italic">
@@ -1010,6 +1080,11 @@ export default function AdvancedHistoryArchive() {
                       <span className="bg-slate-800 text-white text-sm px-2 py-0.5 rounded-md">
                         Q{previewItem.child.label}
                       </span>
+                      {previewItem.child.marks && (
+                        <span className="text-xs text-slate-500 font-normal border border-slate-200 px-2 py-0.5 rounded bg-slate-50">
+                          {previewItem.child.marks} Marks
+                        </span>
+                      )}
                     </h2>
                   </div>
                 </div>
@@ -1245,6 +1320,22 @@ export default function AdvancedHistoryArchive() {
                                   isMulti={true} // ENABLE MULTI SELECT
                                 />
                               </div>
+
+                              {/* Marks Input - Only for Paper 1 (DBQ) */}
+                              {uploadForm.paperType === "Paper 1 (DBQ)" && (
+                                <div>
+                                  <label className="text-xs font-bold text-slate-500 mb-1 block flex items-center gap-1">
+                                    <Hash size={10} /> Marks
+                                  </label>
+                                  <input 
+                                    type="number" 
+                                    placeholder="e.g. 4"
+                                    className="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                    value={sub.marks || ''}
+                                    onChange={(e) => updateSubQuestion(index, 'marks', e.target.value)}
+                                  />
+                                </div>
+                              )}
 
                               {/* Sub-Question Topic - Only for Paper 2 */}
                               {uploadForm.paperType === "Paper 2 (Essay)" && (

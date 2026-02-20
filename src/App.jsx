@@ -6,7 +6,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { initializeApp } from "firebase/app";
 import { getAuth, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from "firebase/auth";
 import { getFirestore, collection, getDocs, addDoc, updateDoc, deleteDoc, doc, getDoc } from "firebase/firestore";
-// Added updateMetadata to imports
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject, updateMetadata } from "firebase/storage";
 
 // --- YOUR CONFIGURATION ---
@@ -636,9 +635,9 @@ export default function AdvancedHistoryArchive() {
         // 3. Create the new filename
         const newFileName = `${safeTitle}.${fileExtension}`;
         
-        // 4. Create path with Origin Folder and Timestamp
-        // Path: pdfs/DSE_Pastpaper/123456789_2013D.pdf
-        const storagePath = `pdfs/${safeOrigin}/${Date.now()}_${newFileName}`;
+        // 4. Create path with Origin Folder (NO TIMESTAMP)
+        // Path: pdfs/DSE_Pastpaper/2012D Q1.pdf
+        const storagePath = `pdfs/${safeOrigin}/${newFileName}`;
         const storageRef = ref(storage, storagePath);
         
         // 5. Upload with metadata

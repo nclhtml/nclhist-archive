@@ -1477,9 +1477,9 @@ export default function AdvancedHistoryArchive() {
                             <label className="text-xs font-bold text-slate-500 mb-1 block">Label</label>
                             <input 
                               type="text" 
-                              className="w-full p-2 bg-slate-100 border border-slate-200 rounded text-center font-bold text-slate-600"
+                              className="w-full p-2 bg-white border border-slate-200 rounded text-center font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
                               value={sub.label}
-                              readOnly 
+                              onChange={(e) => updateSubQuestion(index, 'label', e.target.value)}
                             />
                           </div>
 

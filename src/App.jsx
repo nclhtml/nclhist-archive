@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, Tag, Edit, ChevronDown, Check, LogIn, LogOut, User, Lock, ShieldAlert, Loader2, Sparkles, ArrowUpDown, Eye, ExternalLink, Maximize2, Hash, BookOpen, ArrowLeft, FileDigit } from 'lucide-react';
+import { Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, Tag, Edit, ChevronDown, Check, LogIn, LogOut, User, Lock, ShieldAlert, Loader2, Sparkles, ArrowUpDown, Eye, ExternalLink, Maximize2, Hash, BookOpen, ArrowLeft, FileDigit, Settings, CheckSquare, Square } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // --- FIREBASE IMPORTS ---
@@ -56,7 +56,7 @@ const SUPER_ADMIN = "ethanng.520021231@gmail.com";
 
 // --- EMPTIED LISTS (Will be populated dynamically) ---
 const INITIAL_TOPICS = [];
-const INITIAL_SOURCE_TYPES = []; // NEW: Source Types List
+const INITIAL_SOURCE_TYPES = []; 
 const INITIAL_QUESTION_TYPES = {
   "Paper 1 (DBQ)": [],
   "Paper 2 (Essay)": []
@@ -67,6 +67,84 @@ const ensureArray = (data) => {
   if (Array.isArray(data)) return data;
   if (data && typeof data === 'string') return [data];
   return [];
+};
+
+// --- REUSABLE COMPONENT: GRID CHECKBOX GROUP (No Scroll) ---
+const CheckboxGroup = ({ options, selectedValues, onChange }) => {
+  const toggleValue = (val) => {
+    if (selectedValues.includes(val)) {
+      onChange(selectedValues.filter(v => v !== val));
+    } else {
+      onChange([...selectedValues, val]);
+    }
+  };
+
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+      {options.map((opt) => {
+        const label = typeof opt === 'object' ? opt.label : opt;
+        const value = typeof opt === 'object' ? opt.value : opt;
+        const isSelected = selectedValues.includes(value);
+
+        return (
+          <div 
+            key={value} 
+            onClick={() => toggleValue(value)}
+            className={`
+              cursor-pointer px-3 py-2 rounded-lg text-sm font-medium border transition-all duration-200 flex items-center justify-center text-center h-full
+              ${isSelected 
+                ? 'bg-blue-600 border-blue-600 text-white shadow-md shadow-blue-200' 
+                : 'bg-white border-slate-200 text-slate-600 hover:border-blue-300 hover:bg-slate-50'
+              }
+            `}
+          >
+            {label}
+          </div>
+        );
+      })}
+      {options.length === 0 && (
+        <div className="col-span-full text-xs text-slate-400 italic p-2 text-center">No options available</div>
+      )}
+    </div>
+  );
+};
+
+// --- REUSABLE COMPONENT: FILTER ACCORDION ---
+const FilterAccordion = ({ title, isOpen, onToggle, count, children, disabled, helperText }) => {
+  return (
+    <div className={`border border-slate-200 rounded-xl bg-white overflow-hidden ${disabled ? 'opacity-60 grayscale' : 'shadow-sm'}`}>
+      <button 
+        onClick={disabled ? undefined : onToggle}
+        className={`w-full flex items-center justify-between p-4 text-base font-bold text-slate-700 hover:bg-slate-50 transition-colors ${disabled ? 'cursor-not-allowed' : ''}`}
+      >
+        <div className="flex flex-col items-start">
+          <div className="flex items-center gap-3">
+            {title}
+            {count > 0 && <span className="bg-blue-600 text-white text-xs px-2 py-0.5 rounded-full">{count} Selected</span>}
+          </div>
+          {helperText && <span className="text-xs text-slate-400 font-normal mt-1">{helperText}</span>}
+        </div>
+        <div className={`p-1 rounded-full bg-slate-100 transition-transform duration-300 ${isOpen ? 'rotate-180 bg-blue-100 text-blue-600' : 'text-slate-400'}`}>
+          <ChevronDown size={20} />
+        </div>
+      </button>
+      <AnimatePresence>
+        {isOpen && !disabled && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <div className="p-4 border-t border-slate-100 bg-slate-50/50">
+              {children}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
 };
 
 // --- REUSABLE COMPONENT: MULTI-SELECT CREATABLE ---
@@ -227,24 +305,34 @@ export default function AdvancedHistoryArchive() {
   const [archives, setArchives] = useState([]); 
   
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
-  const [showFilters, setShowFilters] = useState(false);
+  const [isManageFiltersOpen, setIsManageFiltersOpen] = useState(false); 
+  const [showFilters, setShowFilters] = useState(false); // Controls the top filter panel visibility
+  const [expandedSections, setExpandedSections] = useState({}); // Controls individual accordions
   const [isLoading, setIsLoading] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   
   // Preview Modal State
-  const [previewItem, setPreviewItem] = useState(null); // { parent, child }
-  const [viewingAnswer, setViewingAnswer] = useState(false); // Toggle for Answer View
+  const [previewItem, setPreviewItem] = useState(null); 
+  const [viewingAnswer, setViewingAnswer] = useState(false); 
 
   // Dynamic Lists State
   const [availableTopics, setAvailableTopics] = useState(INITIAL_TOPICS);
-  const [availableSourceTypes, setAvailableSourceTypes] = useState(INITIAL_SOURCE_TYPES); // NEW
+  const [availableSourceTypes, setAvailableSourceTypes] = useState(INITIAL_SOURCE_TYPES);
   const [availableQuestionTypes, setAvailableQuestionTypes] = useState(INITIAL_QUESTION_TYPES);
+  const [availableYears, setAvailableYears] = useState([]); 
 
   // Search & Sort State
   const [searchTerm, setSearchTerm] = useState('');
   const [sortOption, setSortOption] = useState('year_desc');
+  
   const [filters, setFilters] = useState({
-    origin: '', year: '', paperType: '', questionType: '', sourceType: '', marks: '' // ADDED sourceType
+    origin: [], 
+    year: [], 
+    paperType: [], 
+    questionType: [], 
+    sourceType: [], 
+    marks: [],
+    topic: [] 
   });
 
   // Upload/Edit Form State
@@ -255,7 +343,7 @@ export default function AdvancedHistoryArchive() {
     year: new Date().getFullYear().toString(), 
     paperType: '',
     topic: [], 
-    subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' }] // ADDED sourceType
+    subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' }]
   });
   const [selectedFile, setSelectedFile] = useState(null);
   const [selectedAnswerFile, setSelectedAnswerFile] = useState(null); 
@@ -316,15 +404,18 @@ export default function AdvancedHistoryArchive() {
         if (data.length > 0) {
             setArchives(data);
             
-            // --- NEW: EXTRACT TAGS FROM DATA ---
+            // --- EXTRACT TAGS FROM DATA ---
             const extractedTopics = new Set();
-            const extractedSourceTypes = new Set(); // NEW
+            const extractedSourceTypes = new Set();
+            const extractedYears = new Set();
             const extractedTypes = {
               "Paper 1 (DBQ)": new Set(),
               "Paper 2 (Essay)": new Set()
             };
 
             data.forEach(item => {
+              if (item.year) extractedYears.add(String(item.year));
+
               // Extract Parent Topics
               ensureArray(item.topic).forEach(t => {
                 if(t) extractedTopics.add(t);
@@ -336,7 +427,6 @@ export default function AdvancedHistoryArchive() {
                   if(t) extractedTopics.add(t);
                 });
                 
-                // NEW: Extract Source Types
                 ensureArray(sq.sourceType).forEach(st => {
                   if(st) extractedSourceTypes.add(st);
                 });
@@ -350,11 +440,12 @@ export default function AdvancedHistoryArchive() {
             });
 
             setAvailableTopics(Array.from(extractedTopics).sort());
-            setAvailableSourceTypes(Array.from(extractedSourceTypes).sort()); // NEW
+            setAvailableSourceTypes(Array.from(extractedSourceTypes).sort());
             setAvailableQuestionTypes({
               "Paper 1 (DBQ)": Array.from(extractedTypes["Paper 1 (DBQ)"]).sort(),
               "Paper 2 (Essay)": Array.from(extractedTypes["Paper 2 (Essay)"]).sort()
             });
+            setAvailableYears(Array.from(extractedYears).sort((a,b) => b - a));
         }
       } catch (error) {
         console.error("Error fetching archives:", error);
@@ -387,54 +478,53 @@ export default function AdvancedHistoryArchive() {
     return '';
   };
 
-  // --- FLATTENED SEARCH & SORT LOGIC ---
+  // --- FILTERING LOGIC ---
   const filteredResults = useMemo(() => {
     if (!user || !user.isAuthorized) return [];
 
     let results = [];
     archives.forEach(parent => {
-      const matchOrigin = filters.origin ? parent.origin === filters.origin : true;
-      const matchYear = filters.year ? parent.year === filters.year : true;
-      const matchPaper = filters.paperType ? parent.paperType === filters.paperType : true;
+      // 1. Parent Level Filters (OR Logic within category)
+      const matchOrigin = filters.origin.length === 0 || filters.origin.includes(parent.origin);
+      const matchYear = filters.year.length === 0 || filters.year.includes(String(parent.year));
+      const matchPaper = filters.paperType.length === 0 || filters.paperType.includes(parent.paperType);
 
       if (!matchOrigin || !matchYear || !matchPaper) return;
 
       parent.subQuestions.forEach(child => {
-        // Handle Question Type Filter (Array check)
+        // 2. Child Level Filters (OR Logic within category)
+        
         const childTypes = ensureArray(child.questionType);
-        const matchQuestionType = filters.questionType 
-          ? childTypes.includes(filters.questionType) 
-          : true;
+        const matchQuestionType = filters.questionType.length === 0 || 
+          childTypes.some(t => filters.questionType.includes(t));
 
-        // NEW: Handle Source Type Filter (Array check)
         const childSourceTypes = ensureArray(child.sourceType);
-        const matchSourceType = filters.sourceType
-          ? childSourceTypes.includes(filters.sourceType)
-          : true;
+        const matchSourceType = filters.sourceType.length === 0 || 
+          childSourceTypes.some(t => filters.sourceType.includes(t));
 
-        // Handle Marks Filter
+        const allTopics = [...ensureArray(parent.topic), ...ensureArray(child.topic)];
+        const matchTopic = filters.topic.length === 0 ||
+          allTopics.some(t => filters.topic.includes(t));
+
         let matchMarks = true;
-        if (filters.marks) {
+        if (filters.marks.length > 0) {
           const childMark = String(child.marks || '');
-          if (filters.marks === '7/8') {
-             matchMarks = childMark === '7' || childMark === '8';
-          } else if (filters.marks === '9+') {
-             matchMarks = parseInt(childMark) >= 9;
-          } else {
-             matchMarks = childMark === filters.marks;
-          }
+          matchMarks = filters.marks.some(filterMark => {
+            if (filterMark === '7/8') return childMark === '7' || childMark === '8';
+            if (filterMark === '9+') return parseInt(childMark) >= 9;
+            return childMark === filterMark;
+          });
         }
 
-        // Search String Construction
-        const parentTopics = ensureArray(parent.topic).join(" ");
-        const childTopics = ensureArray(child.topic).join(" ");
-        const qTypes = childTypes.join(" ");
-        const sTypes = childSourceTypes.join(" "); // Add source types to search
+        const parentTopicsStr = ensureArray(parent.topic).join(" ");
+        const childTopicsStr = ensureArray(child.topic).join(" ");
+        const qTypesStr = childTypes.join(" ");
+        const sTypesStr = childSourceTypes.join(" ");
         
-        const searchString = `${parent.title} ${parentTopics} ${childTopics} ${qTypes} ${sTypes} ${child.content}`.toLowerCase();
+        const searchString = `${parent.title} ${parentTopicsStr} ${childTopicsStr} ${qTypesStr} ${sTypesStr} ${child.content}`.toLowerCase();
         const matchSearch = searchTerm === '' || searchString.includes(searchTerm.toLowerCase());
 
-        if (matchQuestionType && matchSourceType && matchMarks && matchSearch) {
+        if (matchQuestionType && matchSourceType && matchMarks && matchSearch && matchTopic) {
           results.push({ uniqueId: `${parent.id}_${child.id}`, parent, child });
         }
       });
@@ -471,18 +561,23 @@ export default function AdvancedHistoryArchive() {
 
   // --- HANDLERS ---
   
+  const toggleAccordion = (section) => {
+    setExpandedSections(prev => ({
+      ...prev,
+      [section]: !prev[section]
+    }));
+  };
+
   const handleParentChange = (field, value) => {
     setUploadForm(prev => {
       const newState = { ...prev, [field]: value };
       
       if (field === 'paperType') {
-        // 1. Relabel existing questions
         let newSubQuestions = prev.subQuestions.map((sq, idx) => ({
           ...sq,
           label: getNextLabel(idx, value)
         }));
 
-        // 2. Auto-populate 3 slots if DBQ and currently empty or default
         if (value === "Paper 1 (DBQ)" && newSubQuestions.length <= 1 && !newSubQuestions[0].content) {
           newSubQuestions = [
             { id: Date.now(), label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' },
@@ -492,7 +587,6 @@ export default function AdvancedHistoryArchive() {
         }
 
         newState.subQuestions = newSubQuestions;
-
         if (value === "Paper 2 (Essay)") newState.topic = []; 
       }
       return newState;
@@ -520,7 +614,6 @@ export default function AdvancedHistoryArchive() {
         }
 
         if (newState.paperType) {
-          // Trigger the same logic as handleParentChange for DBQ defaults
           if (newState.paperType === "Paper 1 (DBQ)" && prev.subQuestions.length <= 1 && !prev.subQuestions[0].content) {
              newState.subQuestions = [
               { id: Date.now(), label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' },
@@ -577,7 +670,6 @@ export default function AdvancedHistoryArchive() {
     }
   };
 
-  // NEW: Handler for Source Type creation
   const handleCreateSourceType = (newSourceType) => {
     if (!availableSourceTypes.includes(newSourceType)) {
       setAvailableSourceTypes(prev => [...prev, newSourceType].sort());
@@ -593,10 +685,25 @@ export default function AdvancedHistoryArchive() {
     }
   };
 
+  // --- ADMIN: DELETE FILTER TAGS ---
+  const handleDeleteFilterTag = (type, value) => {
+    if (!user?.isAdmin) return;
+    
+    if (type === 'topic') {
+      setAvailableTopics(prev => prev.filter(t => t !== value));
+    } else if (type === 'sourceType') {
+      setAvailableSourceTypes(prev => prev.filter(t => t !== value));
+    } else if (type === 'qTypeDBQ') {
+      setAvailableQuestionTypes(prev => ({...prev, "Paper 1 (DBQ)": prev["Paper 1 (DBQ)"].filter(t => t !== value)}));
+    } else if (type === 'qTypeEssay') {
+      setAvailableQuestionTypes(prev => ({...prev, "Paper 2 (Essay)": prev["Paper 2 (Essay)"].filter(t => t !== value)}));
+    }
+  };
+
   // --- MODAL HANDLERS ---
 
   const handleEditClick = (e, parentItem) => {
-    e.stopPropagation(); // Prevent opening preview modal
+    e.stopPropagation(); 
     if (!user?.isAdmin) return;
     setEditingId(parentItem.id);
     
@@ -606,7 +713,7 @@ export default function AdvancedHistoryArchive() {
       ...sq,
       questionType: ensureArray(sq.questionType),
       topic: ensureArray(sq.topic),
-      sourceType: ensureArray(sq.sourceType) // Ensure array for source types
+      sourceType: ensureArray(sq.sourceType) 
     }));
 
     setUploadForm(itemData);
@@ -618,23 +725,17 @@ export default function AdvancedHistoryArchive() {
     if (!user?.isAdmin || !editingId) return;
     setIsLoading(true);
     try {
-      // Delete Question PDF
       if (uploadForm.fileUrl) {
         try {
           const fileRef = ref(storage, uploadForm.fileUrl);
           await deleteObject(fileRef);
-        } catch (fileErr) {
-          console.warn("Could not delete question file (might not exist):", fileErr);
-        }
+        } catch (fileErr) { console.warn(fileErr); }
       }
-      // Delete Answer PDF
       if (uploadForm.answerFileUrl) {
         try {
           const ansRef = ref(storage, uploadForm.answerFileUrl);
           await deleteObject(ansRef);
-        } catch (ansErr) {
-          console.warn("Could not delete answer file (might not exist):", ansErr);
-        }
+        } catch (ansErr) { console.warn(ansErr); }
       }
 
       await deleteDoc(doc(db, "archives", editingId));
@@ -642,7 +743,7 @@ export default function AdvancedHistoryArchive() {
       closeModal();
     } catch (error) {
       console.error("Error deleting:", error);
-      alert("Failed to delete document. Check console.");
+      alert("Failed to delete document.");
     } finally {
       setIsLoading(false);
     }
@@ -658,57 +759,29 @@ export default function AdvancedHistoryArchive() {
       let fileUrl = uploadForm.fileUrl || '';
       let answerFileUrl = uploadForm.answerFileUrl || '';
       
-      // 1. Sanitize the title to create a safe filename
       const safeTitle = uploadForm.title.replace(/[^a-zA-Z0-9\s\-_]/g, '').trim();
       const safeOrigin = (uploadForm.origin || 'Uncategorized').replace(/[^a-zA-Z0-9\s\-_]/g, '_');
 
-      // --- HANDLE QUESTION FILE UPLOAD ---
       if (selectedFile) {
         const fileExtension = selectedFile.name.split('.').pop();
         const newFileName = `${safeTitle}.${fileExtension}`;
         const storagePath = `pdfs/${safeOrigin}/${newFileName}`;
         const storageRef = ref(storage, storagePath);
         
-        const metadata = {
-          contentType: 'application/pdf',
-          contentDisposition: `inline; filename="${newFileName}"`
-        };
-
+        const metadata = { contentType: 'application/pdf', contentDisposition: `inline; filename="${newFileName}"` };
         await uploadBytes(storageRef, selectedFile, metadata);
         fileUrl = await getDownloadURL(storageRef);
-      } else if (editingId && uploadForm.fileUrl) {
-        // Sync filename metadata if title changed
-        try {
-          const fileRef = ref(storage, uploadForm.fileUrl);
-          const newFileName = `${safeTitle}.pdf`;
-          await updateMetadata(fileRef, { contentDisposition: `inline; filename="${newFileName}"` });
-        } catch (metaErr) { console.warn("Meta update failed", metaErr); }
       }
 
-      // --- HANDLE ANSWER FILE UPLOAD ---
       if (selectedAnswerFile) {
         const ansExtension = selectedAnswerFile.name.split('.').pop();
-        // Naming requirement: "{Title} answer"
         const ansFileName = `${safeTitle} answer.${ansExtension}`;
-        // Folder requirement: "inside the dse past paper folder and inside that there should be an answer folder"
-        // We use safeOrigin to determine the parent folder (e.g., DSE Pastpaper)
         const ansStoragePath = `pdfs/${safeOrigin}/answer/${ansFileName}`;
         const ansRef = ref(storage, ansStoragePath);
 
-        const ansMetadata = {
-          contentType: 'application/pdf',
-          contentDisposition: `inline; filename="${ansFileName}"`
-        };
-
+        const ansMetadata = { contentType: 'application/pdf', contentDisposition: `inline; filename="${ansFileName}"` };
         await uploadBytes(ansRef, selectedAnswerFile, ansMetadata);
         answerFileUrl = await getDownloadURL(ansRef);
-      } else if (editingId && uploadForm.answerFileUrl) {
-         // Sync answer filename metadata if title changed
-         try {
-          const ansRef = ref(storage, uploadForm.answerFileUrl);
-          const newAnsName = `${safeTitle} answer.pdf`;
-          await updateMetadata(ansRef, { contentDisposition: `inline; filename="${newAnsName}"` });
-        } catch (metaErr) { console.warn("Answer Meta update failed", metaErr); }
       }
 
       const payload = {
@@ -730,18 +803,17 @@ export default function AdvancedHistoryArchive() {
         setArchives([newEntry, ...archives]);
       }
       
-      // Update local lists immediately
       ensureArray(payload.topic).forEach(t => handleCreateTopic(t));
       payload.subQuestions.forEach(sq => {
         ensureArray(sq.topic).forEach(t => handleCreateTopic(t));
-        ensureArray(sq.sourceType).forEach(st => handleCreateSourceType(st)); // NEW
+        ensureArray(sq.sourceType).forEach(st => handleCreateSourceType(st));
         ensureArray(sq.questionType).forEach(qt => handleCreateQuestionType(qt, payload.paperType));
       });
 
       closeModal();
     } catch (error) {
       console.error("Error uploading:", error);
-      alert("Failed to save document. Ensure you are an Admin.");
+      alert("Failed to save document.");
     } finally {
       setIsLoading(false);
     }
@@ -767,9 +839,9 @@ export default function AdvancedHistoryArchive() {
   };
 
   useEffect(() => {
-    document.body.style.overflow = (isUploadModalOpen || previewItem) ? 'hidden' : 'unset';
+    document.body.style.overflow = (isUploadModalOpen || previewItem || isManageFiltersOpen) ? 'hidden' : 'unset';
     return () => { document.body.style.overflow = 'unset'; };
-  }, [isUploadModalOpen, previewItem]);
+  }, [isUploadModalOpen, previewItem, isManageFiltersOpen]);
 
   // --- RENDER CONTENT ---
   if (authLoading) {
@@ -784,165 +856,19 @@ export default function AdvancedHistoryArchive() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col md:flex-row relative">
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col relative">
       
       {/* DEBUG BAR */}
       <div className="fixed bottom-0 right-0 bg-black text-white text-[10px] p-2 z-50 opacity-80 pointer-events-none font-mono">
-        STATUS: {user ? (user.isAdmin ? "ADMIN" : (user.isAuthorized ? "VIEWER" : "UNAUTHORIZED")) : "LOGGED OUT"} | {user?.email}
+        STATUS: {user ? (user.isAdmin ? "ADMIN" : (user.isAuthorized ? "VIEWER" : "UNAUTHORIZED")) : "LOGGED OUT"}
       </div>
 
-      {/* --- SIDEBAR FILTERS --- */}
-      <aside className={`
-        fixed md:sticky top-0 left-0 z-30 h-screen w-72 bg-white border-r border-slate-200 p-6 overflow-y-auto transition-transform duration-300
-        ${showFilters ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
-      `}>
-        <div className="flex items-center justify-between mb-8">
-          <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-            <Filter size={20} /> Filters
-          </h2>
-          <button onClick={() => setShowFilters(false)} className="md:hidden text-slate-400">
-            <X size={24} />
-          </button>
-        </div>
-
-        <div className="space-y-6">
-          {/* Auth Status in Sidebar */}
-          <div className="p-4 bg-slate-50 rounded-lg border border-slate-100">
-            {user ? (
-              <div className="space-y-3">
-                <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center ${user.isAdmin ? 'bg-purple-100 text-purple-600' : 'bg-blue-100 text-blue-600'}`}>
-                    <User size={16} />
-                  </div>
-                  <div className="overflow-hidden">
-                    <p className="truncate">{user.displayName || 'User'}</p>
-                    <p className="text-xs text-slate-400 truncate">{user.email}</p>
-                  </div>
-                </div>
-                
-                <div className="flex justify-start">
-                  {user.isAdmin ? (
-                    <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide">Administrator</span>
-                  ) : user.isAuthorized ? (
-                    <span className="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide">Authorized Viewer</span>
-                  ) : (
-                    <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide flex items-center gap-1">
-                      <ShieldAlert size={10} /> Unauthorized
-                    </span>
-                  )}
-                </div>
-
-                <button onClick={handleLogout} className="w-full flex items-center justify-center gap-2 text-xs text-red-500 hover:bg-red-50 py-2 rounded border border-transparent hover:border-red-100 transition-colors">
-                  <LogOut size={14} /> Sign Out
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <p className="text-xs text-slate-500 mb-2">Login to view archive contents.</p>
-                <button onClick={handleLogin} className="w-full flex items-center justify-center gap-2 bg-slate-800 text-white py-2 rounded-lg text-sm font-medium hover:bg-slate-900 transition-colors">
-                  <LogIn size={16} /> Google Login
-                </button>
-              </div>
-            )}
-          </div>
-
-          <hr className="border-slate-100" />
-
-          <div>
-            <label className="filter-label">Origin</label>
-            <select 
-              value={filters.origin}
-              onChange={(e) => setFilters({...filters, origin: e.target.value})}
-              className="filter-select"
-            >
-              <option value="">All Origins</option>
-              {ORIGINS.map(o => <option key={o} value={o}>{o}</option>)}
-            </select>
-          </div>
-
-          <div>
-            <label className="filter-label">Paper Type</label>
-            <select 
-              value={filters.paperType}
-              onChange={(e) => setFilters({...filters, paperType: e.target.value, questionType: '', sourceType: ''})}
-              className="filter-select"
-            >
-              <option value="">All Papers</option>
-              {PAPER_TYPES.map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
-          </div>
-
-          <div className={!filters.paperType ? 'opacity-50 pointer-events-none' : ''}>
-            <label className="filter-label">Question Type</label>
-            <select 
-              value={filters.questionType}
-              onChange={(e) => setFilters({...filters, questionType: e.target.value})}
-              disabled={!filters.paperType}
-              className="filter-select"
-            >
-              <option value="">All Questions</option>
-              {filters.paperType && availableQuestionTypes[filters.paperType]?.map(q => (
-                <option key={q} value={q}>{q}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* NEW: Source Type Filter (Only for DBQ) */}
-          <div className={filters.paperType !== "Paper 1 (DBQ)" ? 'opacity-50 pointer-events-none' : ''}>
-            <label className="filter-label">Source Type</label>
-            <select 
-              value={filters.sourceType}
-              onChange={(e) => setFilters({...filters, sourceType: e.target.value})}
-              disabled={filters.paperType !== "Paper 1 (DBQ)"}
-              className="filter-select"
-            >
-              <option value="">All Source Types</option>
-              {availableSourceTypes.map(st => (
-                <option key={st} value={st}>{st}</option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="filter-label">Marks</label>
-            <select 
-              value={filters.marks}
-              onChange={(e) => setFilters({...filters, marks: e.target.value})}
-              className="filter-select"
-            >
-              <option value="">All Marks</option>
-              {MARK_OPTIONS.map(opt => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="filter-label">Year</label>
-            <input 
-              type="number" 
-              placeholder="e.g. 2019"
-              value={filters.year}
-              onChange={(e) => setFilters({...filters, year: e.target.value})}
-              className="filter-select"
-            />
-          </div>
-
-          <button 
-            onClick={() => setFilters({ origin: '', year: '', paperType: '', questionType: '', sourceType: '', marks: '' })}
-            className="w-full py-2 text-sm text-slate-500 hover:text-red-500 border border-slate-200 rounded-lg hover:bg-red-50 transition-colors"
-          >
-            Reset Filters
-          </button>
-        </div>
-      </aside>
-
       {/* --- MAIN CONTENT --- */}
-      <main className="flex-1 p-6 md:p-10">
+      <main className="flex-1 p-6 md:p-10 max-w-7xl mx-auto w-full">
         
         {/* Header */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
-          <div>
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+          <div className="flex-1">
             <h1 className="text-3xl font-bold text-slate-800 flex items-center gap-3">
               History Archive
               {user && user.isAdmin && (
@@ -952,24 +878,43 @@ export default function AdvancedHistoryArchive() {
                 <span className="text-xs bg-green-600 text-white px-2 py-1 rounded-md uppercase tracking-wider font-bold">Viewer Mode</span>
               )}
             </h1>
-            <p className="text-slate-500 mt-1">
-              {user && user.isAuthorized 
-                ? `Found ${filteredResults.length} sub-questions`
-                : 'Secure Database Access'
-              }
-            </p>
+            <div className="flex items-center gap-4 mt-1">
+              <p className="text-slate-500">
+                {user && user.isAuthorized 
+                  ? `Found ${filteredResults.length} sub-questions`
+                  : 'Secure Database Access'
+                }
+              </p>
+              
+              {/* Auth Status / Logout */}
+              {user && (
+                <div className="flex items-center gap-2 text-xs text-slate-400 border-l border-slate-300 pl-4">
+                  <User size={12} />
+                  <span className="truncate max-w-[150px]">{user.email}</span>
+                  <button onClick={handleLogout} className="text-red-500 hover:text-red-700 hover:underline ml-1">
+                    Sign Out
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
-          <div className="flex gap-2 w-full md:w-auto">
-            <button onClick={() => setShowFilters(true)} className="md:hidden btn-secondary flex-1">
-              <Filter size={18} /> Filter
-            </button>
-            
-            {user && user.isAdmin && (
-              <button onClick={() => setIsUploadModalOpen(true)} className="btn-primary flex-1 md:flex-none">
-                <Upload size={18} /> Upload
+
+          {user && user.isAuthorized && (
+            <div className="flex gap-2 w-full md:w-auto">
+              <button 
+                onClick={() => setShowFilters(!showFilters)} 
+                className={`flex-1 md:flex-none btn-secondary ${showFilters ? 'bg-blue-50 border-blue-200 text-blue-700' : ''}`}
+              >
+                <Filter size={18} /> {showFilters ? 'Hide Filters' : 'Filters'}
               </button>
-            )}
-          </div>
+              
+              {user.isAdmin && (
+                <button onClick={() => setIsUploadModalOpen(true)} className="btn-primary flex-1 md:flex-none">
+                  <Upload size={18} /> Upload
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {/* --- CONDITIONAL RENDERING FOR SECURITY --- */}
@@ -1000,6 +945,164 @@ export default function AdvancedHistoryArchive() {
 
         {user && user.isAuthorized && (
           <>
+            {/* --- TOP FILTER PANEL --- */}
+            <AnimatePresence>
+              {showFilters && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  className="overflow-hidden mb-6"
+                >
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 shadow-inner">
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                        <Filter size={14} /> Active Filters
+                      </h3>
+                      <div className="flex gap-2">
+                        {user.isAdmin && (
+                          <button 
+                            onClick={() => setIsManageFiltersOpen(true)}
+                            className="text-xs flex items-center gap-1 text-slate-500 hover:text-slate-800 px-2 py-1 rounded hover:bg-slate-200 transition-colors"
+                          >
+                            <Settings size={12} /> Manage Tags
+                          </button>
+                        )}
+                        <button 
+                          onClick={() => setFilters({ origin: [], year: [], paperType: [], questionType: [], sourceType: [], marks: [], topic: [] })}
+                          className="text-xs text-red-500 hover:text-red-700 font-medium px-2 py-1 rounded hover:bg-red-50 transition-colors"
+                        >
+                          Reset All
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* VERTICAL STACK OF ACCORDIONS */}
+                    <div className="flex flex-col gap-2">
+                      {/* Origin */}
+                      <FilterAccordion 
+                        title="Origin" 
+                        isOpen={expandedSections['origin']} 
+                        onToggle={() => toggleAccordion('origin')}
+                        count={filters.origin.length}
+                      >
+                        <CheckboxGroup 
+                          options={ORIGINS}
+                          selectedValues={filters.origin}
+                          onChange={(vals) => setFilters({...filters, origin: vals})}
+                        />
+                      </FilterAccordion>
+
+                      {/* Year */}
+                      <FilterAccordion 
+                        title="Year" 
+                        isOpen={expandedSections['year']} 
+                        onToggle={() => toggleAccordion('year')}
+                        count={filters.year.length}
+                      >
+                        <CheckboxGroup 
+                          options={availableYears}
+                          selectedValues={filters.year}
+                          onChange={(vals) => setFilters({...filters, year: vals})}
+                        />
+                      </FilterAccordion>
+
+                      {/* Paper Type */}
+                      <FilterAccordion 
+                        title="Paper Type" 
+                        isOpen={expandedSections['paperType']} 
+                        onToggle={() => toggleAccordion('paperType')}
+                        count={filters.paperType.length}
+                      >
+                        <CheckboxGroup 
+                          options={PAPER_TYPES}
+                          selectedValues={filters.paperType}
+                          onChange={(vals) => setFilters({...filters, paperType: vals})}
+                        />
+                      </FilterAccordion>
+
+                      {/* Question Type (Conditional) */}
+                      <FilterAccordion 
+                        title="Question Type" 
+                        isOpen={expandedSections['questionType']} 
+                        onToggle={() => toggleAccordion('questionType')}
+                        count={filters.questionType.length}
+                        disabled={filters.paperType.length === 0}
+                        helperText={filters.paperType.length === 0 ? "Select Paper Type first" : null}
+                      >
+                        <div className="space-y-4">
+                          {filters.paperType.includes("Paper 1 (DBQ)") && (
+                             <div>
+                               <h4 className="text-xs font-bold text-slate-400 mb-2 uppercase">Paper 1 (DBQ)</h4>
+                               <CheckboxGroup 
+                                  options={availableQuestionTypes["Paper 1 (DBQ)"]}
+                                  selectedValues={filters.questionType}
+                                  onChange={(vals) => setFilters({...filters, questionType: vals})}
+                                />
+                             </div>
+                          )}
+                          {filters.paperType.includes("Paper 2 (Essay)") && (
+                             <div>
+                               <h4 className="text-xs font-bold text-slate-400 mb-2 uppercase">Paper 2 (Essay)</h4>
+                               <CheckboxGroup 
+                                  options={availableQuestionTypes["Paper 2 (Essay)"]}
+                                  selectedValues={filters.questionType}
+                                  onChange={(vals) => setFilters({...filters, questionType: vals})}
+                                />
+                             </div>
+                          )}
+                        </div>
+                      </FilterAccordion>
+
+                      {/* Source Type (Conditional - DBQ Only) */}
+                      <FilterAccordion 
+                        title="Source Type" 
+                        isOpen={expandedSections['sourceType']} 
+                        onToggle={() => toggleAccordion('sourceType')}
+                        count={filters.sourceType.length}
+                        disabled={!filters.paperType.includes("Paper 1 (DBQ)")}
+                        helperText={!filters.paperType.includes("Paper 1 (DBQ)") ? "Only available for Paper 1" : null}
+                      >
+                        <CheckboxGroup 
+                          options={availableSourceTypes}
+                          selectedValues={filters.sourceType}
+                          onChange={(vals) => setFilters({...filters, sourceType: vals})}
+                        />
+                      </FilterAccordion>
+
+                      {/* Topics */}
+                      <FilterAccordion 
+                        title="Topics" 
+                        isOpen={expandedSections['topic']} 
+                        onToggle={() => toggleAccordion('topic')}
+                        count={filters.topic.length}
+                      >
+                        <CheckboxGroup 
+                          options={availableTopics}
+                          selectedValues={filters.topic}
+                          onChange={(vals) => setFilters({...filters, topic: vals})}
+                        />
+                      </FilterAccordion>
+
+                      {/* Marks */}
+                      <FilterAccordion 
+                        title="Marks" 
+                        isOpen={expandedSections['marks']} 
+                        onToggle={() => toggleAccordion('marks')}
+                        count={filters.marks.length}
+                      >
+                        <CheckboxGroup 
+                          options={MARK_OPTIONS}
+                          selectedValues={filters.marks}
+                          onChange={(vals) => setFilters({...filters, marks: vals})}
+                        />
+                      </FilterAccordion>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
             {/* Search Bar & Sort */}
             <div className="flex flex-col md:flex-row gap-4 mb-6">
               <div className="relative flex-1">
@@ -1042,7 +1145,7 @@ export default function AdvancedHistoryArchive() {
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.95 }}
-                    onClick={() => setPreviewItem({ parent, child })} // CLICK TO OPEN PREVIEW
+                    onClick={() => setPreviewItem({ parent, child })} 
                     className="bg-white rounded-xl border border-slate-200 p-0 shadow-sm hover:shadow-lg hover:border-blue-300 cursor-pointer transition-all overflow-hidden group"
                   >
                     <div className="flex flex-col md:flex-row relative">
@@ -1093,7 +1196,7 @@ export default function AdvancedHistoryArchive() {
                               {qt}
                             </div>
                           ))}
-                          {/* NEW: Source Types */}
+                          {/* Source Types */}
                           {ensureArray(child.sourceType).map((st, i) => (
                             <div key={`st-${i}`} className="badge bg-slate-100 text-slate-600 border-slate-200 flex items-center gap-1">
                               <FileDigit size={12} /> {st}
@@ -1108,7 +1211,6 @@ export default function AdvancedHistoryArchive() {
                           ID: {parent.id}
                         </div>
 
-                        {/* View Details Button (Visual Cue) */}
                         <div className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-md opacity-0 group-hover:opacity-100 transition-all transform translate-y-2 group-hover:translate-y-0">
                           <Eye size={16} /> View Details
                         </div>
@@ -1154,6 +1256,104 @@ export default function AdvancedHistoryArchive() {
         )}
       </main>
 
+      {/* --- MANAGE FILTERS MODAL (ADMIN ONLY) --- */}
+      <AnimatePresence>
+        {isManageFiltersOpen && user?.isAdmin && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div 
+               initial={{ opacity: 0, scale: 0.95 }}
+               animate={{ opacity: 1, scale: 1 }}
+               exit={{ opacity: 0, scale: 0.95 }}
+               className="bg-white rounded-xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl"
+            >
+              <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-xl">
+                <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                  <Settings size={18} /> Manage Filter Tags
+                </h2>
+                <button onClick={() => setIsManageFiltersOpen(false)} className="text-slate-400 hover:text-slate-800">
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 space-y-8">
+                <div className="text-sm text-slate-500 bg-blue-50 p-3 rounded-lg border border-blue-100">
+                  <span className="font-bold">Note:</span> Deleting a tag here removes it from the filter list for this session. To permanently delete a tag, you must edit the questions that contain it.
+                </div>
+
+                {/* Topics */}
+                <div>
+                  <h3 className="text-sm font-bold text-slate-700 mb-2">Topics</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {availableTopics.map(t => (
+                      <div key={t} className="flex items-center gap-1 bg-slate-100 px-2 py-1 rounded text-sm text-slate-700 border border-slate-200">
+                        {t}
+                        <button onClick={() => handleDeleteFilterTag('topic', t)} className="text-slate-400 hover:text-red-500">
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Source Types */}
+                <div>
+                  <h3 className="text-sm font-bold text-slate-700 mb-2">Source Types</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {availableSourceTypes.map(t => (
+                      <div key={t} className="flex items-center gap-1 bg-slate-100 px-2 py-1 rounded text-sm text-slate-700 border border-slate-200">
+                        {t}
+                        <button onClick={() => handleDeleteFilterTag('sourceType', t)} className="text-slate-400 hover:text-red-500">
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Question Types (DBQ) */}
+                <div>
+                  <h3 className="text-sm font-bold text-slate-700 mb-2">Question Types (DBQ)</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {availableQuestionTypes["Paper 1 (DBQ)"].map(t => (
+                      <div key={t} className="flex items-center gap-1 bg-slate-100 px-2 py-1 rounded text-sm text-slate-700 border border-slate-200">
+                        {t}
+                        <button onClick={() => handleDeleteFilterTag('qTypeDBQ', t)} className="text-slate-400 hover:text-red-500">
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                 {/* Question Types (Essay) */}
+                 <div>
+                  <h3 className="text-sm font-bold text-slate-700 mb-2">Question Types (Essay)</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {availableQuestionTypes["Paper 2 (Essay)"].map(t => (
+                      <div key={t} className="flex items-center gap-1 bg-slate-100 px-2 py-1 rounded text-sm text-slate-700 border border-slate-200">
+                        {t}
+                        <button onClick={() => handleDeleteFilterTag('qTypeEssay', t)} className="text-slate-400 hover:text-red-500">
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-5 border-t border-slate-100 bg-slate-50 rounded-b-xl text-right">
+                <button 
+                  onClick={() => setIsManageFiltersOpen(false)}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
+                >
+                  Done
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* --- PREVIEW MODAL --- */}
       <AnimatePresence>
         {previewItem && (
@@ -1163,7 +1363,6 @@ export default function AdvancedHistoryArchive() {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
               onClick={(e) => e.stopPropagation()}
-              // MODIFIED: Maximize width and height for 2-page view
               className="bg-white rounded-xl w-full max-w-[98vw] h-[95vh] shadow-2xl flex flex-col overflow-hidden"
             >
               {/* Preview Header */}
@@ -1197,7 +1396,6 @@ export default function AdvancedHistoryArchive() {
                 </div>
 
                 <div className="flex items-center gap-3">
-                  {/* TOGGLE ANSWER BUTTON */}
                   {!viewingAnswer && previewItem.parent.hasAnswer && (
                     <button 
                       onClick={() => setViewingAnswer(true)}
@@ -1207,7 +1405,6 @@ export default function AdvancedHistoryArchive() {
                     </button>
                   )}
 
-                  {/* RETURN BUTTON */}
                   {viewingAnswer && (
                     <button 
                       onClick={() => setViewingAnswer(false)}
@@ -1217,7 +1414,6 @@ export default function AdvancedHistoryArchive() {
                     </button>
                   )}
 
-                  {/* DOWNLOAD BUTTON (Context Aware) */}
                   {((!viewingAnswer && previewItem.parent.hasFile) || (viewingAnswer && previewItem.parent.hasAnswer)) && (
                     <a 
                       href={viewingAnswer ? previewItem.parent.answerFileUrl : previewItem.parent.fileUrl}
@@ -1238,10 +1434,9 @@ export default function AdvancedHistoryArchive() {
                 </div>
               </div>
 
-              {/* Preview Body - MODIFIED LAYOUT */}
+              {/* Preview Body */}
               <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
                 
-                {/* Left: Text Content & Metadata (Sidebar style) - Only show in Question Mode */}
                 {!viewingAnswer && (
                   <div className={`${previewItem.parent.hasFile ? 'md:w-1/4 border-r border-slate-200' : 'w-full'} p-6 overflow-y-auto bg-white`}>
                     <div className="prose max-w-none">
@@ -1276,7 +1471,6 @@ export default function AdvancedHistoryArchive() {
                         </div>
                       </div>
 
-                      {/* NEW: Source Types in Preview */}
                       {ensureArray(previewItem.child.sourceType).length > 0 && (
                         <div>
                           <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Source Types</h4>
@@ -1293,10 +1487,8 @@ export default function AdvancedHistoryArchive() {
                   </div>
                 )}
 
-                {/* Right: PDF Preview - Takes up majority of space for 2-page view */}
                 <div className="flex-1 bg-slate-200 flex flex-col h-full relative">
                   {viewingAnswer ? (
-                    // ANSWER PDF VIEW
                     previewItem.parent.hasAnswer ? (
                       <iframe 
                         src={`${previewItem.parent.answerFileUrl}#view=Fit&pagemode=thumbs&page=1&zoom=page-fit`}
@@ -1307,7 +1499,6 @@ export default function AdvancedHistoryArchive() {
                       <div className="flex items-center justify-center h-full text-slate-500">No answer file available.</div>
                     )
                   ) : (
-                    // QUESTION PDF VIEW
                     previewItem.parent.hasFile ? (
                       <iframe 
                         src={`${previewItem.parent.fileUrl}#view=Fit&pagemode=thumbs&page=1&zoom=page-fit`}
@@ -1403,7 +1594,7 @@ export default function AdvancedHistoryArchive() {
                           placeholder={uploadForm.paperType === "Paper 2 (Essay)" ? "Not applicable" : "Select or type new topic..."}
                           disabled={uploadForm.paperType === "Paper 2 (Essay)"}
                           icon={Tag}
-                          isMulti={true} // ENABLE MULTI SELECT
+                          isMulti={true} 
                         />
                       </div>
 
@@ -1434,7 +1625,6 @@ export default function AdvancedHistoryArchive() {
                         </div>
                       </div>
 
-                      {/* NEW: ANSWER UPLOAD */}
                       <div>
                         <label className="label flex justify-between">
                           <span className="text-green-700">Answer Document (PDF)</span>
@@ -1494,11 +1684,10 @@ export default function AdvancedHistoryArchive() {
                                   onCreate={(val) => handleCreateQuestionType(val, uploadForm.paperType)}
                                   placeholder="Select or add type..."
                                   disabled={!uploadForm.paperType}
-                                  isMulti={true} // ENABLE MULTI SELECT
+                                  isMulti={true} 
                                 />
                               </div>
 
-                              {/* Marks Input - Only for Paper 1 (DBQ) */}
                               {uploadForm.paperType === "Paper 1 (DBQ)" && (
                                 <div>
                                   <label className="text-xs font-bold text-slate-500 mb-1 block flex items-center gap-1">
@@ -1514,7 +1703,6 @@ export default function AdvancedHistoryArchive() {
                                 </div>
                               )}
 
-                              {/* NEW: Source Type Input - Only for Paper 1 (DBQ) */}
                               {uploadForm.paperType === "Paper 1 (DBQ)" && (
                                 <div>
                                   <label className="text-xs font-bold text-slate-500 mb-1 block flex items-center gap-1">
@@ -1532,7 +1720,6 @@ export default function AdvancedHistoryArchive() {
                                 </div>
                               )}
 
-                              {/* Sub-Question Topic - Only for Paper 2 */}
                               {uploadForm.paperType === "Paper 2 (Essay)" && (
                                 <div>
                                   <label className="text-xs font-bold text-blue-600 mb-1 block flex items-center gap-1">
@@ -1545,7 +1732,7 @@ export default function AdvancedHistoryArchive() {
                                     onCreate={handleCreateTopic}
                                     placeholder="Select or type topic..."
                                     icon={Tag}
-                                    isMulti={true} // ENABLE MULTI SELECT
+                                    isMulti={true} 
                                   />
                                 </div>
                               )}
@@ -1639,6 +1826,19 @@ export default function AdvancedHistoryArchive() {
       </AnimatePresence>
 
       <style>{`
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: #f1f5f9;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: #cbd5e1;
+          border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: #94a3b8;
+        }
         .filter-label {
           display: block;
           font-size: 0.75rem;
@@ -1647,19 +1847,6 @@ export default function AdvancedHistoryArchive() {
           text-transform: uppercase;
           letter-spacing: 0.05em;
           margin-bottom: 0.5rem;
-        }
-        .filter-select {
-          width: 100%;
-          padding: 0.5rem;
-          background-color: #f8fafc;
-          border: 1px solid #e2e8f0;
-          border-radius: 0.5rem;
-          font-size: 0.875rem;
-          outline: none;
-        }
-        .filter-select:focus {
-          border-color: #3b82f6;
-          box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
         }
         .label {
           display: block;

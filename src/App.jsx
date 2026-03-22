@@ -1,29 +1,17 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, Tag, Edit, ChevronDown, Check, LogIn, LogOut, User, Lock, ShieldAlert, Loader2, Sparkles, ArrowUpDown, Eye, ExternalLink, Maximize2, Hash, BookOpen, ArrowLeft, FileDigit, Settings, CheckSquare, Square } from 'lucide-react';
+import { 
+  Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, 
+  Tag, Edit, ChevronDown, Check, LogIn, User, Lock, ShieldAlert, Loader2, 
+  Sparkles, ArrowUpDown, Eye, BookOpen, ArrowLeft, 
+  FileDigit, Settings, Hash
+} from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-// --- FIREBASE IMPORTS ---
-import { initializeApp } from "firebase/app";
-import { getAuth, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from "firebase/auth";
-import { getFirestore, collection, getDocs, addDoc, updateDoc, deleteDoc, doc, getDoc } from "firebase/firestore";
-import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject, updateMetadata } from "firebase/storage";
-
-// --- YOUR CONFIGURATION ---
-const firebaseConfig = {
-  apiKey: "AIzaSyD2ZnF0VioN7pDYS6q25whLzc-BQi8EyQo",
-  authDomain: "nclhist.firebaseapp.com",
-  projectId: "nclhist",
-  storageBucket: "nclhist.firebasestorage.app",
-  messagingSenderId: "513745613340",
-  appId: "1:513745613340:web:159ab2c6f583a1160225d9",
-  measurementId: "G-0SMPXMH9Y1"
-};
-
-// --- INITIALIZE FIREBASE ---
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const storage = getStorage(app);
+// --- IMPORT SHARED FIREBASE & AUTH ---
+import { db, storage } from './firebase.js';
+import { useAuth } from './main.jsx';
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc } from "firebase/firestore";
+import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 // --- APP CONSTANTS ---
 const ORIGINS = ["DSE Pastpaper", "Internal School Exam", "Mock Examination", "Quiz", "Exercise"];
@@ -47,12 +35,9 @@ const MARK_OPTIONS = [
   { label: "6 Marks", value: "6" },
   { label: "7 Marks", value: "7" },
   { label: "8 Marks", value: "8" },
-  { label: "7/8 Marks", value: "7/8" }, // Special combined filter
+  { label: "7/8 Marks", value: "7/8" }, 
   { label: "9+ Marks", value: "9+" },
 ];
-
-// --- FALLBACK SUPER ADMIN ---
-const SUPER_ADMIN = "ethanng.520021231@gmail.com";
 
 // --- EMPTIED LISTS (Will be populated dynamically) ---
 const INITIAL_TOPICS = [];
@@ -299,15 +284,16 @@ const CreatableSelect = ({
 };
 
 export default function AdvancedHistoryArchive() {
+  // --- GRAB GLOBAL AUTH STATE ---
+  const { user, authLoading, loginWithGoogle, logout } = useAuth();
+  
   // --- STATE ---
-  const [user, setUser] = useState(null); 
-  const [authLoading, setAuthLoading] = useState(true); 
   const [archives, setArchives] = useState([]); 
   
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isManageFiltersOpen, setIsManageFiltersOpen] = useState(false); 
-  const [showFilters, setShowFilters] = useState(false); // Controls the top filter panel visibility
-  const [expandedSections, setExpandedSections] = useState({}); // Controls individual accordions
+  const [showFilters, setShowFilters] = useState(false); 
+  const [expandedSections, setExpandedSections] = useState({}); 
   const [isLoading, setIsLoading] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   
@@ -347,50 +333,6 @@ export default function AdvancedHistoryArchive() {
   });
   const [selectedFile, setSelectedFile] = useState(null);
   const [selectedAnswerFile, setSelectedAnswerFile] = useState(null); 
-
-  // --- FIREBASE LOGIC ---
-  
-  useEffect(() => {
-    setAuthLoading(true);
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      if (currentUser) {
-        const email = currentUser.email;
-        let isAdmin = false;
-        let isViewer = false;
-
-        if (email === SUPER_ADMIN) {
-          isAdmin = true;
-        }
-
-        try {
-          const userRoleRef = doc(db, "user_roles", email);
-          const userRoleSnap = await getDoc(userRoleRef);
-          
-          if (userRoleSnap.exists()) {
-            const roleData = userRoleSnap.data();
-            if (roleData.role === 'admin') isAdmin = true;
-            if (roleData.role === 'viewer') isViewer = true;
-          }
-        } catch (error) {
-          console.error("Error fetching user role:", error);
-        }
-
-        setUser({
-          uid: currentUser.uid,
-          email: email,
-          displayName: currentUser.displayName,
-          isAdmin: isAdmin,
-          isViewer: isViewer,
-          isAuthorized: isAdmin || isViewer 
-        });
-      } else {
-        setUser(null);
-        setArchives([]); 
-      }
-      setAuthLoading(false);
-    });
-    return () => unsubscribe();
-  }, []);
 
   // --- FETCH & EXTRACT TAGS ---
   useEffect(() => {
@@ -454,22 +396,10 @@ export default function AdvancedHistoryArchive() {
 
     if (user && !authLoading) {
         fetchArchives();
+    } else if (!user) {
+        setArchives([]); // Clear archives on logout
     }
   }, [user, authLoading]);
-
-  const handleLogin = async () => {
-    try {
-        const provider = new GoogleAuthProvider();
-        await signInWithPopup(auth, provider);
-    } catch (error) {
-        console.error("Login failed", error);
-        alert("Login failed: " + error.message);
-    }
-  };
-
-  const handleLogout = async () => {
-    await signOut(auth);
-  };
 
   // --- HELPER: Auto Labelling ---
   const getNextLabel = (index, type) => {
@@ -878,8 +808,9 @@ export default function AdvancedHistoryArchive() {
                 <span className="text-xs bg-green-600 text-white px-2 py-1 rounded-md uppercase tracking-wider font-bold">Viewer Mode</span>
               )}
             </h1>
-            <div className="flex items-center gap-4 mt-1">
-              <p className="text-slate-500">
+
+            <div className="flex items-center gap-4 mt-3">
+              <p className="text-slate-500 text-sm">
                 {user && user.isAuthorized 
                   ? `Found ${filteredResults.length} sub-questions`
                   : 'Secure Database Access'
@@ -891,7 +822,7 @@ export default function AdvancedHistoryArchive() {
                 <div className="flex items-center gap-2 text-xs text-slate-400 border-l border-slate-300 pl-4">
                   <User size={12} />
                   <span className="truncate max-w-[150px]">{user.email}</span>
-                  <button onClick={handleLogout} className="text-red-500 hover:text-red-700 hover:underline ml-1">
+                  <button onClick={logout} className="text-red-500 hover:text-red-700 hover:underline ml-1">
                     Sign Out
                   </button>
                 </div>
@@ -900,7 +831,7 @@ export default function AdvancedHistoryArchive() {
           </div>
 
           {user && user.isAuthorized && (
-            <div className="flex gap-2 w-full md:w-auto">
+            <div className="flex gap-2 w-full md:w-auto mt-4 md:mt-0">
               <button 
                 onClick={() => setShowFilters(!showFilters)} 
                 className={`flex-1 md:flex-none btn-secondary ${showFilters ? 'bg-blue-50 border-blue-200 text-blue-700' : ''}`}
@@ -926,7 +857,7 @@ export default function AdvancedHistoryArchive() {
             <p className="text-sm max-w-xs text-center mt-2 mb-6">
               You must be logged in to view the archive contents.
             </p>
-            <button onClick={handleLogin} className="btn-primary">
+            <button onClick={loginWithGoogle} className="btn-primary">
               <LogIn size={16} /> Login with Google
             </button>
           </div>
@@ -943,8 +874,9 @@ export default function AdvancedHistoryArchive() {
           </div>
         )}
 
+        {/* --- ARCHIVE CONTENT RENDERER --- */}
         {user && user.isAuthorized && (
-          <>
+          <div className="animate-in fade-in duration-300">
             {/* --- TOP FILTER PANEL --- */}
             <AnimatePresence>
               {showFilters && (
@@ -1032,24 +964,24 @@ export default function AdvancedHistoryArchive() {
                       >
                         <div className="space-y-4">
                           {filters.paperType.includes("Paper 1 (DBQ)") && (
-                             <div>
-                               <h4 className="text-xs font-bold text-slate-400 mb-2 uppercase">Paper 1 (DBQ)</h4>
-                               <CheckboxGroup 
+                            <div>
+                              <h4 className="text-xs font-bold text-slate-400 mb-2 uppercase">Paper 1 (DBQ)</h4>
+                              <CheckboxGroup 
                                   options={availableQuestionTypes["Paper 1 (DBQ)"]}
                                   selectedValues={filters.questionType}
                                   onChange={(vals) => setFilters({...filters, questionType: vals})}
                                 />
-                             </div>
+                            </div>
                           )}
                           {filters.paperType.includes("Paper 2 (Essay)") && (
-                             <div>
-                               <h4 className="text-xs font-bold text-slate-400 mb-2 uppercase">Paper 2 (Essay)</h4>
-                               <CheckboxGroup 
+                            <div>
+                              <h4 className="text-xs font-bold text-slate-400 mb-2 uppercase">Paper 2 (Essay)</h4>
+                              <CheckboxGroup 
                                   options={availableQuestionTypes["Paper 2 (Essay)"]}
                                   selectedValues={filters.questionType}
                                   onChange={(vals) => setFilters({...filters, questionType: vals})}
                                 />
-                             </div>
+                            </div>
                           )}
                         </div>
                       </FilterAccordion>
@@ -1252,7 +1184,7 @@ export default function AdvancedHistoryArchive() {
                 </div>
               )}
             </div>
-          </>
+          </div>
         )}
       </main>
 

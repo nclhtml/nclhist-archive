@@ -3,14 +3,15 @@ import {
   Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, 
   Tag, Edit, ChevronDown, Check, LogIn, User, Lock, ShieldAlert, Loader2, 
   Sparkles, ArrowUpDown, Eye, BookOpen, ArrowLeft, 
-  FileDigit, Settings, Hash
+  FileDigit, Settings, Hash, ChevronLeft, ChevronRight,
+  Users, Shield, Layers, Save, Calendar, Clock, LayoutList, FileStack
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-// --- IMPORT SHARED FIREBASE & AUTH ---
+// --- ACTUAL FIREBASE & AUTH IMPORTS ---
 import { db, storage } from './firebase.js';
 import { useAuth } from './main.jsx';
-import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc } from "firebase/firestore";
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, setDoc, getDoc } from "firebase/firestore"; 
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 // --- APP CONSTANTS ---
@@ -283,6 +284,80 @@ const CreatableSelect = ({
   );
 };
 
+// --- REUSABLE COMPONENT: PAGINATION CONTROLS ---
+const PaginationControls = ({ currentPage, totalPages, onPageChange, itemsPerPage, setItemsPerPage, className = "" }) => {
+  const getPageNumbers = () => {
+    const pages = [];
+    if (totalPages <= 7) {
+      for (let i = 1; i <= totalPages; i++) pages.push(i);
+    } else {
+      if (currentPage <= 4) {
+        pages.push(1, 2, 3, 4, 5, '...', totalPages);
+      } else if (currentPage >= totalPages - 3) {
+        pages.push(1, '...', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages);
+      } else {
+        pages.push(1, '...', currentPage - 1, currentPage, currentPage + 1, '...', totalPages);
+      }
+    }
+    return pages;
+  };
+
+  return (
+    <div className={`flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-3 rounded-xl border border-slate-200 shadow-sm ${className}`}>
+      <div className="flex items-center gap-2 text-sm text-slate-600">
+        <span>Show</span>
+        <select
+          value={itemsPerPage}
+          onChange={(e) => setItemsPerPage(Number(e.target.value))}
+          className="border border-slate-200 rounded p-1 outline-none focus:border-blue-500 bg-white"
+        >
+          <option value={10}>10</option>
+          <option value={20}>20</option>
+          <option value={50}>50</option>
+        </select>
+        <span>results per page</span>
+      </div>
+
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => onPageChange(currentPage - 1)}
+          disabled={currentPage === 1}
+          className="p-1.5 rounded-lg border border-slate-200 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50 text-slate-600 transition-colors"
+        >
+          <ChevronLeft size={16} />
+        </button>
+
+        {getPageNumbers().map((page, idx) => (
+          <React.Fragment key={idx}>
+            {page === '...' ? (
+              <span className="px-1 text-slate-400">...</span>
+            ) : (
+              <button
+                onClick={() => onPageChange(page)}
+                className={`w-8 h-8 flex items-center justify-center rounded-lg text-sm font-medium transition-colors ${
+                  currentPage === page
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-200'
+                    : 'text-slate-600 hover:bg-slate-100 border border-transparent hover:border-slate-200'
+                }`}
+              >
+                {page}
+              </button>
+            )}
+          </React.Fragment>
+        ))}
+
+        <button
+          onClick={() => onPageChange(currentPage + 1)}
+          disabled={currentPage === totalPages || totalPages === 0}
+          className="p-1.5 rounded-lg border border-slate-200 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50 text-slate-600 transition-colors"
+        >
+          <ChevronRight size={16} />
+        </button>
+      </div>
+    </div>
+  );
+};
+
 export default function AdvancedHistoryArchive() {
   // --- GRAB GLOBAL AUTH STATE ---
   const { user, authLoading, loginWithGoogle, logout } = useAuth();
@@ -292,6 +367,8 @@ export default function AdvancedHistoryArchive() {
   
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isManageFiltersOpen, setIsManageFiltersOpen] = useState(false); 
+  const [isUserManagementOpen, setIsUserManagementOpen] = useState(false); 
+  const [manageTab, setManageTab] = useState('users'); // 'users' | 'tiers'
   const [showFilters, setShowFilters] = useState(false); 
   const [expandedSections, setExpandedSections] = useState({}); 
   const [isLoading, setIsLoading] = useState(false);
@@ -307,9 +384,14 @@ export default function AdvancedHistoryArchive() {
   const [availableQuestionTypes, setAvailableQuestionTypes] = useState(INITIAL_QUESTION_TYPES);
   const [availableYears, setAvailableYears] = useState([]); 
 
-  // Search & Sort State
+  // Search & Sort & Display State
   const [searchTerm, setSearchTerm] = useState('');
   const [sortOption, setSortOption] = useState('year_desc');
+  const [displayMode, setDisplayMode] = useState('subquestion'); // 'subquestion' | 'fullpaper'
+  
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
   
   const [filters, setFilters] = useState({
     origin: [], 
@@ -318,7 +400,8 @@ export default function AdvancedHistoryArchive() {
     questionType: [], 
     sourceType: [], 
     marks: [],
-    topic: [] 
+    topic: [],
+    tier: []
   });
 
   // Upload/Edit Form State
@@ -329,10 +412,110 @@ export default function AdvancedHistoryArchive() {
     year: new Date().getFullYear().toString(), 
     paperType: '',
     topic: [], 
+    tier: '10', 
     subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' }]
   });
   const [selectedFile, setSelectedFile] = useState(null);
   const [selectedAnswerFile, setSelectedAnswerFile] = useState(null); 
+
+  // --- USER MANAGEMENT STATE ---
+  const [managedUsers, setManagedUsers] = useState([]);
+  const [newUserEmail, setNewUserEmail] = useState('');
+  const [newUserRole, setNewUserRole] = useState('viewer');
+  const [isManagingUsers, setIsManagingUsers] = useState(false);
+  const [currentUserRole, setCurrentUserRole] = useState(null);
+
+  // --- DYNAMIC ROLES & TIERS STATE ---
+  const [systemRoles, setSystemRoles] = useState(['viewer', 'admin']);
+  const [systemTiers, setSystemTiers] = useState(
+    Array.from({ length: 10 }, (_, i) => ({ id: String(10 - i), name: `Tier ${10 - i}` }))
+  );
+  const [tierAccessConfig, setTierAccessConfig] = useState({}); // { role: { tierId: { date: "YYYY-MM-DD", immediate: boolean } } }
+  const [selectedRoleForAccess, setSelectedRoleForAccess] = useState('viewer');
+  const [newRoleInput, setNewRoleInput] = useState('');
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+
+  // --- FETCH SYSTEM SETTINGS (ROLES, TIERS, ACCESS) ---
+  useEffect(() => {
+    const fetchSystemSettings = async () => {
+      if (!user || !user.isAuthorized) return;
+      try {
+        const docRef = doc(db, "system_settings", "config");
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data.roles && Array.isArray(data.roles)) setSystemRoles(data.roles);
+          if (data.tiers && Array.isArray(data.tiers)) setSystemTiers(data.tiers);
+          
+          if (data.tierAccess) {
+            // Migrate old string format to object format if necessary
+            const formattedAccess = {};
+            for (const r in data.tierAccess) {
+              formattedAccess[r] = {};
+              for (const t in data.tierAccess[r]) {
+                const val = data.tierAccess[r][t];
+                if (typeof val === 'string') {
+                  formattedAccess[r][t] = { date: val, immediate: false };
+                } else {
+                  formattedAccess[r][t] = val;
+                }
+              }
+            }
+            setTierAccessConfig(formattedAccess);
+          }
+        }
+
+        // Fetch current user's specific role if not admin
+        if (!user.isAdmin) {
+          const userDocRef = doc(db, "user_roles", user.email);
+          const userDocSnap = await getDoc(userDocRef);
+          if (userDocSnap.exists()) {
+            setCurrentUserRole(userDocSnap.data().role);
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching system settings:", error);
+      }
+    };
+    fetchSystemSettings();
+  }, [user, authLoading]);
+
+  // --- SAVE SYSTEM SETTINGS (ROLES, TIERS, ACCESS) ---
+  const handleSaveSystemSettings = async () => {
+    if (!user?.isAdmin) return;
+    setIsSavingSettings(true);
+    try {
+      await setDoc(doc(db, "system_settings", "config"), {
+        roles: systemRoles,
+        tiers: systemTiers,
+        tierAccess: tierAccessConfig
+      });
+      alert("System Settings (Roles, Tiers, Access) saved successfully!");
+    } catch (error) {
+      console.error("Error saving system settings:", error);
+      alert("Failed to save settings.");
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
+  // --- UPDATE TIER ACCESS CONFIG ---
+  const handleTierAccessChange = (role, tierId, field, value) => {
+    setTierAccessConfig(prev => {
+      const roleConfig = prev[role] || {};
+      const tierConfig = roleConfig[tierId] || { date: '', immediate: false };
+      return {
+        ...prev,
+        [role]: {
+          ...roleConfig,
+          [tierId]: {
+            ...tierConfig,
+            [field]: value
+          }
+        }
+      };
+    });
+  };
 
   // --- FETCH & EXTRACT TAGS ---
   useEffect(() => {
@@ -341,7 +524,11 @@ export default function AdvancedHistoryArchive() {
 
       try {
         const querySnapshot = await getDocs(collection(db, "archives"));
-        const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const data = querySnapshot.docs.map(doc => ({ 
+          id: doc.id, 
+          tier: doc.data().tier || '10', 
+          ...doc.data() 
+        }));
         
         if (data.length > 0) {
             setArchives(data);
@@ -401,6 +588,69 @@ export default function AdvancedHistoryArchive() {
     }
   }, [user, authLoading]);
 
+  // --- FETCH USERS (ADMIN ONLY) ---
+  const fetchManagedUsers = async () => {
+    if (!user?.isAdmin) return;
+    setIsManagingUsers(true);
+    try {
+      const querySnapshot = await getDocs(collection(db, "user_roles"));
+      const usersData = querySnapshot.docs.map(doc => ({ 
+        id: doc.id, 
+        email: doc.id, 
+        ...doc.data() 
+      }));
+      setManagedUsers(usersData);
+    } catch (error) {
+      console.error("Error fetching users:", error);
+      alert("Failed to load users. Ensure your Firestore rules allow reading 'user_roles'.");
+    } finally {
+      setIsManagingUsers(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isUserManagementOpen) fetchManagedUsers();
+  }, [isUserManagementOpen]);
+
+  // --- ADD/UPDATE USER ---
+  const handleAddUser = async (e) => {
+    e.preventDefault();
+    if (!newUserEmail || !newUserEmail.includes('@')) return alert("Please enter a valid email.");
+    setIsManagingUsers(true);
+    try {
+      const emailId = newUserEmail.toLowerCase().trim();
+      await setDoc(doc(db, "user_roles", emailId), {
+        email: emailId,
+        role: newUserRole,
+        addedAt: new Date().toISOString(),
+        addedBy: user.email
+      });
+      setNewUserEmail('');
+      fetchManagedUsers(); // Refresh list
+    } catch (error) {
+      console.error("Error adding user:", error);
+      alert("Failed to add user.");
+    } finally {
+      setIsManagingUsers(false);
+    }
+  };
+
+  // --- REMOVE USER ---
+  const handleRemoveUser = async (emailId) => {
+    if (emailId === user.email) return alert("You cannot remove yourself.");
+    if (!window.confirm(`Are you sure you want to revoke access for ${emailId}?`)) return;
+    setIsManagingUsers(true);
+    try {
+      await deleteDoc(doc(db, "user_roles", emailId));
+      fetchManagedUsers(); // Refresh list
+    } catch (error) {
+      console.error("Error removing user:", error);
+      alert("Failed to remove user.");
+    } finally {
+      setIsManagingUsers(false);
+    }
+  };
+
   // --- HELPER: Auto Labelling ---
   const getNextLabel = (index, type) => {
     if (type === "Paper 1 (DBQ)") return String.fromCharCode(97 + index); 
@@ -408,18 +658,52 @@ export default function AdvancedHistoryArchive() {
     return '';
   };
 
+  // --- RESET PAGINATION ON FILTER/MODE CHANGE ---
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filters, sortOption, itemsPerPage, displayMode]);
+
   // --- FILTERING LOGIC ---
   const filteredResults = useMemo(() => {
     if (!user || !user.isAuthorized) return [];
 
+    const today = new Date().toISOString().split('T')[0];
+
+    // --- CUMULATIVE TIER LOGIC ---
+    let maxUnlockedTier = 0;
+    if (!user.isAdmin) {
+      const roleAccess = tierAccessConfig[currentUserRole] || {};
+      // Find the highest tier (numerically) that this user has unlocked
+      for (let i = 1; i <= 10; i++) {
+        const tierRule = roleAccess[String(i)];
+        if (tierRule) {
+          const isImmediate = tierRule.immediate;
+          const unlockDate = tierRule.date;
+          if (isImmediate || (unlockDate && unlockDate <= today)) {
+            maxUnlockedTier = Math.max(maxUnlockedTier, i);
+          }
+        }
+      }
+    }
+
     let results = [];
     archives.forEach(parent => {
+      const parentTierStr = parent.tier || '10';
+      const parentTierNum = parseInt(parentTierStr, 10) || 10;
+
+      // --- TIER ACCESS CHECK (Cumulative) ---
+      // If not admin, they can only see documents where the tier number is <= their maxUnlockedTier
+      if (!user.isAdmin && parentTierNum > maxUnlockedTier) {
+        return; 
+      }
+
       // 1. Parent Level Filters (OR Logic within category)
       const matchOrigin = filters.origin.length === 0 || filters.origin.includes(parent.origin);
       const matchYear = filters.year.length === 0 || filters.year.includes(String(parent.year));
       const matchPaper = filters.paperType.length === 0 || filters.paperType.includes(parent.paperType);
+      const matchTier = filters.tier.length === 0 || filters.tier.includes(parentTierStr);
 
-      if (!matchOrigin || !matchYear || !matchPaper) return;
+      if (!matchOrigin || !matchYear || !matchPaper || !matchTier) return;
 
       parent.subQuestions.forEach(child => {
         // 2. Child Level Filters (OR Logic within category)
@@ -460,6 +744,23 @@ export default function AdvancedHistoryArchive() {
       });
     });
 
+    // --- DISPLAY MODE GROUPING ---
+    if (displayMode === 'fullpaper') {
+      const groupedMap = new Map();
+      results.forEach(item => {
+        if (!groupedMap.has(item.parent.id)) {
+          groupedMap.set(item.parent.id, {
+            uniqueId: item.parent.id,
+            parent: item.parent,
+            isFullPaper: true,
+            matchedChildrenCount: 0
+          });
+        }
+        groupedMap.get(item.parent.id).matchedChildrenCount += 1;
+      });
+      results = Array.from(groupedMap.values());
+    }
+
     // --- SORTING LOGIC ---
     results.sort((a, b) => {
       switch (sortOption) {
@@ -474,12 +775,12 @@ export default function AdvancedHistoryArchive() {
           const dateB = b.parent.updatedAt ? new Date(b.parent.updatedAt).getTime() : 0;
           return dateB - dateA;
         case 'topic_asc':
-          const topicA = ensureArray(a.parent.topic)[0] || ensureArray(a.child.topic)[0] || '';
-          const topicB = ensureArray(b.parent.topic)[0] || ensureArray(b.child.topic)[0] || '';
+          const topicA = ensureArray(a.parent.topic)[0] || (a.child ? ensureArray(a.child.topic)[0] : '');
+          const topicB = ensureArray(b.parent.topic)[0] || (b.child ? ensureArray(b.child.topic)[0] : '');
           return topicA.localeCompare(topicB);
         case 'qtype_asc':
-          const typeA = ensureArray(a.child.questionType)[0] || '';
-          const typeB = ensureArray(b.child.questionType)[0] || '';
+          const typeA = a.child ? (ensureArray(a.child.questionType)[0] || '') : '';
+          const typeB = b.child ? (ensureArray(b.child.questionType)[0] || '') : '';
           return typeA.localeCompare(typeB);
         default:
           return 0;
@@ -487,7 +788,21 @@ export default function AdvancedHistoryArchive() {
     });
 
     return results;
-  }, [archives, searchTerm, filters, user, sortOption]);
+  }, [archives, searchTerm, filters, user, sortOption, tierAccessConfig, currentUserRole, displayMode]);
+
+  // --- PAGINATION LOGIC ---
+  const totalPages = Math.ceil(filteredResults.length / itemsPerPage);
+  const paginatedResults = filteredResults.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
+
+  const handlePageChange = (newPage) => {
+    if (newPage >= 1 && newPage <= totalPages) {
+      setCurrentPage(newPage);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
 
   // --- HANDLERS ---
   
@@ -639,6 +954,7 @@ export default function AdvancedHistoryArchive() {
     
     const itemData = JSON.parse(JSON.stringify(parentItem));
     itemData.topic = ensureArray(itemData.topic);
+    itemData.tier = itemData.tier || '10'; // <-- Ensure tier exists when editing
     itemData.subQuestions = itemData.subQuestions.map(sq => ({
       ...sq,
       questionType: ensureArray(sq.questionType),
@@ -721,7 +1037,8 @@ export default function AdvancedHistoryArchive() {
         hasAnswer: !!answerFileUrl,
         answerFileUrl: answerFileUrl,
         updatedAt: new Date().toISOString(),
-        updatedBy: user?.email || 'anonymous'
+        updatedBy: user?.email || 'anonymous',
+        tier: uploadForm.tier || '10' // <-- SAVE TIER
       };
 
       if (editingId) {
@@ -755,7 +1072,7 @@ export default function AdvancedHistoryArchive() {
       setEditingId(null);
       setDeleteConfirm(false);
       setUploadForm({
-        title: '', origin: '', year: new Date().getFullYear().toString(), paperType: '', topic: [],
+        title: '', origin: '', year: new Date().getFullYear().toString(), paperType: '', topic: [], tier: '10',
         subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' }]
       });
       setSelectedFile(null);
@@ -769,9 +1086,9 @@ export default function AdvancedHistoryArchive() {
   };
 
   useEffect(() => {
-    document.body.style.overflow = (isUploadModalOpen || previewItem || isManageFiltersOpen) ? 'hidden' : 'unset';
+    document.body.style.overflow = (isUploadModalOpen || previewItem || isManageFiltersOpen || isUserManagementOpen) ? 'hidden' : 'unset';
     return () => { document.body.style.overflow = 'unset'; };
-  }, [isUploadModalOpen, previewItem, isManageFiltersOpen]);
+  }, [isUploadModalOpen, previewItem, isManageFiltersOpen, isUserManagementOpen]);
 
   // --- RENDER CONTENT ---
   if (authLoading) {
@@ -789,7 +1106,7 @@ export default function AdvancedHistoryArchive() {
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col relative">
       
       {/* DEBUG BAR */}
-      <div className="fixed bottom-0 right-0 bg-black text-white text-[10px] p-2 z-50 opacity-80 pointer-events-none font-mono">
+      <div className="fixed bottom-0 right-0 bg-black text-white text-xs p-2 z-50 opacity-80 pointer-events-none font-mono">
         STATUS: {user ? (user.isAdmin ? "ADMIN" : (user.isAuthorized ? "VIEWER" : "UNAUTHORIZED")) : "LOGGED OUT"}
       </div>
 
@@ -812,7 +1129,7 @@ export default function AdvancedHistoryArchive() {
             <div className="flex items-center gap-4 mt-3">
               <p className="text-slate-500 text-sm">
                 {user && user.isAuthorized 
-                  ? `Found ${filteredResults.length} sub-questions`
+                  ? `Found ${filteredResults.length} ${displayMode === 'subquestion' ? 'sub-questions' : 'papers'}`
                   : 'Secure Database Access'
                 }
               </p>
@@ -821,7 +1138,7 @@ export default function AdvancedHistoryArchive() {
               {user && (
                 <div className="flex items-center gap-2 text-xs text-slate-400 border-l border-slate-300 pl-4">
                   <User size={12} />
-                  <span className="truncate max-w-[150px]">{user.email}</span>
+                  <span className="truncate w-32">{user.email}</span>
                   <button onClick={logout} className="text-red-500 hover:text-red-700 hover:underline ml-1">
                     Sign Out
                   </button>
@@ -831,7 +1148,7 @@ export default function AdvancedHistoryArchive() {
           </div>
 
           {user && user.isAuthorized && (
-            <div className="flex gap-2 w-full md:w-auto mt-4 md:mt-0">
+            <div className="flex gap-2 w-full md:w-auto mt-4 md:mt-0 flex-wrap">
               <button 
                 onClick={() => setShowFilters(!showFilters)} 
                 className={`flex-1 md:flex-none btn-secondary ${showFilters ? 'bg-blue-50 border-blue-200 text-blue-700' : ''}`}
@@ -839,10 +1156,19 @@ export default function AdvancedHistoryArchive() {
                 <Filter size={18} /> {showFilters ? 'Hide Filters' : 'Filters'}
               </button>
               
+              {/* --- NEW: USER MANAGEMENT BUTTON --- */}
               {user.isAdmin && (
-                <button onClick={() => setIsUploadModalOpen(true)} className="btn-primary flex-1 md:flex-none">
-                  <Upload size={18} /> Upload
-                </button>
+                <>
+                  <button 
+                    onClick={() => setIsUserManagementOpen(true)} 
+                    className="btn-secondary flex-1 md:flex-none hover:bg-purple-50 hover:text-purple-700 hover:border-purple-200"
+                  >
+                    <Users size={18} /> Manage Access
+                  </button>
+                  <button onClick={() => setIsUploadModalOpen(true)} className="btn-primary flex-1 md:flex-none">
+                    <Upload size={18} /> Upload
+                  </button>
+                </>
               )}
             </div>
           )}
@@ -869,7 +1195,7 @@ export default function AdvancedHistoryArchive() {
             <h3 className="text-lg font-semibold text-red-700">Unauthorized Access</h3>
             <p className="text-sm max-w-md text-center mt-2 text-red-600">
               Your account ({user.email}) does not have permission to view these documents. 
-              Please contact the administrator (clng@ktls.edu.hk) to request access.
+              Please contact the administrator to request access.
             </p>
           </div>
         )}
@@ -901,7 +1227,7 @@ export default function AdvancedHistoryArchive() {
                           </button>
                         )}
                         <button 
-                          onClick={() => setFilters({ origin: [], year: [], paperType: [], questionType: [], sourceType: [], marks: [], topic: [] })}
+                          onClick={() => setFilters({ origin: [], year: [], paperType: [], questionType: [], sourceType: [], marks: [], topic: [], tier: [] })}
                           className="text-xs text-red-500 hover:text-red-700 font-medium px-2 py-1 rounded hover:bg-red-50 transition-colors"
                         >
                           Reset All
@@ -911,6 +1237,22 @@ export default function AdvancedHistoryArchive() {
 
                     {/* VERTICAL STACK OF ACCORDIONS */}
                     <div className="flex flex-col gap-2">
+                      {/* Tier (Admin Only) */}
+                      {user.isAdmin && (
+                        <FilterAccordion 
+                          title="Tier Level (Admin Only)" 
+                          isOpen={expandedSections['tier']} 
+                          onToggle={() => toggleAccordion('tier')}
+                          count={filters.tier.length}
+                        >
+                          <CheckboxGroup 
+                            options={systemTiers.map(t => ({ label: t.name, value: t.id }))}
+                            selectedValues={filters.tier}
+                            onChange={(vals) => setFilters({...filters, tier: vals})}
+                          />
+                        </FilterAccordion>
+                      )}
+
                       {/* Origin */}
                       <FilterAccordion 
                         title="Origin" 
@@ -1035,7 +1377,7 @@ export default function AdvancedHistoryArchive() {
               )}
             </AnimatePresence>
 
-            {/* Search Bar & Sort */}
+            {/* Search Bar, Display Mode & Sort */}
             <div className="flex flex-col md:flex-row gap-4 mb-6">
               <div className="relative flex-1">
                 <Search className="absolute left-4 top-3.5 text-slate-400" size={20} />
@@ -1048,6 +1390,21 @@ export default function AdvancedHistoryArchive() {
                 />
               </div>
               
+              <div className="flex bg-white border border-slate-200 rounded-xl shadow-sm p-1">
+                <button 
+                  onClick={() => setDisplayMode('subquestion')}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${displayMode === 'subquestion' ? 'bg-blue-100 text-blue-700' : 'text-slate-500 hover:bg-slate-50'}`}
+                >
+                  <LayoutList size={16} /> Sub-Questions
+                </button>
+                <button 
+                  onClick={() => setDisplayMode('fullpaper')}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${displayMode === 'fullpaper' ? 'bg-blue-100 text-blue-700' : 'text-slate-500 hover:bg-slate-50'}`}
+                >
+                  <FileStack size={16} /> Full Paper
+                </button>
+              </div>
+
               <div className="relative w-full md:w-56">
                 <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
                   <ArrowUpDown size={16} />
@@ -1067,115 +1424,205 @@ export default function AdvancedHistoryArchive() {
               </div>
             </div>
 
+            {/* TOP PAGINATION CONTROLS */}
+            {filteredResults.length > 0 && (
+              <PaginationControls 
+                currentPage={currentPage}
+                totalPages={totalPages}
+                onPageChange={handlePageChange}
+                itemsPerPage={itemsPerPage}
+                setItemsPerPage={setItemsPerPage}
+                className="mb-6"
+              />
+            )}
+
             {/* Results List */}
             <div className="space-y-4">
               <AnimatePresence>
-                {filteredResults.map(({ uniqueId, parent, child }) => (
-                  <motion.div
-                    key={uniqueId}
-                    layout
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-                    onClick={() => setPreviewItem({ parent, child })} 
-                    className="bg-white rounded-xl border border-slate-200 p-0 shadow-sm hover:shadow-lg hover:border-blue-300 cursor-pointer transition-all overflow-hidden group"
-                  >
-                    <div className="flex flex-col md:flex-row relative">
-                      
-                      {/* Left: Child Details */}
-                      <div className="flex-1 p-5 border-b md:border-b-0 md:border-r border-slate-100 relative">
-                        <div className="flex items-center gap-2 mb-2">
-                          <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                            {parent.year} • {parent.origin}
-                          </span>
-                          <span className={`text-xs px-2 py-0.5 rounded font-medium ${parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
-                            {parent.paperType}
-                          </span>
-                        </div>
-                        
-                        <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 group-hover:text-blue-600 transition-colors">
-                          {parent.title} 
-                          <span className="bg-slate-800 text-white text-sm px-2 py-0.5 rounded-md">
-                            Q{child.label}
-                          </span>
-                          {child.marks && (
-                            <span className="text-xs text-slate-400 font-normal border border-slate-200 px-1.5 py-0.5 rounded">
-                              {child.marks} Marks
-                            </span>
-                          )}
-                        </h3>
-
-                        <div className="mt-3 text-slate-600 text-sm line-clamp-3 bg-slate-50 p-3 rounded-lg border border-slate-100 italic">
-                          {child.content || "No text content provided."}
-                        </div>
-
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          {/* Parent Topics */}
-                          {ensureArray(parent.topic).map((t, i) => (
-                            <div key={`pt-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
-                              <Tag size={12} /> {t}
+                {paginatedResults.map((item) => {
+                  const { uniqueId, parent, child, isFullPaper, matchedChildrenCount } = item;
+                  
+                  if (isFullPaper) {
+                    // --- FULL PAPER RENDER ---
+                    return (
+                      <motion.div
+                        key={uniqueId}
+                        layout
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.95 }}
+                        onClick={() => setPreviewItem(item)} 
+                        className="bg-white rounded-xl border border-slate-200 p-0 shadow-sm hover:shadow-lg hover:border-blue-300 cursor-pointer transition-all overflow-hidden group"
+                      >
+                        <div className="flex flex-col md:flex-row relative">
+                          <div className="flex-1 p-5 border-b md:border-b-0 md:border-r border-slate-100 relative">
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                                {parent.year} • {parent.origin}
+                              </span>
+                              <span className={`text-xs px-2 py-0.5 rounded font-medium ${parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
+                                {parent.paperType}
+                              </span>
+                              {user.isAdmin && (
+                                <span className="text-xs px-2 py-0.5 rounded font-medium bg-indigo-100 text-indigo-700 flex items-center gap-1">
+                                  <Layers size={10} /> {systemTiers.find(t => t.id === (parent.tier || '10'))?.name || `Tier ${parent.tier || '10'}`}
+                                </span>
+                              )}
                             </div>
-                          ))}
-                          {/* Child Topics */}
-                          {ensureArray(child.topic).map((t, i) => (
-                            <div key={`ct-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
-                              <Tag size={12} /> {t}
-                            </div>
-                          ))}
-                          {/* Question Types */}
-                          {ensureArray(child.questionType).map((qt, i) => (
-                            <div key={`qt-${i}`} className="badge bg-green-50 text-green-700 border-green-100">
-                              {qt}
-                            </div>
-                          ))}
-                          {/* Source Types */}
-                          {ensureArray(child.sourceType).map((st, i) => (
-                            <div key={`st-${i}`} className="badge bg-slate-100 text-slate-600 border-slate-200 flex items-center gap-1">
-                              <FileDigit size={12} /> {st}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
+                            
+                            <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2 group-hover:text-blue-600 transition-colors">
+                              {parent.title}
+                            </h3>
 
-                      {/* Right: Parent Action */}
-                      <div className="p-5 bg-slate-50 md:w-64 flex flex-col justify-center items-center gap-3 relative">
-                        <div className="absolute top-2 right-2 text-[10px] text-slate-300 font-mono select-none">
-                          ID: {parent.id}
-                        </div>
+                            <div className="mt-3 text-slate-600 text-sm">
+                              Contains <span className="font-bold">{parent.subQuestions.length}</span> sub-questions ({matchedChildrenCount} matched your search).
+                            </div>
 
-                        <div className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-md opacity-0 group-hover:opacity-100 transition-all transform translate-y-2 group-hover:translate-y-0">
-                          <Eye size={16} /> View Details
-                        </div>
-
-                        {parent.hasFile ? (
-                          <div className="text-center text-slate-500 text-xs flex items-center gap-1">
-                             <FileText size={12} /> PDF Attached
+                            <div className="mt-4 flex flex-wrap gap-2">
+                              {ensureArray(parent.topic).map((t, i) => (
+                                <div key={`pt-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
+                                  <Tag size={12} /> {t}
+                                </div>
+                              ))}
+                            </div>
                           </div>
-                        ) : (
-                          <div className="text-center text-slate-400 text-sm italic px-4">
-                            No PDF attached
-                          </div>
-                        )}
 
-                        {parent.hasAnswer && (
-                          <div className="text-center text-green-600 text-xs flex items-center gap-1 font-medium mt-1">
-                             <BookOpen size={12} /> Answer Key Available
+                          <div className="p-5 bg-slate-50 md:w-64 flex flex-col justify-center items-center gap-3 relative">
+                            <div className="absolute top-2 right-2 text-xs text-slate-300 font-mono select-none">
+                              ID: {parent.id}
+                            </div>
+                            <div className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-md opacity-0 group-hover:opacity-100 transition-all transform translate-y-2 group-hover:translate-y-0">
+                              <Eye size={16} /> View Full Paper
+                            </div>
+                            {parent.hasFile ? (
+                              <div className="text-center text-slate-500 text-xs flex items-center gap-1">
+                                 <FileText size={12} /> PDF Attached
+                              </div>
+                            ) : (
+                              <div className="text-center text-slate-400 text-sm italic px-4">
+                                No PDF attached
+                              </div>
+                            )}
+                            {parent.hasAnswer && (
+                              <div className="text-center text-green-600 text-xs flex items-center gap-1 font-medium mt-1">
+                                 <BookOpen size={12} /> Answer Key Available
+                              </div>
+                            )}
+                            {user.isAdmin && (
+                              <button 
+                                onClick={(e) => handleEditClick(e, parent)}
+                                className="w-full flex items-center justify-center gap-2 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
+                              >
+                                <Edit size={16} /> Edit Parent
+                              </button>
+                            )}
                           </div>
-                        )}
-                        
-                        {user.isAdmin && (
-                          <button 
-                            onClick={(e) => handleEditClick(e, parent)}
-                            className="w-full flex items-center justify-center gap-2 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
-                          >
-                            <Edit size={16} />
-                            Edit Parent
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </motion.div>
-                ))}
+                        </div>
+                      </motion.div>
+                    );
+                  } else {
+                    // --- SUB-QUESTION RENDER (Existing) ---
+                    return (
+                      <motion.div
+                        key={uniqueId}
+                        layout
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.95 }}
+                        onClick={() => setPreviewItem(item)} 
+                        className="bg-white rounded-xl border border-slate-200 p-0 shadow-sm hover:shadow-lg hover:border-blue-300 cursor-pointer transition-all overflow-hidden group"
+                      >
+                        <div className="flex flex-col md:flex-row relative">
+                          <div className="flex-1 p-5 border-b md:border-b-0 md:border-r border-slate-100 relative">
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                                {parent.year} • {parent.origin}
+                              </span>
+                              <span className={`text-xs px-2 py-0.5 rounded font-medium ${parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
+                                {parent.paperType}
+                              </span>
+                              {user.isAdmin && (
+                                <span className="text-xs px-2 py-0.5 rounded font-medium bg-indigo-100 text-indigo-700 flex items-center gap-1">
+                                  <Layers size={10} /> {systemTiers.find(t => t.id === (parent.tier || '10'))?.name || `Tier ${parent.tier || '10'}`}
+                                </span>
+                              )}
+                            </div>
+                            
+                            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 group-hover:text-blue-600 transition-colors">
+                              {parent.title} 
+                              <span className="bg-slate-800 text-white text-sm px-2 py-0.5 rounded-md">
+                                Q{child.label}
+                              </span>
+                              {child.marks && (
+                                <span className="text-xs text-slate-400 font-normal border border-slate-200 px-1.5 py-0.5 rounded">
+                                  {child.marks} Marks
+                                </span>
+                              )}
+                            </h3>
+
+                            <div className="mt-3 text-slate-600 text-sm line-clamp-3 bg-slate-50 p-3 rounded-lg border border-slate-100 italic">
+                              {child.content || "No text content provided."}
+                            </div>
+
+                            <div className="mt-4 flex flex-wrap gap-2">
+                              {ensureArray(parent.topic).map((t, i) => (
+                                <div key={`pt-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
+                                  <Tag size={12} /> {t}
+                                </div>
+                              ))}
+                              {ensureArray(child.topic).map((t, i) => (
+                                <div key={`ct-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
+                                  <Tag size={12} /> {t}
+                                </div>
+                              ))}
+                              {ensureArray(child.questionType).map((qt, i) => (
+                                <div key={`qt-${i}`} className="badge bg-green-50 text-green-700 border-green-100">
+                                  {qt}
+                                </div>
+                              ))}
+                              {ensureArray(child.sourceType).map((st, i) => (
+                                <div key={`st-${i}`} className="badge bg-slate-100 text-slate-600 border-slate-200 flex items-center gap-1">
+                                  <FileDigit size={12} /> {st}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="p-5 bg-slate-50 md:w-64 flex flex-col justify-center items-center gap-3 relative">
+                            <div className="absolute top-2 right-2 text-xs text-slate-300 font-mono select-none">
+                              ID: {parent.id}
+                            </div>
+                            <div className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-md opacity-0 group-hover:opacity-100 transition-all transform translate-y-2 group-hover:translate-y-0">
+                              <Eye size={16} /> View Details
+                            </div>
+                            {parent.hasFile ? (
+                              <div className="text-center text-slate-500 text-xs flex items-center gap-1">
+                                 <FileText size={12} /> PDF Attached
+                              </div>
+                            ) : (
+                              <div className="text-center text-slate-400 text-sm italic px-4">
+                                No PDF attached
+                              </div>
+                            )}
+                            {parent.hasAnswer && (
+                              <div className="text-center text-green-600 text-xs flex items-center gap-1 font-medium mt-1">
+                                 <BookOpen size={12} /> Answer Key Available
+                              </div>
+                            )}
+                            {user.isAdmin && (
+                              <button 
+                                onClick={(e) => handleEditClick(e, parent)}
+                                className="w-full flex items-center justify-center gap-2 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
+                              >
+                                <Edit size={16} /> Edit Parent
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </motion.div>
+                    );
+                  }
+                })}
               </AnimatePresence>
 
               {filteredResults.length === 0 && (
@@ -1183,10 +1630,326 @@ export default function AdvancedHistoryArchive() {
                   No questions found matching your criteria.
                 </div>
               )}
+
+              {/* BOTTOM PAGINATION CONTROLS */}
+              {filteredResults.length > 0 && (
+                <PaginationControls 
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  onPageChange={handlePageChange}
+                  itemsPerPage={itemsPerPage}
+                  setItemsPerPage={setItemsPerPage}
+                  className="mt-6"
+                />
+              )}
             </div>
           </div>
         )}
       </main>
+
+      {/* --- USER MANAGEMENT MODAL (ADMIN ONLY) --- */}
+      <AnimatePresence>
+        {isUserManagementOpen && user?.isAdmin && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }} 
+              animate={{ opacity: 1, scale: 1 }} 
+              exit={{ opacity: 0, scale: 0.95 }} 
+              className="bg-white rounded-xl w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden"
+            >
+              <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    <Shield size={20} className="text-purple-600" /> Manage Access & Roles
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-1">Configure users, roles, and automated tier unlocking.</p>
+                </div>
+                <button onClick={() => setIsUserManagementOpen(false)} className="text-slate-400 hover:text-slate-800">
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* TABS */}
+              <div className="flex border-b border-slate-200 bg-white px-6">
+                <button 
+                  onClick={() => setManageTab('users')}
+                  className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${manageTab === 'users' ? 'border-purple-600 text-purple-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+                >
+                  <Users size={16} className="inline mr-2" /> Users & Roles
+                </button>
+                <button 
+                  onClick={() => setManageTab('tiers')}
+                  className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${manageTab === 'tiers' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+                >
+                  <Clock size={16} className="inline mr-2" /> Tier Access Control
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 bg-slate-50/50">
+                
+                {/* TAB 1: USERS & ROLES */}
+                {manageTab === 'users' && (
+                  <div className="flex flex-col lg:flex-row gap-6">
+                    {/* LEFT COLUMN: USER MANAGEMENT */}
+                    <div className="flex-1 flex flex-col gap-6">
+                      {/* Add User Form */}
+                      <form onSubmit={handleAddUser} className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row gap-4 items-end">
+                        <div className="flex-1 w-full">
+                          <label className="text-xs font-bold text-slate-500 mb-1 block">Google Email Address</label>
+                          <input 
+                            type="email" 
+                            required 
+                            placeholder="teacher@school.edu.hk" 
+                            value={newUserEmail} 
+                            onChange={(e) => setNewUserEmail(e.target.value)} 
+                            className="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 outline-none" 
+                          />
+                        </div>
+                        <div className="w-full sm:w-48">
+                          <label className="text-xs font-bold text-slate-500 mb-1 block">Role</label>
+                          <select 
+                            value={newUserRole} 
+                            onChange={(e) => setNewUserRole(e.target.value)} 
+                            className="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                          >
+                            {systemRoles.map(role => (
+                              <option key={role} value={role}>{role.charAt(0).toUpperCase() + role.slice(1)}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <button 
+                          type="submit" 
+                          disabled={isManagingUsers} 
+                          className="w-full sm:w-auto px-6 py-2 bg-purple-600 text-white font-bold rounded-lg text-sm hover:bg-purple-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
+                        >
+                          {isManagingUsers ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />} 
+                          Add User
+                        </button>
+                      </form>
+
+                      {/* Users List */}
+                      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex-1">
+                        <table className="w-full text-left text-sm">
+                          <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase text-xs font-bold">
+                            <tr>
+                              <th className="px-6 py-3">Email Address</th>
+                              <th className="px-6 py-3">Role</th>
+                              <th className="px-6 py-3 text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {managedUsers.length === 0 ? (
+                              <tr><td colSpan="3" className="px-6 py-8 text-center text-slate-400 italic">No users found.</td></tr>
+                            ) : (
+                              managedUsers.map((u) => (
+                                <tr key={u.id} className="hover:bg-slate-50 transition-colors">
+                                  <td className="px-6 py-4 font-medium text-slate-800">{u.email}</td>
+                                  <td className="px-6 py-4">
+                                    <span className={`px-2 py-1 rounded text-xs font-bold uppercase tracking-wider ${u.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-green-100 text-green-700'}`}>
+                                      {u.role}
+                                    </span>
+                                  </td>
+                                  <td className="px-6 py-4 text-right">
+                                    <button 
+                                      onClick={() => handleRemoveUser(u.id)} 
+                                      disabled={isManagingUsers || u.email === user.email} 
+                                      className="text-red-500 hover:text-red-700 disabled:opacity-30 disabled:cursor-not-allowed p-2 hover:bg-red-50 rounded-lg transition-colors"
+                                    >
+                                      <Trash2 size={16} />
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* RIGHT COLUMN: ROLES & TIERS */}
+                    <div className="w-full lg:w-72 flex flex-col gap-6">
+                      
+                      {/* Manage Roles */}
+                      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                        <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2 mb-3">
+                          <Users size={16} className="text-blue-500" /> Custom Roles
+                        </h3>
+                        <div className="space-y-2 mb-4">
+                          {systemRoles.map(role => (
+                            <div key={role} className="flex items-center justify-between bg-slate-50 border border-slate-100 px-3 py-2 rounded-lg text-sm">
+                              <span className="font-medium text-slate-700">{role}</span>
+                              {role !== 'admin' && role !== 'viewer' && (
+                                <button 
+                                  onClick={() => setSystemRoles(prev => prev.filter(r => r !== role))}
+                                  className="text-slate-400 hover:text-red-500"
+                                >
+                                  <X size={14} />
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                        <div className="flex gap-2">
+                          <input 
+                            type="text" 
+                            placeholder="New role name..." 
+                            value={newRoleInput}
+                            onChange={(e) => setNewRoleInput(e.target.value)}
+                            className="flex-1 p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                          />
+                          <button 
+                            onClick={() => {
+                              const val = newRoleInput.trim().toLowerCase();
+                              if (val && !systemRoles.includes(val)) {
+                                setSystemRoles([...systemRoles, val]);
+                                setNewRoleInput('');
+                              }
+                            }}
+                            className="bg-blue-100 hover:bg-blue-200 text-blue-700 px-3 rounded-lg flex items-center justify-center transition-colors"
+                          >
+                            <Plus size={16} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Manage Tiers */}
+                      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex-1 flex flex-col">
+                        <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2 mb-1">
+                          <Layers size={16} className="text-indigo-500" /> Rename Tiers
+                        </h3>
+                        <p className="text-xs text-slate-400 mb-4">You can rename tiers here. Ordered 10 (Highest) to 1.</p>
+                        
+                        <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-2 max-h-64">
+                          {systemTiers.map(tier => (
+                            <div key={tier.id} className="flex items-center gap-3">
+                              <span className="text-xs font-bold text-slate-400 w-5 text-right">{tier.id}</span>
+                              <input 
+                                type="text" 
+                                value={tier.name}
+                                onChange={(e) => setSystemTiers(prev => prev.map(t => t.id === tier.id ? { ...t, name: e.target.value } : t))}
+                                className="flex-1 p-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 2: TIER ACCESS CONTROL */}
+                {manageTab === 'tiers' && (
+                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+                    <div className="mb-6">
+                      <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 mb-2">
+                        <Calendar size={20} className="text-indigo-600" /> Automated Tier Unlocking
+                      </h3>
+                      <p className="text-sm text-slate-500">
+                        Select a user role below, then configure the specific date when each tier becomes visible to them. 
+                        You can also check "Immediate Access" to grant access right away.
+                        <br/><span className="font-bold text-indigo-600">Note: Access is cumulative!</span> Unlocking a higher tier (e.g., Tier 5) automatically grants access to all lower tiers (1-4).
+                      </p>
+                    </div>
+
+                    <div className="flex flex-col md:flex-row gap-8">
+                      {/* Role Selector */}
+                      <div className="w-full md:w-64">
+                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">Select Role</label>
+                        <div className="space-y-2">
+                          {systemRoles.filter(r => r !== 'admin').map(role => (
+                            <button
+                              key={role}
+                              onClick={() => setSelectedRoleForAccess(role)}
+                              className={`w-full text-left px-4 py-3 rounded-lg border text-sm font-bold transition-all ${selectedRoleForAccess === role ? 'bg-indigo-50 border-indigo-200 text-indigo-700 shadow-sm' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+                            >
+                              {role.charAt(0).toUpperCase() + role.slice(1)} Group
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Tier Dates List */}
+                      <div className="flex-1">
+                        <div className="bg-slate-50 rounded-xl border border-slate-200 p-5">
+                          <h4 className="text-sm font-bold text-slate-700 mb-4 uppercase tracking-wider flex items-center justify-between">
+                            <span>Unlock Dates for: <span className="text-indigo-600">{selectedRoleForAccess}</span></span>
+                          </h4>
+                          
+                          <div className="space-y-3">
+                            {systemTiers.map(tier => {
+                              const currentRule = tierAccessConfig[selectedRoleForAccess]?.[tier.id] || { date: '', immediate: false };
+                              const today = new Date().toISOString().split('T')[0];
+                              const isDateReached = currentRule.date && currentRule.date <= today;
+                              const isChecked = currentRule.immediate || isDateReached;
+
+                              return (
+                                <div key={tier.id} className="flex flex-col sm:flex-row sm:items-center justify-between bg-white p-3 rounded-lg border border-slate-200 shadow-sm gap-4">
+                                  <div className="flex items-center gap-3">
+                                    <span className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-xs font-bold">
+                                      {tier.id}
+                                    </span>
+                                    <span className="font-medium text-slate-700">{tier.name}</span>
+                                  </div>
+
+                                  <div className="flex items-center gap-4 sm:ml-auto">
+                                    {/* Immediate Access Checkbox */}
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                      <input 
+                                        type="checkbox" 
+                                        checked={isChecked}
+                                        onChange={(e) => handleTierAccessChange(selectedRoleForAccess, tier.id, 'immediate', e.target.checked)}
+                                        className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                                      />
+                                      <span className="text-xs font-bold text-slate-600">Immediate Access</span>
+                                    </label>
+
+                                    {/* Date Picker */}
+                                    <div className="flex items-center gap-2">
+                                      <Calendar size={16} className="text-slate-400" />
+                                      <input 
+                                        type="date" 
+                                        value={currentRule.date || ''}
+                                        onChange={(e) => handleTierAccessChange(selectedRoleForAccess, tier.id, 'date', e.target.value)}
+                                        className="p-2 border border-slate-200 rounded-md text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-slate-700"
+                                      />
+                                      {currentRule.date && (
+                                        <button 
+                                          onClick={() => handleTierAccessChange(selectedRoleForAccess, tier.id, 'date', '')}
+                                          className="text-slate-400 hover:text-red-500 ml-1"
+                                          title="Clear Date"
+                                        >
+                                          <X size={16} />
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* SAVE BUTTON FOR SYSTEM SETTINGS */}
+              <div className="p-5 border-t border-slate-100 bg-slate-50 flex justify-end">
+                <button
+                  onClick={handleSaveSystemSettings}
+                  disabled={isSavingSettings}
+                  className="px-6 py-2 bg-indigo-600 text-white font-bold rounded-lg text-sm hover:bg-indigo-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-2 shadow-md"
+                >
+                  {isSavingSettings ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                  Save All Settings & Access
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* --- MANAGE FILTERS MODAL (ADMIN ONLY) --- */}
       <AnimatePresence>
@@ -1196,7 +1959,7 @@ export default function AdvancedHistoryArchive() {
                initial={{ opacity: 0, scale: 0.95 }}
                animate={{ opacity: 1, scale: 1 }}
                exit={{ opacity: 0, scale: 0.95 }}
-               className="bg-white rounded-xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl"
+               className="bg-white rounded-xl w-full max-w-2xl max-h-full flex flex-col shadow-2xl"
             >
               <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-xl">
                 <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
@@ -1295,7 +2058,7 @@ export default function AdvancedHistoryArchive() {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-white rounded-xl w-full max-w-[98vw] h-[95vh] shadow-2xl flex flex-col overflow-hidden"
+              className="bg-white rounded-xl w-full max-w-full h-full shadow-2xl flex flex-col overflow-hidden"
             >
               {/* Preview Header */}
               <div className="px-6 py-3 border-b border-slate-200 flex justify-between items-center bg-white shrink-0 z-10">
@@ -1308,10 +2071,15 @@ export default function AdvancedHistoryArchive() {
                       <span className={`text-xs px-2 py-0.5 rounded font-medium ${previewItem.parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
                         {previewItem.parent.paperType}
                       </span>
+                      {user.isAdmin && (
+                        <span className="text-xs px-2 py-0.5 rounded font-medium bg-indigo-100 text-indigo-700 flex items-center gap-1">
+                          <Layers size={10} /> {systemTiers.find(t => t.id === (previewItem.parent.tier || '10'))?.name || `Tier ${previewItem.parent.tier || '10'}`}
+                        </span>
+                      )}
                     </div>
                     <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                       {viewingAnswer ? "Answer Key: " : ""}{previewItem.parent.title}
-                      {!viewingAnswer && (
+                      {!viewingAnswer && !previewItem.isFullPaper && (
                         <>
                           <span className="bg-slate-800 text-white text-sm px-2 py-0.5 rounded-md">
                             Q{previewItem.child.label}
@@ -1322,6 +2090,11 @@ export default function AdvancedHistoryArchive() {
                             </span>
                           )}
                         </>
+                      )}
+                      {!viewingAnswer && previewItem.isFullPaper && (
+                        <span className="bg-blue-100 text-blue-800 text-xs px-2 py-0.5 rounded-md font-bold ml-2">
+                          Full Paper View
+                        </span>
                       )}
                     </h2>
                   </div>
@@ -1370,52 +2143,109 @@ export default function AdvancedHistoryArchive() {
               <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
                 
                 {!viewingAnswer && (
-                  <div className={`${previewItem.parent.hasFile ? 'md:w-1/4 border-r border-slate-200' : 'w-full'} p-6 overflow-y-auto bg-white`}>
-                    <div className="prose max-w-none">
-                      <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
-                        <FileText size={14} /> Question Content
-                      </h3>
-                      <div className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap bg-slate-50 p-4 rounded-lg border border-slate-100">
-                        {previewItem.child.content || <span className="text-slate-400 italic">No text content available. Please refer to the PDF.</span>}
-                      </div>
-                    </div>
-
-                    <div className="mt-6 space-y-4">
-                      <div>
-                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Topics</h4>
-                        <div className="flex flex-wrap gap-2">
-                          {[...ensureArray(previewItem.parent.topic), ...ensureArray(previewItem.child.topic)].map((t, i) => (
-                            <span key={i} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1">
-                              <Tag size={12} /> {t}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                      
-                      <div>
-                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Question Types</h4>
-                        <div className="flex flex-wrap gap-2">
-                          {ensureArray(previewItem.child.questionType).map((qt, i) => (
-                            <span key={i} className="px-2 py-1 bg-green-50 text-green-700 rounded-md text-xs font-medium border border-green-100">
-                              {qt}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-
-                      {ensureArray(previewItem.child.sourceType).length > 0 && (
-                        <div>
-                          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Source Types</h4>
+                  <div className={`${previewItem.parent.hasFile ? 'md:w-1/3 lg:w-1/4 border-r border-slate-200' : 'w-full'} p-6 overflow-y-auto bg-slate-50 custom-scrollbar`}>
+                    
+                    {/* FULL PAPER LEFT PANEL */}
+                    {previewItem.isFullPaper ? (
+                      <div className="space-y-6">
+                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                          <h3 className="text-sm font-bold text-slate-800 mb-2">Paper Overview</h3>
                           <div className="flex flex-wrap gap-2">
-                            {ensureArray(previewItem.child.sourceType).map((st, i) => (
-                              <span key={i} className="px-2 py-1 bg-slate-100 text-slate-600 rounded-md text-xs font-medium border border-slate-200 flex items-center gap-1">
-                                <FileDigit size={12} /> {st}
+                            {ensureArray(previewItem.parent.topic).map((t, i) => (
+                              <span key={i} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1">
+                                <Tag size={12} /> {t}
                               </span>
                             ))}
                           </div>
                         </div>
-                      )}
-                    </div>
+
+                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                          <LayoutList size={14} /> All Sub-Questions
+                        </h3>
+
+                        {previewItem.parent.subQuestions.map((sq, idx) => (
+                          <div key={sq.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                            <div className="flex justify-between items-start mb-2">
+                              <span className="bg-slate-800 text-white text-xs px-2 py-1 rounded-md font-bold">
+                                Q{sq.label}
+                              </span>
+                              {sq.marks && (
+                                <span className="text-xs text-slate-500 font-normal border border-slate-200 px-1.5 py-0.5 rounded bg-slate-50">
+                                  {sq.marks} Marks
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap mb-3">
+                              {sq.content || <span className="text-slate-400 italic">No text content available.</span>}
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {ensureArray(sq.topic).map((t, i) => (
+                                <span key={`t-${i}`} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px] font-medium border border-blue-100">
+                                  {t}
+                                </span>
+                              ))}
+                              {ensureArray(sq.questionType).map((qt, i) => (
+                                <span key={`qt-${i}`} className="px-1.5 py-0.5 bg-green-50 text-green-700 rounded text-[10px] font-medium border border-green-100">
+                                  {qt}
+                                </span>
+                              ))}
+                              {ensureArray(sq.sourceType).map((st, i) => (
+                                <span key={`st-${i}`} className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-medium border border-slate-200">
+                                  {st}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      /* SINGLE SUB-QUESTION LEFT PANEL */
+                      <div className="prose max-w-none">
+                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                          <FileText size={14} /> Question Content
+                        </h3>
+                        <div className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap bg-white p-4 rounded-lg border border-slate-200 shadow-sm">
+                          {previewItem.child.content || <span className="text-slate-400 italic">No text content available. Please refer to the PDF.</span>}
+                        </div>
+
+                        <div className="mt-6 space-y-4">
+                          <div>
+                            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Topics</h4>
+                            <div className="flex flex-wrap gap-2">
+                              {[...ensureArray(previewItem.parent.topic), ...ensureArray(previewItem.child.topic)].map((t, i) => (
+                                <span key={i} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1">
+                                  <Tag size={12} /> {t}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                          
+                          <div>
+                            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Question Types</h4>
+                            <div className="flex flex-wrap gap-2">
+                              {ensureArray(previewItem.child.questionType).map((qt, i) => (
+                                <span key={i} className="px-2 py-1 bg-green-50 text-green-700 rounded-md text-xs font-medium border border-green-100">
+                                  {qt}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+
+                          {ensureArray(previewItem.child.sourceType).length > 0 && (
+                            <div>
+                              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Source Types</h4>
+                              <div className="flex flex-wrap gap-2">
+                                {ensureArray(previewItem.child.sourceType).map((st, i) => (
+                                  <span key={i} className="px-2 py-1 bg-slate-100 text-slate-600 rounded-md text-xs font-medium border border-slate-200 flex items-center gap-1">
+                                    <FileDigit size={12} /> {st}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1493,7 +2323,7 @@ export default function AdvancedHistoryArchive() {
                       <div className="col-span-full">
                         <label className="label flex justify-between items-center">
                           <span>Document Title</span>
-                          <span className="text-[10px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded font-medium flex items-center gap-1">
+                          <span className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded font-medium flex items-center gap-1">
                             <Sparkles size={10} /> Auto-detects "2012D" or "2013E"
                           </span>
                         </label>
@@ -1510,6 +2340,16 @@ export default function AdvancedHistoryArchive() {
                         <select required className="input-field" value={uploadForm.paperType} onChange={(e) => handleParentChange('paperType', e.target.value)}>
                           <option value="">Select Paper</option>
                           {PAPER_TYPES.map(p => <option key={p} value={p}>{p}</option>)}
+                        </select>
+                      </div>
+
+                      {/* TIER SELECTION */}
+                      <div>
+                        <label className="label flex items-center gap-2">
+                          <Layers size={14} /> Document Tier Level
+                        </label>
+                        <select required className="input-field" value={uploadForm.tier} onChange={(e) => handleParentChange('tier', e.target.value)}>
+                          {systemTiers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                         </select>
                       </div>
 

@@ -12,7 +12,7 @@ import PdfTool from './PdfTool.jsx';
 import { auth, db, googleProvider } from './firebase.js';
 import './index.css';
 
-const SUPER_ADMIN = "ethanng.520021231@gmail.com";
+const SUPER_ADMIN = "clng@ktls.edu.hk";
 
 // ==========================================
 // 1. GLOBAL AUTHENTICATION CONTEXT
@@ -33,6 +33,7 @@ export const AuthProvider = ({ children }) => {
         if (email === SUPER_ADMIN) isAdmin = true;
 
         try {
+          // UPDATE: Changed "user_roles" to "userRoles" to match the App.jsx dashboard
           const userRoleRef = doc(db, "user_roles", email);
           const userRoleSnap = await getDoc(userRoleRef);
           

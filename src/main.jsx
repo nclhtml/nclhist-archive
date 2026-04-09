@@ -9,6 +9,8 @@ import { Loader2, ShieldAlert } from 'lucide-react';
 import App from './App.jsx';
 import DseTrend from './DseTrend.jsx';
 import PdfTool from './PdfTool.jsx';
+import Record from './Record.jsx'; 
+import Marks from './Marks.jsx'; // <-- IMPORT THE NEW MARKS COMPONENT
 import { auth, db, googleProvider } from './firebase.js';
 import './index.css';
 
@@ -33,7 +35,6 @@ export const AuthProvider = ({ children }) => {
         if (email === SUPER_ADMIN) isAdmin = true;
 
         try {
-          // UPDATE: Changed "user_roles" to "userRoles" to match the App.jsx dashboard
           const userRoleRef = doc(db, "user_roles", email);
           const userRoleSnap = await getDoc(userRoleRef);
           
@@ -101,7 +102,7 @@ const ProtectedAdminRoute = ({ children }) => {
       <div className="flex flex-col items-center justify-center py-20 bg-slate-50 min-h-screen">
         <ShieldAlert size={64} className="mb-4 text-red-400" />
         <h2 className="text-2xl font-bold text-slate-800 mb-2">Access Denied</h2>
-        <p className="text-slate-500">You must be an administrator to access PDF Tools.</p>
+        <p className="text-slate-500">You must be an administrator to access this page.</p>
       </div>
     );
   }
@@ -119,6 +120,8 @@ const Layout = ({ children }) => {
   const isSearch = location.pathname === '/';
   const isTrend = location.pathname === '/trend';
   const isPdf = location.pathname === '/pdf';
+  const isRecord = location.pathname === '/record'; 
+  const isMarks = location.pathname === '/marks';
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
@@ -147,19 +150,27 @@ const Layout = ({ children }) => {
             </div>
           </div>
 
-          <div className="flex gap-8">
-            <Link to="/" className={`pb-3 text-sm font-bold border-b-2 transition-colors ${isSearch ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+          <div className="flex gap-8 overflow-x-auto">
+            <Link to="/" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isSearch ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
               Search Engine
             </Link>
-            <Link to="/trend" className={`pb-3 text-sm font-bold border-b-2 transition-colors ${isTrend ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+            <Link to="/trend" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isTrend ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
               DSE Trend Analysis
             </Link>
             
-            {/* ONLY SHOW TAB IF ADMIN */}
+            {/* ONLY SHOW TABS IF ADMIN */}
             {user?.isAdmin && (
-              <Link to="/pdf" className={`pb-3 text-sm font-bold border-b-2 transition-colors ${isPdf ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                PDF Tools
-              </Link>
+              <>
+                <Link to="/pdf" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isPdf ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                  PDF Tools
+                </Link>
+                <Link to="/record" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isRecord ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                  Record Management
+                </Link>
+                <Link to="/marks" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isMarks ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                  Marks Management
+                </Link>
+              </>
             )}
           </div>
         </div>
@@ -186,6 +197,17 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="/pdf" element={
               <ProtectedAdminRoute>
                 <PdfTool />
+              </ProtectedAdminRoute>
+            } />
+            <Route path="/record" element={
+              <ProtectedAdminRoute>
+                <Record />
+              </ProtectedAdminRoute>
+            } />
+            {/* PROTECTED ROUTE FOR MARKS (ADMIN ONLY) */}
+            <Route path="/marks" element={
+              <ProtectedAdminRoute>
+                <Marks />
               </ProtectedAdminRoute>
             } />
           </Routes>

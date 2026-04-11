@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AlertTriangle, Users, BookX, CheckCircle, Save, Upload, Plus, Trash2, Archive, Calendar, Loader2, MinusCircle, History, X } from 'lucide-react';
-import { collection, getDocs, doc, writeBatch, updateDoc, setDoc, getDoc, query, where } from 'firebase/firestore';
+import { collection, getDocs, doc, writeBatch, updateDoc, setDoc, getDoc, query, where, deleteDoc } from 'firebase/firestore';
 import { db } from './firebase'; 
 
 export default function Record() {
@@ -171,7 +171,7 @@ export default function Record() {
   };
 
   // ============================================================================
-  // 3. CLASS MANAGEMENT (Add & Delete)
+  // 3. CLASS & STUDENT MANAGEMENT (Add & Delete)
   // ============================================================================
   const handleAddClass = async (e) => {
     e.preventDefault();
@@ -219,6 +219,31 @@ export default function Record() {
         } catch (error) {
           console.error("Error deleting class:", error);
           alert("Failed to delete class.");
+          setConfirmDialog({ isOpen: false });
+        }
+      }
+    });
+  };
+
+  const handleDeleteStudent = (student, e) => {
+    if (e) e.stopPropagation(); // Prevent opening the student details modal
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Delete Student',
+      message: `Are you sure you want to remove ${student.englishName} (No. ${student.classNumber}) from ${student.className}? This will permanently delete all their records.`,
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, "students", student.id));
+          setStudents(students.filter(s => s.id !== student.id));
+          setConfirmDialog({ isOpen: false });
+          
+          // Close modal if the deleted student was currently being viewed
+          if (selectedStudent?.id === student.id) {
+            setSelectedStudent(null);
+          }
+        } catch (error) {
+          console.error("Error deleting student:", error);
+          alert("Failed to delete student.");
           setConfirmDialog({ isOpen: false });
         }
       }
@@ -533,7 +558,13 @@ export default function Record() {
               )}
             </div>
             
-            <div className="p-4 border-t border-gray-200 bg-gray-50 rounded-b-lg flex justify-end">
+            <div className="p-4 border-t border-gray-200 bg-gray-50 rounded-b-lg flex justify-between items-center">
+              <button 
+                onClick={(e) => handleDeleteStudent(selectedStudent, e)}
+                className="px-4 py-2 text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors flex items-center"
+              >
+                <Trash2 className="w-4 h-4 mr-2" /> Delete Student
+              </button>
               <button 
                 onClick={() => setSelectedStudent(null)}
                 className="px-4 py-2 bg-gray-800 text-white rounded-md hover:bg-gray-700 transition-colors"
@@ -838,6 +869,7 @@ export default function Record() {
                     <th className="p-3 border-b">Chinese Name</th>
                     <th className="p-3 border-b text-center w-24">Current Records</th>
                     <th className="p-3 border-b text-center w-24 text-gray-400">Past Terms</th>
+                    <th className="p-3 border-b text-center w-16">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -865,12 +897,21 @@ export default function Record() {
                         <td className="p-3 text-center text-gray-400 text-sm font-medium">
                           {pastTotal > 0 ? pastTotal : '-'}
                         </td>
+                        <td className="p-3 text-center">
+                          <button 
+                            onClick={(e) => handleDeleteStudent(student, e)}
+                            className="text-gray-400 hover:text-red-600 p-1.5 rounded transition-colors"
+                            title="Delete Student"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </td>
                       </tr>
                     );
                   })}
                   {students.filter(s => s.className === selectedClass).length === 0 && (
                     <tr>
-                      <td colSpan="5" className="p-8 text-center text-gray-500">
+                      <td colSpan="6" className="p-8 text-center text-gray-500">
                         No students found in this class. <br/> Use the Bulk Import tool to add them.
                       </td>
                     </tr>

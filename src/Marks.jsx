@@ -4,7 +4,8 @@ import {
   ChevronRight, Loader2, FileText, CheckCircle, 
   PlusCircle, Trash2, ClipboardPaste, FormInput, Calculator,
   Layers, X, BarChart2, Copy, Eye, EyeOff, Settings, Edit2, Edit,
-  ChevronUp, ChevronDown, MinusCircle, ToggleLeft, ToggleRight, Percent, Info
+  ChevronUp, ChevronDown, MinusCircle, ToggleLeft, ToggleRight, Percent, Info,
+  Link as LinkIcon, ExternalLink, Search, Download, ArrowLeft, Tag
 } from 'lucide-react';
 import { 
   collection, getDocs, doc, setDoc, updateDoc, 
@@ -39,6 +40,7 @@ export default function Marks() {
   const [categories, setCategories] = useState([
     'Assignments', 'Quizzes', 'Uniform Test', 'Exam', 'Others'
   ]);
+  const [archives, setArchives] = useState([]); // Added for document linking
   
   // Terms State
   const [termsMap, setTermsMap] = useState({});
@@ -68,6 +70,7 @@ export default function Marks() {
   const [fullMark, setFullMark] = useState(100); 
   const [paperFullMark, setPaperFullMark] = useState(100); 
   const [formTerm, setFormTerm] = useState('');
+  const [linkedDocId, setLinkedDocId] = useState(''); // Added for document linking
   
   // Multi-section State for UT/Exam
   const [sectionsConfig, setSectionsConfig] = useState([
@@ -112,6 +115,22 @@ export default function Marks() {
   // Modal specific selections
   const [modalClass, setModalClass] = useState('');
   const [modalTerm, setModalTerm] = useState('');
+
+  // Document Linker State
+  const [showDocLinker, setShowDocLinker] = useState(false);
+  const [docFilterOrigin, setDocFilterOrigin] = useState('');
+  const [docFilterYear, setDocFilterYear] = useState('');
+  const [docSearchTerm, setDocSearchTerm] = useState('');
+
+  // Preview Modal State
+  const [previewItem, setPreviewItem] = useState(null);
+  const [viewingAnswer, setViewingAnswer] = useState(false);
+
+  // Linked Marks Modal State
+  const [showMarksModal, setShowMarksModal] = useState(false);
+  const [linkedMarksData, setLinkedMarksData] = useState([]);
+  const [isLoadingMarks, setIsLoadingMarks] = useState(false);
+  const [currentMarksDocTitle, setCurrentMarksDocTitle] = useState('');
 
   // Helper to check if current category requires multi-section layout
   const isMultiSectionCategory = ['Uniform Test', 'Exam'].includes(selectedCategory);
@@ -207,6 +226,11 @@ export default function Marks() {
         const querySnapshot = await getDocs(collection(db, "students"));
         const studentsList = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         setStudents(studentsList);
+
+        // Fetch Archives for linking
+        const archivesSnap = await getDocs(collection(db, "archives"));
+        const archivesList = archivesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setArchives(archivesList);
 
       } catch (error) {
         console.error("Error fetching initial data:", error);
@@ -399,6 +423,7 @@ export default function Marks() {
     setNewAssessmentDate(new Date().toISOString().split('T')[0]);
     setFullMark(100);
     setPaperFullMark(100);
+    setLinkedDocId('');
     setSectionsConfig([{ id: generateId(), name: 'Paper 1', fullMark: 100, weight: 100, hasSubSections: false, subSections: [] }]);
     setSelectedClassesForNew([selectedClass]);
     setFormTerm(selectedTerm);
@@ -412,6 +437,7 @@ export default function Marks() {
     setNewAssessmentDate(selectedAssessment.date || new Date().toISOString().split('T')[0]);
     setFullMark(selectedAssessment.fullMark || 100);
     setPaperFullMark(selectedAssessment.paperFullMark || 100);
+    setLinkedDocId(selectedAssessment.linkedDocId || '');
     setSectionsConfig(selectedAssessment.sectionsConfig || [{ id: generateId(), name: 'Paper 1', fullMark: 100, weight: 100, hasSubSections: false, subSections: [] }]);
     setSelectedClassesForNew(selectedAssessment.classes || [selectedAssessment.className]);
     setFormTerm(selectedAssessment.term || selectedTerm);
@@ -541,6 +567,7 @@ export default function Marks() {
         fullMark: isMultiSectionCategory ? null : parseFloat(fullMark),
         paperFullMark: isMultiSectionCategory ? parseFloat(paperFullMark) : null,
         sectionsConfig: isMultiSectionCategory ? sectionsConfig : null,
+        linkedDocId: linkedDocId || null,
       };
 
       if (isEditingAssessment && selectedAssessment) {
@@ -860,7 +887,10 @@ export default function Marks() {
     const passThreshold = fullMark / 2;
     const passCount = validMarks.filter(m => m >= passThreshold).length;
     
-    return { mean, median, passCount, total: validMarks.length };
+    const max = validMarks[validMarks.length - 1].toFixed(1);
+    const min = validMarks[0].toFixed(1);
+
+    return { mean, median, passCount, total: validMarks.length, max, min };
   };
 
   const StatCell = ({ stats, isBold, borderRight, borderLeft, bg }) => {
@@ -1160,6 +1190,106 @@ export default function Marks() {
       setModalTerm(modalTermsList[0] || '');
     }
   }, [modalClass, modalTermsList, modalTerm]);
+
+  // ============================================================================
+  // DOCUMENT LINKING LOGIC
+  // ============================================================================
+  const filteredArchives = useMemo(() => {
+    return archives.filter(a => {
+      const matchOrigin = !docFilterOrigin || a.origin === docFilterOrigin;
+      const matchYear = !docFilterYear || String(a.year) === docFilterYear;
+      const matchSearch = !docSearchTerm || a.title.toLowerCase().includes(docSearchTerm.toLowerCase());
+      return matchOrigin && matchYear && matchSearch;
+    });
+  }, [archives, docFilterOrigin, docFilterYear, docSearchTerm]);
+
+  const uniqueOrigins = useMemo(() => [...new Set(archives.map(a => a.origin).filter(Boolean))], [archives]);
+  const uniqueYears = useMemo(() => [...new Set(archives.map(a => String(a.year)).filter(Boolean))].sort().reverse(), [archives]);
+
+  const handleOpenPreview = (docId) => {
+    const parentDoc = archives.find(a => a.id === docId);
+    if (parentDoc) {
+      setPreviewItem({ parent: parentDoc, isFullPaper: true });
+    }
+  };
+
+  // ============================================================================
+  // FETCH LINKED MARKS (From App.jsx)
+  // ============================================================================
+  const handleViewLinkedMarks = async (docId, docTitle) => {
+    setCurrentMarksDocTitle(docTitle);
+    setShowMarksModal(true);
+    setIsLoadingMarks(true);
+    
+    try {
+      // Fetch assessments linked to this doc
+      const q = query(collection(db, "assessments"), where("linkedDocId", "==", docId));
+      const snap = await getDocs(q);
+      const assessmentsData = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      // Fetch students to map names
+      const stuSnap = await getDocs(collection(db, "students"));
+      const studentsData = stuSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const studentMap = {};
+      studentsData.forEach(s => studentMap[s.id] = s);
+
+      // Process data for display
+      let records = [];
+      assessmentsData.forEach(assessment => {
+        const marks = assessment.marks || {};
+        Object.keys(marks).forEach(studentId => {
+          if (studentId.endsWith('_deduction')) return; // skip deduction keys
+          const student = studentMap[studentId];
+          if (!student) return;
+
+          const markVal = marks[studentId];
+          let finalMark = null;
+
+          // Simplified calculation for display
+          if (assessment.sectionsConfig && assessment.sectionsConfig.length > 0) {
+            let total = 0;
+            if (typeof markVal === 'object') {
+               Object.values(markVal).forEach(v => {
+                 if(v && !isNaN(parseFloat(v))) total += parseFloat(v);
+               });
+               finalMark = total;
+            } else {
+               finalMark = parseFloat(markVal);
+            }
+            const deduction = parseFloat(marks[`${studentId}_deduction`]) || 0;
+            if (!isNaN(finalMark)) finalMark -= deduction;
+          } else {
+            finalMark = parseFloat(markVal);
+            const deduction = parseFloat(marks[`${studentId}_deduction`]) || 0;
+            if (!isNaN(finalMark)) finalMark -= deduction;
+          }
+
+          if (finalMark !== null && !isNaN(finalMark)) {
+            records.push({
+              assessmentName: assessment.name,
+              term: assessment.term,
+              category: assessment.category,
+              className: student.className,
+              classNumber: student.classNumber,
+              studentName: student.englishName,
+              mark: finalMark.toFixed(1)
+            });
+          }
+        });
+      });
+
+      // Sort records by class, then class number
+      records.sort((a, b) => {
+        if (a.className !== b.className) return a.className.localeCompare(b.className);
+        return String(a.classNumber).localeCompare(String(b.classNumber), undefined, { numeric: true });
+      });
+
+      setLinkedMarksData(records);
+    } catch (error) {
+      console.error("Error fetching marks:", error);
+    }
+    setIsLoadingMarks(false);
+  };
 
   // ============================================================================
   // RENDER HELPERS
@@ -1581,6 +1711,14 @@ export default function Marks() {
                   <Calendar className="w-4 h-4 mr-1" /> {selectedAssessment.date}
                   {!isMultiSectionCategory && <span className="ml-2 bg-gray-100 px-2 py-0.5 rounded">Full Mark: {selectedAssessment.fullMark || 100}</span>}
                 </p>
+                {selectedAssessment.linkedDocId && (
+                  <button 
+                    onClick={() => handleOpenPreview(selectedAssessment.linkedDocId)}
+                    className="mt-2 text-sm text-indigo-600 hover:text-indigo-800 flex items-center font-medium bg-indigo-50 px-2 py-1 rounded border border-indigo-100 transition-colors"
+                  >
+                    <ExternalLink className="w-4 h-4 mr-1.5" /> View Linked Document
+                  </button>
+                )}
               </div>
               
               <div className="flex items-center space-x-3 flex-wrap gap-y-2 pl-8">
@@ -2260,6 +2398,81 @@ export default function Marks() {
         </div>
       )}
 
+      {/* Document Linker Modal */}
+      {showDocLinker && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-lg">
+              <h2 className="text-lg font-bold text-gray-800 flex items-center">
+                <LinkIcon className="w-5 h-5 mr-2 text-blue-600" />
+                Link Archive Document
+              </h2>
+              <button 
+                onClick={() => setShowDocLinker(false)}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            
+            <div className="p-4 bg-white border-b border-gray-200 flex flex-col sm:flex-row gap-3">
+              <div className="flex-1 relative">
+                <Search className="absolute left-3 top-2.5 text-gray-400 w-4 h-4" />
+                <input 
+                  type="text"
+                  placeholder="Search document title..."
+                  value={docSearchTerm}
+                  onChange={e => setDocSearchTerm(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-md text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <select 
+                value={docFilterOrigin}
+                onChange={e => setDocFilterOrigin(e.target.value)}
+                className="border border-gray-300 rounded-md px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">All Origins</option>
+                {uniqueOrigins.map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+              <select 
+                value={docFilterYear}
+                onChange={e => setDocFilterYear(e.target.value)}
+                className="border border-gray-300 rounded-md px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">All Years</option>
+                {uniqueYears.map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 bg-gray-50">
+              {filteredArchives.length === 0 ? (
+                <div className="text-center text-gray-500 py-10">No documents found matching criteria.</div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {filteredArchives.map(doc => (
+                    <div 
+                      key={doc.id}
+                      onClick={() => {
+                        setLinkedDocId(doc.id);
+                        setShowDocLinker(false);
+                      }}
+                      className={`p-3 rounded-lg border cursor-pointer transition-all ${linkedDocId === doc.id ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500' : 'border-gray-200 bg-white hover:border-blue-300 hover:bg-gray-50'}`}
+                    >
+                      <div className="font-bold text-gray-800 text-sm mb-1 truncate" title={doc.title}>{doc.title}</div>
+                      <div className="flex items-center gap-2 text-xs text-gray-500">
+                        <span className="bg-gray-100 px-1.5 py-0.5 rounded">{doc.year}</span>
+                        <span className="bg-gray-100 px-1.5 py-0.5 rounded truncate">{doc.origin}</span>
+                        <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">{doc.paperType || 'Unknown'}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Add/Edit Assessment Modal */}
       {showAddAssessment && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -2330,6 +2543,34 @@ export default function Marks() {
                       />
                     </div>
                   )}
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-semibold text-gray-700 mb-1 flex items-center gap-2">
+                      <LinkIcon className="w-4 h-4 text-blue-600" /> Link Archive Document (Optional)
+                    </label>
+                    <div className="flex items-center gap-3">
+                      <div className="flex-1 border border-gray-300 rounded-md p-2 text-sm bg-gray-50 text-gray-600 flex items-center justify-between">
+                        {linkedDocId ? (
+                          <span className="font-medium text-blue-700 truncate">
+                            {archives.find(a => a.id === linkedDocId)?.title || 'Unknown Document'}
+                          </span>
+                        ) : (
+                          <span className="italic text-gray-400">No document linked</span>
+                        )}
+                        {linkedDocId && (
+                          <button type="button" onClick={() => setLinkedDocId('')} className="text-gray-400 hover:text-red-500">
+                            <X className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                      <button 
+                        type="button"
+                        onClick={() => setShowDocLinker(true)}
+                        className="bg-blue-50 text-blue-700 px-4 py-2 rounded-md text-sm font-medium border border-blue-200 hover:bg-blue-100 transition-colors"
+                      >
+                        {linkedDocId ? 'Change' : 'Select Document'}
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
                 {isMultiSectionCategory && (
@@ -2501,6 +2742,241 @@ export default function Marks() {
           </div>
         </div>
       )}
+
+      {/* Preview Modal for Linked Document */}
+      {previewItem && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[70] flex items-center justify-center p-2 sm:p-4">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white rounded-xl w-full max-w-full h-full shadow-2xl flex flex-col overflow-hidden"
+          >
+            {/* Preview Header */}
+            <div className="px-6 py-3 border-b border-slate-200 flex justify-between items-center bg-white shrink-0 z-10 gap-4 flex-wrap">
+              <div className="flex items-center gap-4">
+                <div className="flex flex-col">
+                  <div className="flex items-center gap-2">
+                     <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                      {previewItem.parent.year || ''} • {previewItem.parent.origin || ''}
+                    </span>
+                    <span className={`text-xs px-2 py-0.5 rounded font-medium ${previewItem.parent.paperType?.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
+                      {previewItem.parent.paperType || 'Unknown'}
+                    </span>
+                  </div>
+                  <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    {viewingAnswer ? "Answer Key: " : ""}{previewItem.parent.title || 'Untitled Document'}
+                    <span className="bg-blue-100 text-blue-800 text-xs px-2 py-0.5 rounded-md font-bold ml-2">
+                      Full Paper View
+                    </span>
+                  </h2>
+                </div>
+              </div>
+
+              {/* STATS DISPLAY */}
+              {selectedAssessment && statsData && statsData.final && (() => {
+                const s = getStats(statsData.final.marks, statsData.final.fullMark);
+                if (!s) return null;
+                return (
+                  <div className="hidden md:flex items-center gap-4 text-xs bg-slate-50 border border-slate-200 rounded-lg px-4 py-1.5 shadow-sm">
+                    <div className="flex flex-col items-center"><span className="text-slate-400 font-semibold uppercase text-[10px]">Mean</span><span className="font-bold text-slate-700 text-sm">{s.mean}</span></div>
+                    <div className="w-px h-6 bg-slate-200"></div>
+                    <div className="flex flex-col items-center"><span className="text-slate-400 font-semibold uppercase text-[10px]">Median</span><span className="font-bold text-slate-700 text-sm">{s.median}</span></div>
+                    <div className="w-px h-6 bg-slate-200"></div>
+                    <div className="flex flex-col items-center"><span className="text-slate-400 font-semibold uppercase text-[10px]">Pass</span><span className={`font-bold text-sm ${s.passCount >= s.total / 2 ? 'text-green-600' : 'text-red-500'}`}>{s.passCount}/{s.total}</span></div>
+                    <div className="w-px h-6 bg-slate-200"></div>
+                    <div className="flex flex-col items-center"><span className="text-slate-400 font-semibold uppercase text-[10px]">Max</span><span className="font-bold text-blue-600 text-sm">{s.max}</span></div>
+                    <div className="w-px h-6 bg-slate-200"></div>
+                    <div className="flex flex-col items-center"><span className="text-slate-400 font-semibold uppercase text-[10px]">Min</span><span className="font-bold text-orange-500 text-sm">{s.min}</span></div>
+                  </div>
+                );
+              })()}
+
+              <div className="flex items-center gap-3">
+                {!viewingAnswer && previewItem.parent.hasAnswer && (
+                  <button 
+                    onClick={() => setViewingAnswer(true)}
+                    className="hidden sm:flex px-4 py-2 rounded-lg bg-green-600 text-white text-sm font-bold hover:bg-green-700 transition-all items-center gap-2"
+                  >
+                    <BookOpen size={16} /> Show Answer
+                  </button>
+                )}
+
+                {viewingAnswer && (
+                  <button 
+                    onClick={() => setViewingAnswer(false)}
+                    className="hidden sm:flex px-4 py-2 rounded-lg bg-slate-600 text-white text-sm font-bold hover:bg-slate-700 transition-all items-center gap-2"
+                  >
+                    <ArrowLeft size={16} /> Return to Question
+                  </button>
+                )}
+
+                <button 
+                  onClick={() => handleViewLinkedMarks(previewItem.parent.id, previewItem.parent.title)}
+                  className="hidden sm:flex px-4 py-2 rounded-lg bg-teal-600 text-white text-sm font-bold hover:bg-teal-700 transition-all items-center gap-2"
+                >
+                  <BarChart2 size={16} /> View Marks
+                </button>
+
+                {((!viewingAnswer && previewItem.parent.hasFile) || (viewingAnswer && previewItem.parent.hasAnswer)) && (
+                  <a 
+                    href={viewingAnswer ? previewItem.parent.answerFileUrl : previewItem.parent.fileUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="hidden sm:flex px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 transition-all items-center gap-2"
+                  >
+                    <Download size={16} /> {viewingAnswer ? "Download Answer" : "Download PDF"}
+                  </a>
+                )}
+                
+                <button 
+                  onClick={() => {
+                    setPreviewItem(null);
+                    setViewingAnswer(false);
+                  }} 
+                  className="text-slate-400 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 p-2 rounded-full transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+
+            {/* Preview Body */}
+            <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
+              {!viewingAnswer && (
+                <div className={`${previewItem.parent.hasFile ? 'md:w-1/3 lg:w-1/4 border-r border-slate-200' : 'w-full'} p-6 overflow-y-auto bg-slate-50 custom-scrollbar`}>
+                  <div className="space-y-6">
+                    <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                      <h3 className="text-sm font-bold text-slate-800 mb-2">Paper Overview</h3>
+                      <div className="flex flex-wrap gap-2">
+                        {(Array.isArray(previewItem.parent.topic) ? previewItem.parent.topic : (previewItem.parent.topic ? [previewItem.parent.topic] : [])).filter(Boolean).map((t, i) => (
+                          <span key={i} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1">
+                            <Tag size={12} /> {t}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                      <FileText size={14} /> All Sub-Questions
+                    </h3>
+
+                    {previewItem.parent.subQuestions?.map((sq, idx) => (
+                      <div key={sq.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                        <div className="flex justify-between items-start mb-2">
+                          <span className="bg-slate-800 text-white text-xs px-2 py-1 rounded-md font-bold">
+                            Q{sq.label}
+                          </span>
+                          {sq.marks && (
+                            <span className="text-xs text-slate-500 font-normal border border-slate-200 px-1.5 py-0.5 rounded bg-slate-50">
+                              {sq.marks} Marks
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap mb-3">
+                          {sq.content || <span className="text-slate-400 italic">No text content available.</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex-1 bg-slate-200 flex flex-col h-full relative">
+                {viewingAnswer ? (
+                  previewItem.parent.hasAnswer ? (
+                    <iframe 
+                      src={`${previewItem.parent.answerFileUrl}#view=Fit&pagemode=thumbs&page=1&zoom=page-fit`}
+                      className="w-full h-full"
+                      title="Answer Preview"
+                    />
+                  ) : (
+                    <div className="flex items-center justify-center h-full text-slate-500">No answer file available.</div>
+                  )
+                ) : (
+                  previewItem.parent.hasFile ? (
+                    <iframe 
+                      src={`${previewItem.parent.fileUrl}#view=Fit&pagemode=thumbs&page=1&zoom=page-fit`}
+                      className="w-full h-full"
+                      title="PDF Preview"
+                    />
+                  ) : (
+                    <div className="flex items-center justify-center h-full text-slate-500">No question file available.</div>
+                  )
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- LINKED MARKS MODAL --- */}
+      {showMarksModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[80] flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <div>
+                <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                  <BarChart2 size={20} className="text-teal-600" /> Linked Marks Record
+                </h2>
+                <p className="text-sm text-slate-500 mt-1">
+                  Showing all student marks linked to: <span className="font-bold text-slate-700">{currentMarksDocTitle}</span>
+                </p>
+              </div>
+              <button onClick={() => setShowMarksModal(false)} className="text-slate-400 hover:text-slate-800">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 bg-slate-50">
+              {isLoadingMarks ? (
+                <div className="flex flex-col items-center justify-center py-20">
+                  <Loader2 className="animate-spin text-teal-600 mb-4" size={40} />
+                  <p className="text-slate-500">Loading marks data...</p>
+                </div>
+              ) : linkedMarksData.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-20 text-slate-400 bg-white rounded-xl border border-slate-200 border-dashed">
+                  <BarChart2 size={48} className="mb-4 text-slate-300" />
+                  <h3 className="text-lg font-semibold text-slate-600">No Marks Found</h3>
+                  <p className="text-sm max-w-xs text-center mt-2">
+                    There are currently no student marks linked to this document.
+                  </p>
+                </div>
+              ) : (
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                  <table className="w-full text-left text-sm border-collapse">
+                    <thead className="bg-slate-100 border-b border-slate-200 text-slate-600 uppercase text-xs font-bold sticky top-0">
+                      <tr>
+                        <th className="px-4 py-3 border-r border-slate-200">Class</th>
+                        <th className="px-4 py-3 border-r border-slate-200">No.</th>
+                        <th className="px-4 py-3 border-r border-slate-200">Student Name</th>
+                        <th className="px-4 py-3 border-r border-slate-200">Assessment Name</th>
+                        <th className="px-4 py-3 border-r border-slate-200">Term / Category</th>
+                        <th className="px-4 py-3 text-right text-teal-700">Total Mark</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {linkedMarksData.map((record, idx) => (
+                        <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                          <td className="px-4 py-3 font-medium text-slate-700 border-r border-slate-200">{record.className}</td>
+                          <td className="px-4 py-3 text-slate-600 border-r border-slate-200">{record.classNumber}</td>
+                          <td className="px-4 py-3 font-medium text-slate-800 border-r border-slate-200">{record.studentName}</td>
+                          <td className="px-4 py-3 text-slate-700 border-r border-slate-200">{record.assessmentName}</td>
+                          <td className="px-4 py-3 text-slate-500 text-xs border-r border-slate-200">
+                            {record.term} <span className="mx-1">•</span> {record.category}
+                          </td>
+                          <td className="px-4 py-3 text-right font-bold text-teal-700 bg-teal-50/30">
+                            {record.mark}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

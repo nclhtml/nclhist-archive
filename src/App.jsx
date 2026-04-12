@@ -4,14 +4,15 @@ import {
   Tag, Edit, ChevronDown, Check, LogIn, User, Lock, ShieldAlert, Loader2, 
   Sparkles, ArrowUpDown, Eye, BookOpen, ArrowLeft, 
   FileDigit, Settings, Hash, ChevronLeft, ChevronRight,
-  Users, Shield, Layers, Save, Calendar, Clock, LayoutList, FileStack
+  Users, Shield, Layers, Save, Calendar, Clock, LayoutList, FileStack,
+  BarChart2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // --- ACTUAL FIREBASE & AUTH IMPORTS ---
 import { db, storage } from './firebase.js';
 import { useAuth } from './main.jsx';
-import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, setDoc, getDoc } from "firebase/firestore"; 
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, setDoc, getDoc, query, where } from "firebase/firestore"; 
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 // --- APP CONSTANTS ---
@@ -378,6 +379,12 @@ export default function AdvancedHistoryArchive() {
   const [previewItem, setPreviewItem] = useState(null); 
   const [viewingAnswer, setViewingAnswer] = useState(false); 
 
+  // Linked Marks Modal State
+  const [showMarksModal, setShowMarksModal] = useState(false);
+  const [linkedMarksData, setLinkedMarksData] = useState([]);
+  const [isLoadingMarks, setIsLoadingMarks] = useState(false);
+  const [currentMarksDocTitle, setCurrentMarksDocTitle] = useState('');
+
   // Dynamic Lists State
   const [availableTopics, setAvailableTopics] = useState(INITIAL_TOPICS);
   const [availableSourceTypes, setAvailableSourceTypes] = useState(INITIAL_SOURCE_TYPES);
@@ -649,6 +656,85 @@ export default function AdvancedHistoryArchive() {
     } finally {
       setIsManagingUsers(false);
     }
+  };
+
+  // --- FETCH LINKED MARKS ---
+  const handleViewLinkedMarks = async (docId, docTitle) => {
+    setCurrentMarksDocTitle(docTitle);
+    setShowMarksModal(true);
+    setIsLoadingMarks(true);
+    
+    try {
+      // Fetch assessments linked to this doc
+      const q = query(collection(db, "assessments"), where("linkedDocId", "==", docId));
+      const snap = await getDocs(q);
+      const assessmentsData = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      // Fetch students to map names
+      const stuSnap = await getDocs(collection(db, "students"));
+      const studentsData = stuSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const studentMap = {};
+      studentsData.forEach(s => studentMap[s.id] = s);
+
+      // Process data for display
+      let records = [];
+      assessmentsData.forEach(assessment => {
+        const marks = assessment.marks || {};
+        const fullMark = assessment.sectionsConfig && assessment.sectionsConfig.length > 0 ? 100 : (assessment.fullMark || 100);
+
+        Object.keys(marks).forEach(studentId => {
+          if (studentId.endsWith('_deduction')) return; // skip deduction keys
+          const student = studentMap[studentId];
+          if (!student) return;
+
+          const markVal = marks[studentId];
+          let finalMark = null;
+
+          // Simplified calculation for display
+          if (assessment.sectionsConfig && assessment.sectionsConfig.length > 0) {
+            let total = 0;
+            if (typeof markVal === 'object') {
+               Object.values(markVal).forEach(v => {
+                 if(v && !isNaN(parseFloat(v))) total += parseFloat(v);
+               });
+               finalMark = total;
+            } else {
+               finalMark = parseFloat(markVal);
+            }
+            const deduction = parseFloat(marks[`${studentId}_deduction`]) || 0;
+            if (!isNaN(finalMark)) finalMark -= deduction;
+          } else {
+            finalMark = parseFloat(markVal);
+            const deduction = parseFloat(marks[`${studentId}_deduction`]) || 0;
+            if (!isNaN(finalMark)) finalMark -= deduction;
+          }
+
+          if (finalMark !== null && !isNaN(finalMark)) {
+            records.push({
+              assessmentName: assessment.name,
+              term: assessment.term,
+              category: assessment.category,
+              className: student.className,
+              classNumber: student.classNumber,
+              studentName: student.englishName,
+              mark: finalMark.toFixed(1),
+              fullMark: fullMark
+            });
+          }
+        });
+      });
+
+      // Sort records by class, then class number
+      records.sort((a, b) => {
+        if (a.className !== b.className) return a.className.localeCompare(b.className);
+        return String(a.classNumber).localeCompare(String(b.classNumber), undefined, { numeric: true });
+      });
+
+      setLinkedMarksData(records);
+    } catch (error) {
+      console.error("Error fetching marks:", error);
+    }
+    setIsLoadingMarks(false);
   };
 
   // --- HELPER: Auto Labelling ---
@@ -1086,9 +1172,9 @@ export default function AdvancedHistoryArchive() {
   };
 
   useEffect(() => {
-    document.body.style.overflow = (isUploadModalOpen || previewItem || isManageFiltersOpen || isUserManagementOpen) ? 'hidden' : 'unset';
+    document.body.style.overflow = (isUploadModalOpen || previewItem || isManageFiltersOpen || isUserManagementOpen || showMarksModal) ? 'hidden' : 'unset';
     return () => { document.body.style.overflow = 'unset'; };
-  }, [isUploadModalOpen, previewItem, isManageFiltersOpen, isUserManagementOpen]);
+  }, [isUploadModalOpen, previewItem, isManageFiltersOpen, isUserManagementOpen, showMarksModal]);
 
   // --- RENDER CONTENT ---
   if (authLoading) {
@@ -1508,10 +1594,16 @@ export default function AdvancedHistoryArchive() {
                                  <BookOpen size={12} /> Answer Key Available
                               </div>
                             )}
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); handleViewLinkedMarks(parent.id, parent.title); }}
+                              className="w-full flex items-center justify-center gap-2 bg-teal-100 hover:bg-teal-200 text-teal-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
+                            >
+                              <BarChart2 size={16} /> View Marks
+                            </button>
                             {user.isAdmin && (
                               <button 
                                 onClick={(e) => handleEditClick(e, parent)}
-                                className="w-full flex items-center justify-center gap-2 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
+                                className="w-full flex items-center justify-center gap-2 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                               >
                                 <Edit size={16} /> Edit Parent
                               </button>
@@ -1609,10 +1701,16 @@ export default function AdvancedHistoryArchive() {
                                  <BookOpen size={12} /> Answer Key Available
                               </div>
                             )}
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); handleViewLinkedMarks(parent.id, parent.title); }}
+                              className="w-full flex items-center justify-center gap-2 bg-teal-100 hover:bg-teal-200 text-teal-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
+                            >
+                              <BarChart2 size={16} /> View Marks
+                            </button>
                             {user.isAdmin && (
                               <button 
                                 onClick={(e) => handleEditClick(e, parent)}
-                                className="w-full flex items-center justify-center gap-2 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
+                                className="w-full flex items-center justify-center gap-2 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                               >
                                 <Edit size={16} /> Edit Parent
                               </button>
@@ -2119,6 +2217,13 @@ export default function AdvancedHistoryArchive() {
                     </button>
                   )}
 
+                  <button 
+                    onClick={() => handleViewLinkedMarks(previewItem.parent.id, previewItem.parent.title)}
+                    className="hidden sm:flex px-4 py-2 rounded-lg bg-teal-600 text-white text-sm font-bold hover:bg-teal-700 transition-all items-center gap-2"
+                  >
+                    <BarChart2 size={16} /> View Marks
+                  </button>
+
                   {((!viewingAnswer && previewItem.parent.hasFile) || (viewingAnswer && previewItem.parent.hasAnswer)) && (
                     <a 
                       href={viewingAnswer ? previewItem.parent.answerFileUrl : previewItem.parent.fileUrl}
@@ -2272,6 +2377,110 @@ export default function AdvancedHistoryArchive() {
                     )
                   )}
                 </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* --- LINKED MARKS MODAL --- */}
+      <AnimatePresence>
+        {showMarksModal && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[80] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden"
+            >
+              <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50 flex-wrap gap-4">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    <BarChart2 size={20} className="text-teal-600" /> Linked Marks Record
+                  </h2>
+                  <p className="text-sm text-slate-500 mt-1">
+                    Showing all student marks linked to: <span className="font-bold text-slate-700">{currentMarksDocTitle}</span>
+                  </p>
+                </div>
+
+                {!isLoadingMarks && linkedMarksData.length > 0 && (() => {
+                  const validMarks = linkedMarksData.map(r => parseFloat(r.mark)).filter(m => !isNaN(m)).sort((a, b) => a - b);
+                  if (validMarks.length === 0) return null;
+                  const sum = validMarks.reduce((a, b) => a + b, 0);
+                  const mean = (sum / validMarks.length).toFixed(1);
+                  const mid = Math.floor(validMarks.length / 2);
+                  const median = validMarks.length % 2 !== 0 ? validMarks[mid].toFixed(1) : ((validMarks[mid - 1] + validMarks[mid]) / 2).toFixed(1);
+                  const max = validMarks[validMarks.length - 1].toFixed(1);
+                  const min = validMarks[0].toFixed(1);
+                  const passCount = linkedMarksData.filter(r => parseFloat(r.mark) >= (r.fullMark / 2)).length;
+                  const total = validMarks.length;
+
+                  return (
+                    <div className="hidden md:flex items-center gap-4 text-xs bg-white border border-slate-200 rounded-lg px-4 py-1.5 shadow-sm">
+                      <div className="flex flex-col items-center"><span className="text-slate-400 font-semibold uppercase text-[10px]">Mean</span><span className="font-bold text-slate-700 text-sm">{mean}</span></div>
+                      <div className="w-px h-6 bg-slate-200"></div>
+                      <div className="flex flex-col items-center"><span className="text-slate-400 font-semibold uppercase text-[10px]">Median</span><span className="font-bold text-slate-700 text-sm">{median}</span></div>
+                      <div className="w-px h-6 bg-slate-200"></div>
+                      <div className="flex flex-col items-center"><span className="text-slate-400 font-semibold uppercase text-[10px]">Pass</span><span className={`font-bold text-sm ${passCount >= total / 2 ? 'text-green-600' : 'text-red-500'}`}>{passCount}/{total}</span></div>
+                      <div className="w-px h-6 bg-slate-200"></div>
+                      <div className="flex flex-col items-center"><span className="text-slate-400 font-semibold uppercase text-[10px]">Max</span><span className="font-bold text-blue-600 text-sm">{max}</span></div>
+                      <div className="w-px h-6 bg-slate-200"></div>
+                      <div className="flex flex-col items-center"><span className="text-slate-400 font-semibold uppercase text-[10px]">Min</span><span className="font-bold text-orange-500 text-sm">{min}</span></div>
+                    </div>
+                  );
+                })()}
+
+                <button onClick={() => setShowMarksModal(false)} className="text-slate-400 hover:text-slate-800 ml-auto md:ml-0">
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 bg-slate-50">
+                {isLoadingMarks ? (
+                  <div className="flex flex-col items-center justify-center py-20">
+                    <Loader2 className="animate-spin text-teal-600 mb-4" size={40} />
+                    <p className="text-slate-500">Loading marks data...</p>
+                  </div>
+                ) : linkedMarksData.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-20 text-slate-400 bg-white rounded-xl border border-slate-200 border-dashed">
+                    <BarChart2 size={48} className="mb-4 text-slate-300" />
+                    <h3 className="text-lg font-semibold text-slate-600">No Marks Found</h3>
+                    <p className="text-sm max-w-xs text-center mt-2">
+                      There are currently no student marks linked to this document.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                    <table className="w-full text-left text-sm border-collapse">
+                      <thead className="bg-slate-100 border-b border-slate-200 text-slate-600 uppercase text-xs font-bold sticky top-0">
+                        <tr>
+                          <th className="px-4 py-3 border-r border-slate-200">Class</th>
+                          <th className="px-4 py-3 border-r border-slate-200">No.</th>
+                          <th className="px-4 py-3 border-r border-slate-200">Student Name</th>
+                          <th className="px-4 py-3 border-r border-slate-200">Assessment Name</th>
+                          <th className="px-4 py-3 border-r border-slate-200">Term / Category</th>
+                          <th className="px-4 py-3 text-right text-teal-700">Total Mark</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {linkedMarksData.map((record, idx) => (
+                          <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                            <td className="px-4 py-3 font-medium text-slate-700 border-r border-slate-200">{record.className}</td>
+                            <td className="px-4 py-3 text-slate-600 border-r border-slate-200">{record.classNumber}</td>
+                            <td className="px-4 py-3 font-medium text-slate-800 border-r border-slate-200">{record.studentName}</td>
+                            <td className="px-4 py-3 text-slate-700 border-r border-slate-200">{record.assessmentName}</td>
+                            <td className="px-4 py-3 text-slate-500 text-xs border-r border-slate-200">
+                              {record.term} <span className="mx-1">•</span> {record.category}
+                            </td>
+                            <td className="px-4 py-3 text-right font-bold text-teal-700 bg-teal-50/30">
+                              {record.mark}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </motion.div>
           </div>

@@ -4,7 +4,7 @@ import {
   ChevronRight, Loader2, FileText, CheckCircle, 
   PlusCircle, Trash2, ClipboardPaste, FormInput, Calculator,
   Layers, X, BarChart2, Copy, Eye, EyeOff, Settings, Edit2, Edit,
-  ChevronUp, ChevronDown, MinusCircle, ToggleLeft, ToggleRight, Percent
+  ChevronUp, ChevronDown, MinusCircle, ToggleLeft, ToggleRight, Percent, Info
 } from 'lucide-react';
 import { 
   collection, getDocs, doc, setDoc, updateDoc, 
@@ -108,6 +108,10 @@ export default function Marks() {
   const [showPresetManager, setShowPresetManager] = useState(false);
   const [newPresetName, setNewPresetName] = useState('');
   const [newPresetWeights, setNewPresetWeights] = useState({});
+  
+  // Modal specific selections
+  const [modalClass, setModalClass] = useState('');
+  const [modalTerm, setModalTerm] = useState('');
 
   // Helper to check if current category requires multi-section layout
   const isMultiSectionCategory = ['Uniform Test', 'Exam'].includes(selectedCategory);
@@ -159,14 +163,39 @@ export default function Marks() {
           loadedPresets = presetsSnap.data().list;
         }
 
+        let presetsUpdated = false;
+
         if (!loadedPresets.some(p => p.name === 'JS Geography')) {
-          const jsGeogPreset = {
+          loadedPresets.push({
             id: 'js-geog-preset',
             name: 'JS Geography',
             weights: { 'Assignments': 0, 'Quizzes': 0, 'Uniform Test': 50 }, 
             isCustom: true
-          };
-          loadedPresets.push(jsGeogPreset);
+          });
+          presetsUpdated = true;
+        }
+
+        if (!loadedPresets.some(p => p.name === 'Learning Attitude (Homework)')) {
+          loadedPresets.push({
+            id: 'la-hw-preset',
+            name: 'Learning Attitude (Homework)',
+            weights: {}, 
+            isCustom: true
+          });
+          presetsUpdated = true;
+        }
+
+        if (!loadedPresets.some(p => p.name === 'Learning Attitude (Lesson)')) {
+          loadedPresets.push({
+            id: 'la-lesson-preset',
+            name: 'Learning Attitude (Lesson)',
+            weights: {}, 
+            isCustom: true
+          });
+          presetsUpdated = true;
+        }
+
+        if (presetsUpdated) {
           await setDoc(doc(db, "settings", "presets"), { list: loadedPresets }, { merge: true });
         }
 
@@ -237,7 +266,7 @@ export default function Marks() {
             return matchesClass && matchesTerm;
           });
         
-        loadedAssessments.sort((a, b) => new Date(b.date) - new Date(a.date));
+        loadedAssessments.sort((a, b) => new Date(a.date) - new Date(b.date));
         setAssessments(loadedAssessments);
         
         if (isMultiSectionCategory) {
@@ -738,16 +767,64 @@ export default function Marks() {
 
   const allScaledTotals = [];
   
+  // Calculate Stats Data
+  const statsData = {
+    final: { marks: [], fullMark: selectedAssessment?.fullMark || 100 }
+  };
+
+  if (selectedAssessment) {
+    if (hasSections) {
+      selectedAssessment.sectionsConfig.forEach(sec => {
+        if (sec.hasSubSections) {
+          sec.subSections.forEach(sub => {
+            statsData[sub.id] = { marks: [], fullMark: parseFloat(sub.fullMark) };
+          });
+          statsData[`sec_${sec.id}`] = { marks: [], fullMark: sec.subSections.reduce((sum, sub) => sum + parseFloat(sub.fullMark), 0) };
+        } else {
+          statsData[sec.id] = { marks: [], fullMark: parseFloat(sec.fullMark) };
+        }
+      });
+      statsData.scaledTotal = { marks: [], fullMark: 100 };
+    } else {
+      statsData.main = { marks: [], fullMark: selectedAssessment.fullMark || 100 };
+    }
+  }
+  
   if (selectedAssessment && currentClassStudents.length > 0) {
     const totals = currentClassStudents
       .map(s => {
-        const rawTotal = calculateTotal(marksData[s.id]);
-        const scaledTotal = hasSections ? calculateScaledTotal(marksData[s.id], selectedAssessment.sectionsConfig) : rawTotal;
+        const studentMarks = marksData[s.id];
+        const rawTotal = calculateTotal(studentMarks);
+        const scaledTotal = hasSections ? calculateScaledTotal(studentMarks, selectedAssessment.sectionsConfig) : rawTotal;
         const deduction = parseFloat(marksData[`${s.id}_deduction`]) || 0;
         
         let finalTotal = null;
         if (scaledTotal !== null) {
           finalTotal = (scaledTotal - deduction);
+          statsData.final.marks.push(finalTotal);
+        }
+
+        if (hasSections) {
+          if (scaledTotal !== null) statsData.scaledTotal.marks.push(scaledTotal);
+          
+          selectedAssessment.sectionsConfig.forEach(sec => {
+            if (sec.hasSubSections) {
+              let secRawTotal = calculateSectionRawTotal(studentMarks, sec);
+              if (secRawTotal !== null) statsData[`sec_${sec.id}`].marks.push(secRawTotal);
+              
+              sec.subSections.forEach(sub => {
+                const val = (studentMarks && typeof studentMarks === 'object') ? studentMarks[sub.id] : null;
+                if (val !== null && val !== '' && !isNaN(val)) statsData[sub.id].marks.push(parseFloat(val));
+              });
+            } else {
+              const val = (studentMarks && typeof studentMarks === 'object') ? studentMarks[sec.id] : null;
+              if (val !== null && val !== '' && !isNaN(val)) statsData[sec.id].marks.push(parseFloat(val));
+            }
+          });
+        } else {
+          if (studentMarks !== null && studentMarks !== '' && !isNaN(studentMarks)) {
+            statsData.main.marks.push(parseFloat(studentMarks));
+          }
         }
         
         if (finalTotal !== null) allScaledTotals.push(finalTotal);
@@ -769,6 +846,35 @@ export default function Marks() {
       }
     }
   }
+
+  const getStats = (marksArray, fullMark) => {
+    const validMarks = marksArray.filter(m => m !== null && !isNaN(m)).map(Number).sort((a, b) => a - b);
+    if (validMarks.length === 0) return null;
+    
+    const sum = validMarks.reduce((a, b) => a + b, 0);
+    const mean = (sum / validMarks.length).toFixed(1);
+    
+    const mid = Math.floor(validMarks.length / 2);
+    const median = validMarks.length % 2 !== 0 ? validMarks[mid].toFixed(1) : ((validMarks[mid - 1] + validMarks[mid]) / 2).toFixed(1);
+    
+    const passThreshold = fullMark / 2;
+    const passCount = validMarks.filter(m => m >= passThreshold).length;
+    
+    return { mean, median, passCount, total: validMarks.length };
+  };
+
+  const StatCell = ({ stats, isBold, borderRight, borderLeft, bg }) => {
+    if (!stats) return <td className={`p-2 text-center text-xs text-gray-400 ${borderRight ? 'border-r border-gray-200' : ''} ${borderLeft ? 'border-l border-gray-200' : ''} ${bg || ''}`}>-</td>;
+    return (
+      <td className={`p-2 text-center text-xs ${isBold ? 'font-semibold text-blue-800' : 'text-gray-600'} ${borderRight ? 'border-r border-gray-200' : ''} ${borderLeft ? 'border-l border-gray-200' : ''} ${bg || ''}`}>
+        <div title="Mean">{stats.mean}</div>
+        <div title="Median" className="text-gray-500">{stats.median}</div>
+        <div title="Pass Count" className={`font-medium ${stats.passCount >= stats.total / 2 ? 'text-green-600' : 'text-red-500'}`}>
+          {stats.passCount}/{stats.total}
+        </div>
+      </td>
+    );
+  };
 
   const handleCopyTotals = () => {
     const totalsList = currentClassStudents.map(student => {
@@ -792,6 +898,21 @@ export default function Marks() {
       console.error('Failed to copy text: ', err);
       alert('Failed to copy totals.');
     });
+  };
+
+  // Generate data for the SD Graph Modal
+  const getGraphData = () => {
+    const bins = Array(10).fill(0).map((_, i) => ({ name: `${i * 10}-${i * 10 + 9}`, count: 0 }));
+    bins[9].name = '90-100'; // Adjust the last bin to include 100
+    
+    allScaledTotals.forEach(score => {
+      let index = Math.floor(score / 10);
+      if (index >= 10) index = 9;
+      if (index < 0) index = 0;
+      bins[index].count++;
+    });
+    
+    return bins;
   };
 
   // ============================================================================
@@ -841,7 +962,7 @@ export default function Marks() {
   };
 
   const calculateTermScores = async () => {
-    if (!selectedPresetId || !selectedClass || !selectedTerm) return;
+    if (!selectedPresetId || !modalClass || !modalTerm) return;
     setIsCalculatingScores(true);
     
     const preset = presets.find(p => p.id === selectedPresetId);
@@ -858,48 +979,53 @@ export default function Marks() {
         .map(doc => ({ id: doc.id, ...doc.data() }))
         .filter(a => {
           const matchesClass = (a.classes && Array.isArray(a.classes)) 
-            ? a.classes.includes(selectedClass) 
-            : a.className === selectedClass;
-          const matchesTerm = a.term === selectedTerm;
+            ? a.classes.includes(modalClass) 
+            : a.className === modalClass;
+          const matchesTerm = a.term === modalTerm;
           return matchesClass && matchesTerm;
         });
 
+      const modalStudents = students
+        .filter(s => s.className === modalClass)
+        .sort((a, b) => String(a.classNumber).localeCompare(String(b.classNumber), undefined, { numeric: true }));
+
       let scoresData = [];
+
+      const sumAssessments = (assessments, student) => {
+        let totalRaw = 0;
+        let totalFull = 0;
+        assessments.forEach(assessment => {
+          const marks = assessment.marks || {};
+          const studentMark = marks[student.id];
+          const deduction = parseFloat(marks[`${student.id}_deduction`]) || 0;
+          const isMulti = assessment.sectionsConfig && assessment.sectionsConfig.length > 0;
+
+          if (isMulti) {
+            const scaled = calculateScaledTotal(studentMark, assessment.sectionsConfig);
+            const actualMark = scaled !== null ? scaled : 0;
+            totalRaw += (actualMark - deduction);
+            totalFull += 100;
+          } else {
+            const raw = calculateTotal(studentMark);
+            const actualMark = raw !== null ? raw : 0;
+            totalRaw += (actualMark - deduction);
+            totalFull += (assessment.fullMark || 100);
+          }
+        });
+        return { raw: totalRaw, full: totalFull };
+      };
 
       if (preset.name === 'JS Geography') {
         const assignAssessments = allTermAssessments.filter(a => a.category === 'Assignments');
         const quizAssessments = allTermAssessments.filter(a => a.category === 'Quizzes');
         const utAssessments = allTermAssessments.filter(a => a.category === 'Uniform Test');
 
-        scoresData = currentClassStudents.map(student => {
+        scoresData = modalStudents.map(student => {
           let categoryScores = {};
           
-          const sumAssessments = (assessments, isMultiSection) => {
-            let totalRaw = 0;
-            let totalFull = 0;
-            assessments.forEach(assessment => {
-              const marks = assessment.marks || {};
-              const studentMark = marks[student.id];
-              const deduction = parseFloat(marks[`${student.id}_deduction`]) || 0;
-
-              if (isMultiSection && assessment.sectionsConfig) {
-                const scaled = calculateScaledTotal(studentMark, assessment.sectionsConfig);
-                const actualMark = scaled !== null ? scaled : 0;
-                totalRaw += (actualMark - deduction);
-                totalFull += 100;
-              } else {
-                const raw = calculateTotal(studentMark);
-                const actualMark = raw !== null ? raw : 0;
-                totalRaw += (actualMark - deduction);
-                totalFull += (assessment.fullMark || 100);
-              }
-            });
-            return { raw: totalRaw, full: totalFull };
-          };
-
-          const aStats = sumAssessments(assignAssessments, false);
-          const qStats = sumAssessments(quizAssessments, false);
-          const utStats = sumAssessments(utAssessments, true);
+          const aStats = sumAssessments(assignAssessments, student);
+          const qStats = sumAssessments(quizAssessments, student);
+          const utStats = sumAssessments(utAssessments, student);
 
           const combinedAQRaw = aStats.raw + qStats.raw;
           const combinedAQFull = aStats.full + qStats.full;
@@ -918,8 +1044,54 @@ export default function Marks() {
             overallScore: overallScore.toFixed(1)
           };
         });
+      } else if (preset.name === 'Learning Attitude (Homework)') {
+        const assignAssessments = allTermAssessments.filter(a => a.category === 'Assignments');
+        
+        scoresData = modalStudents.map(student => {
+          const aStats = sumAssessments(assignAssessments, student);
+          let score = 0;
+          if (aStats.full > 0) {
+            score = Math.round((aStats.raw / aStats.full) * 5);
+          }
+
+          let categoryScores = {
+            'Homework': { score: score, raw: aStats.raw, full: aStats.full, weight: 100 }
+          };
+
+          return {
+            student,
+            categoryScores,
+            overallScore: score.toString() // Integer
+          };
+        });
+      } else if (preset.name === 'Learning Attitude (Lesson)') {
+        const assignAssessments = allTermAssessments.filter(a => a.category === 'Assignments');
+
+        scoresData = modalStudents.map(student => {
+          const aStats = sumAssessments(assignAssessments, student);
+          let assignPercent = aStats.full > 0 ? (aStats.raw / aStats.full) : 0;
+          let recordCount = student.recordCount || 0;
+          
+          let bonus = assignPercent > 0.9 ? 1 : 0;
+          let score = 4 + bonus - Math.floor(recordCount / 2);
+          
+          if (assignPercent < 0.6) {
+            score = Math.min(score, 3);
+          }
+          score = Math.max(0, Math.min(5, score)); // Ensure it stays within 0-5
+
+          let categoryScores = {
+            'Lesson Attitude': { score: score, raw: recordCount, full: 0, weight: 100 }
+          };
+
+          return {
+            student,
+            categoryScores,
+            overallScore: score.toString() // Integer
+          };
+        });
       } else {
-        scoresData = currentClassStudents.map(student => {
+        scoresData = modalStudents.map(student => {
           let overallScore = 0;
           let categoryScores = {};
 
@@ -928,31 +1100,11 @@ export default function Marks() {
             if (weight === 0) return;
 
             const catAssessments = allTermAssessments.filter(a => a.category === cat);
-            
-            let studentCatTotal = 0;
-            let catFullTotal = 0;
+            const catStats = sumAssessments(catAssessments, student);
 
-            catAssessments.forEach(assessment => {
-              const marks = assessment.marks || {};
-              const studentMark = marks[student.id];
-              const deduction = parseFloat(marks[`${student.id}_deduction`]) || 0;
-
-              if (['Uniform Test', 'Exam'].includes(cat) && assessment.sectionsConfig) {
-                const scaled = calculateScaledTotal(studentMark, assessment.sectionsConfig);
-                const actualMark = scaled !== null ? scaled : 0;
-                studentCatTotal += (actualMark - deduction);
-                catFullTotal += 100; 
-              } else {
-                const raw = calculateTotal(studentMark);
-                const actualMark = raw !== null ? raw : 0;
-                studentCatTotal += (actualMark - deduction);
-                catFullTotal += (assessment.fullMark || 100);
-              }
-            });
-
-            if (catFullTotal > 0) {
-              const catScore = (studentCatTotal / catFullTotal) * weight;
-              categoryScores[cat] = { score: catScore, raw: studentCatTotal, full: catFullTotal, weight };
+            if (catStats.full > 0) {
+              const catScore = (catStats.raw / catStats.full) * weight;
+              categoryScores[cat] = { score: catScore, raw: catStats.raw, full: catStats.full, weight };
               overallScore += catScore;
             } else {
               categoryScores[cat] = { score: 0, raw: 0, full: 0, weight };
@@ -982,7 +1134,8 @@ export default function Marks() {
   const handleCopyTermScores = () => {
     if (termScoresData.length === 0) return;
     
-    const rows = termScoresData.map(data => parseFloat(data.overallScore).toFixed(1));
+    // overallScore is already formatted correctly as either an integer string or a 1-decimal string based on preset
+    const rows = termScoresData.map(data => data.overallScore);
     
     const textToCopy = rows.join('\n');
     navigator.clipboard.writeText(textToCopy).then(() => {
@@ -993,6 +1146,20 @@ export default function Marks() {
       alert('Failed to copy scores.');
     });
   };
+
+  // Modal Terms Logic
+  const modalTermsList = useMemo(() => {
+    if (!modalClass) return [];
+    return termsMap[modalClass] && termsMap[modalClass].length > 0 
+      ? termsMap[modalClass] 
+      : getDefaultTerms(modalClass);
+  }, [modalClass, termsMap]);
+
+  useEffect(() => {
+    if (modalClass && !modalTermsList.includes(modalTerm)) {
+      setModalTerm(modalTermsList[0] || '');
+    }
+  }, [modalClass, modalTermsList, modalTerm]);
 
   // ============================================================================
   // RENDER HELPERS
@@ -1005,8 +1172,50 @@ export default function Marks() {
     );
   }
 
+  // Calculate Overview Stats if no assessment is selected
+  let overviewStats = {};
+  let overviewTotalStats = { marks: [], fullMark: 0 };
+  
+  if (!selectedAssessment && assessments.length > 0) {
+    assessments.forEach(a => {
+      overviewStats[a.id] = { marks: [], fullMark: a.sectionsConfig ? 100 : (a.fullMark || 100) };
+      overviewTotalStats.fullMark += overviewStats[a.id].fullMark;
+    });
+
+    currentClassStudents.forEach(student => {
+      let studentTotal = 0;
+      let hasAnyMark = false;
+
+      assessments.forEach(a => {
+        const marks = a.marks || {};
+        const studentMark = marks[student.id];
+        const deduction = parseFloat(marks[`${student.id}_deduction`]) || 0;
+        const isMulti = a.sectionsConfig && a.sectionsConfig.length > 0;
+
+        let finalMark = null;
+        if (isMulti) {
+          const scaled = calculateScaledTotal(studentMark, a.sectionsConfig);
+          if (scaled !== null) finalMark = scaled - deduction;
+        } else {
+          const raw = calculateTotal(studentMark);
+          if (raw !== null) finalMark = raw - deduction;
+        }
+
+        if (finalMark !== null) {
+          overviewStats[a.id].marks.push(finalMark);
+          studentTotal += finalMark;
+          hasAnyMark = true;
+        }
+      });
+
+      if (hasAnyMark) {
+        overviewTotalStats.marks.push(studentTotal);
+      }
+    });
+  }
+
   return (
-    <div className="bg-gray-50 min-h-screen font-sans flex w-max min-w-full p-4 sm:p-6 gap-6">
+    <div className="bg-gray-50 min-h-screen font-sans flex w-full p-4 sm:p-6 gap-6">
       
       {/* Left Sidebar */}
       <div className="w-64 xl:w-72 flex-shrink-0 sticky left-4 top-6 space-y-6 z-20 h-max">
@@ -1059,7 +1268,12 @@ export default function Marks() {
 
           <div className="pt-3 border-t border-gray-100">
             <button 
-              onClick={() => setShowTermScoreModal(true)}
+              onClick={() => {
+                setModalClass(selectedClass);
+                setModalTerm(selectedTerm);
+                setTermScoresData([]);
+                setShowTermScoreModal(true);
+              }}
               className="w-full flex items-center justify-center px-4 py-2 text-sm font-bold rounded-md transition-colors border shadow-sm bg-purple-50 text-purple-700 hover:bg-purple-100 border-purple-200"
             >
               <Calculator className="w-4 h-4 mr-2" />
@@ -1067,22 +1281,20 @@ export default function Marks() {
             </button>
           </div>
 
-          {isMultiSectionCategory && (
-            <div className="pt-3 border-t border-gray-100">
-              <button 
-                onClick={() => setStudentView(!studentView)}
-                className={`w-full flex items-center justify-center px-4 py-2 text-sm font-bold rounded-md transition-colors border shadow-sm ${
-                  studentView 
-                    ? 'bg-amber-100 text-amber-800 border-amber-300' 
-                    : 'bg-gray-50 text-gray-700 hover:bg-gray-100 border-gray-200'
-                }`}
-                title="Toggle Student View (Hide individual marks)"
-              >
-                {studentView ? <EyeOff className="w-4 h-4 mr-2" /> : <Eye className="w-4 h-4 mr-2" />}
-                {studentView ? 'Student View: ON' : 'Student View: OFF'}
-              </button>
-            </div>
-          )}
+          <div className="pt-3 border-t border-gray-100">
+            <button 
+              onClick={() => setStudentView(!studentView)}
+              className={`w-full flex items-center justify-center px-4 py-2 text-sm font-bold rounded-md transition-colors border shadow-sm ${
+                studentView 
+                  ? 'bg-amber-100 text-amber-800 border-amber-300' 
+                  : 'bg-gray-50 text-gray-700 hover:bg-gray-100 border-gray-200'
+              }`}
+              title="Toggle Student View (Hide individual marks)"
+            >
+              {studentView ? <EyeOff className="w-4 h-4 mr-2" /> : <Eye className="w-4 h-4 mr-2" />}
+              {studentView ? 'Student View: ON' : 'Student View: OFF'}
+            </button>
+          </div>
         </div>
 
         {/* Categories */}
@@ -1116,7 +1328,7 @@ export default function Marks() {
             {categories.map(cat => (
               <li key={cat}>
                 <div
-                  onClick={() => setSelectedCategory(cat)}
+                  onClick={() => { setSelectedCategory(cat); setSelectedAssessment(null); }}
                   className={`w-full text-left px-4 py-3 text-sm font-medium transition-colors flex items-center justify-between cursor-pointer ${
                     selectedCategory === cat ? 'bg-blue-50 text-blue-700 border-l-4 border-blue-600' : 'text-gray-600 hover:bg-gray-50'
                   }`}
@@ -1156,32 +1368,44 @@ export default function Marks() {
               {assessments.length === 0 ? (
                 <li className="p-4 text-sm text-gray-500 text-center italic">No items found for {selectedTerm}.</li>
               ) : (
-                assessments.map(item => (
-                  <li key={item.id}>
+                <>
+                  <li>
                     <div
-                      onClick={() => setSelectedAssessment(item)}
+                      onClick={() => setSelectedAssessment(null)}
                       className={`w-full text-left px-4 py-3 transition-colors cursor-pointer flex justify-between items-center ${
-                        selectedAssessment?.id === item.id ? 'bg-blue-50' : 'hover:bg-gray-50'
+                        !selectedAssessment ? 'bg-blue-50 text-blue-700 font-bold' : 'hover:bg-gray-50 text-gray-700 font-medium'
                       }`}
                     >
-                      <div className="overflow-hidden pr-2">
-                        <div className={`font-medium text-sm truncate ${selectedAssessment?.id === item.id ? 'text-blue-700' : 'text-gray-800'}`}>
-                          {item.name}
-                        </div>
-                        <div className="text-xs text-gray-500 flex items-center mt-1">
-                          <Calendar className="w-3 h-3 mr-1" /> {item.date} | Full: {item.fullMark || 100}
-                        </div>
-                      </div>
-                      <button 
-                        onClick={(e) => handleDeleteAssessment(item.id, e)}
-                        className="text-gray-400 hover:text-red-500 p-1 flex-shrink-0"
-                        title="Delete Assessment"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      Overview
                     </div>
                   </li>
-                ))
+                  {assessments.map(item => (
+                    <li key={item.id}>
+                      <div
+                        onClick={() => setSelectedAssessment(item)}
+                        className={`w-full text-left px-4 py-3 transition-colors cursor-pointer flex justify-between items-center ${
+                          selectedAssessment?.id === item.id ? 'bg-blue-50' : 'hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="overflow-hidden pr-2">
+                          <div className={`font-medium text-sm truncate ${selectedAssessment?.id === item.id ? 'text-blue-700' : 'text-gray-800'}`}>
+                            {item.name}
+                          </div>
+                          <div className="text-xs text-gray-500 flex items-center mt-1">
+                            <Calendar className="w-3 h-3 mr-1" /> {item.date} | Full: {item.fullMark || 100}
+                          </div>
+                        </div>
+                        <button 
+                          onClick={(e) => handleDeleteAssessment(item.id, e)}
+                          className="text-gray-400 hover:text-red-500 p-1 flex-shrink-0"
+                          title="Delete Assessment"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </>
               )}
             </ul>
           </div>
@@ -1189,30 +1413,143 @@ export default function Marks() {
       </div>
 
       {/* Right Main Area */}
-      <div className="flex-1 flex justify-center items-start min-w-0">
+      <div className="flex-1 flex flex-col min-w-0">
         {!selectedAssessment ? (
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 flex flex-col items-center justify-center text-gray-500 w-full max-w-3xl mt-12">
-            <FileText className="w-16 h-16 text-gray-300 mb-4" />
-            {isMultiSectionCategory ? (
-              <>
-                <h3 className="text-xl font-medium text-gray-700 mb-2">No {selectedCategory} configured for {selectedTerm}</h3>
-                <p className="mb-6 text-center">Click below to configure the sections and full marks for this term's {selectedCategory}.</p>
-                <button 
-                  onClick={openAddModal}
-                  className="px-6 py-2 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 flex items-center shadow-sm"
-                >
-                  <Settings className="w-5 h-5 mr-2" /> Configure {selectedCategory}
-                </button>
-              </>
-            ) : (
-              <>
-                <h3 className="text-xl font-medium text-gray-700 mb-2">No Assessment Selected</h3>
-                <p>Select an item from the left menu or create a new one to start entering marks.</p>
-              </>
-            )}
-          </div>
+          assessments.length === 0 ? (
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 flex flex-col items-center justify-center text-gray-500 w-full max-w-3xl mt-12 self-center">
+              <FileText className="w-16 h-16 text-gray-300 mb-4" />
+              {isMultiSectionCategory ? (
+                <>
+                  <h3 className="text-xl font-medium text-gray-700 mb-2">No {selectedCategory} configured for {selectedTerm}</h3>
+                  <p className="mb-6 text-center">Click below to configure the sections and full marks for this term's {selectedCategory}.</p>
+                  <button 
+                    onClick={openAddModal}
+                    className="px-6 py-2 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 flex items-center shadow-sm"
+                  >
+                    <Settings className="w-5 h-5 mr-2" /> Configure {selectedCategory}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <h3 className="text-xl font-medium text-gray-700 mb-2">No Items Found</h3>
+                  <p>Create a new assessment to start entering marks.</p>
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="w-full bg-white rounded-lg shadow-sm border border-gray-200 flex flex-col">
+              <div className="p-4 border-b border-gray-200 bg-white rounded-t-lg">
+                <h2 className="text-xl font-bold text-gray-800 flex items-center">
+                  <Layers className="w-6 h-6 mr-2 text-blue-600" />
+                  {selectedTerm} {selectedCategory} Overview
+                </h2>
+                <p className="text-sm text-gray-500 mt-1">Class: {selectedClass}</p>
+              </div>
+              <div className="overflow-x-auto w-full">
+                <table className="w-max mx-auto text-left border-collapse bg-white min-w-max">
+                  <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
+                    <tr className="text-gray-600 text-sm uppercase tracking-wider">
+                      <th className="p-3 border-b w-16 text-center">No.</th>
+                      <th className="p-3 border-b w-56 border-r border-gray-200">Name</th>
+                      {assessments.map(a => (
+                        <th key={a.id} className="p-3 border-b w-32 text-center border-r border-gray-200">
+                          <div className="truncate" title={a.name}>{a.name}</div>
+                          <div className="text-[10px] text-gray-400 normal-case font-normal mt-1">
+                            Full: {a.sectionsConfig ? 100 : (a.fullMark || 100)}
+                          </div>
+                        </th>
+                      ))}
+                      <th className="p-3 border-b w-32 text-center font-bold text-blue-700 bg-blue-50">
+                        Total
+                        <div className="text-[10px] text-blue-500 normal-case font-normal mt-1">
+                          Full: {overviewTotalStats.fullMark}
+                        </div>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {currentClassStudents.length === 0 ? (
+                      <tr>
+                        <td colSpan={assessments.length + 3} className="p-8 text-center text-gray-500">
+                          No students found in {selectedClass}.
+                        </td>
+                      </tr>
+                    ) : (
+                      <>
+                        {currentClassStudents.map(student => {
+                          let studentTotal = 0;
+                          let hasAnyMark = false;
+
+                          return (
+                            <tr key={student.id} className="hover:bg-gray-50 transition-colors">
+                              <td className="p-3 font-medium text-gray-800 text-center">{student.classNumber}</td>
+                              <td className="p-3 text-gray-700 border-r border-gray-200">
+                                <div className="truncate">{student.englishName}</div>
+                              </td>
+                              {assessments.map(a => {
+                                const marks = a.marks || {};
+                                const studentMark = marks[student.id];
+                                const deduction = parseFloat(marks[`${student.id}_deduction`]) || 0;
+                                const isMulti = a.sectionsConfig && a.sectionsConfig.length > 0;
+
+                                let finalMark = null;
+                                if (isMulti) {
+                                  const scaled = calculateScaledTotal(studentMark, a.sectionsConfig);
+                                  if (scaled !== null) finalMark = scaled - deduction;
+                                } else {
+                                  const raw = calculateTotal(studentMark);
+                                  if (raw !== null) finalMark = raw - deduction;
+                                }
+
+                                if (finalMark !== null) {
+                                  studentTotal += finalMark;
+                                  hasAnyMark = true;
+                                }
+                                
+                                const isMissing = finalMark === null;
+
+                                return (
+                                  <td key={a.id} className={`p-3 text-center border-r border-gray-200 ${isMissing ? 'bg-red-50' : ''}`}>
+                                    {isMissing ? '-' : (studentView ? '***' : finalMark.toFixed(1))}
+                                  </td>
+                                );
+                              })}
+                              <td className={`p-3 text-center font-bold text-blue-700 ${!hasAnyMark ? 'bg-red-50' : 'bg-blue-50/50'}`}>
+                                {!hasAnyMark ? '-' : (studentView ? '***' : studentTotal.toFixed(1))}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {/* Overview Stats Row */}
+                        {currentClassStudents.length > 0 && (
+                          <tr className="bg-blue-50/50 border-t-2 border-blue-200">
+                            <td colSpan={2} className="p-3 font-bold text-right text-blue-800 border-r border-gray-200">
+                              Statistics<br/>
+                              <span className="text-[10px] font-normal text-blue-600">Mean / Median / Pass</span>
+                            </td>
+                            {assessments.map(a => (
+                              <StatCell 
+                                key={a.id} 
+                                stats={getStats(overviewStats[a.id].marks, overviewStats[a.id].fullMark)} 
+                                borderRight 
+                              />
+                            ))}
+                            <StatCell 
+                              stats={getStats(overviewTotalStats.marks, overviewTotalStats.fullMark)} 
+                              isBold 
+                              bg="bg-blue-100/50" 
+                            />
+                          </tr>
+                        )}
+                      </>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )
         ) : (
-          <div className="w-max bg-white rounded-lg shadow-sm border border-gray-200 flex flex-col h-max">
+          <div className="w-full bg-white rounded-lg shadow-sm border border-gray-200 flex flex-col">
             {/* Header */}
             <div className="p-4 border-b border-gray-200 flex flex-col md:flex-row md:justify-between md:items-center bg-white rounded-t-lg gap-4">
               <div>
@@ -1249,7 +1586,7 @@ export default function Marks() {
               <div className="flex items-center space-x-3 flex-wrap gap-y-2 pl-8">
                 <button 
                   onClick={handleCopyTotals}
-                  className="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors bg-teal-50 text-teal-700 hover:bg-teal-100 border border-teal-200"
+                  className="flex items-center justify-center w-[135px] px-3 py-2 text-sm font-medium rounded-md transition-colors bg-teal-50 text-teal-700 hover:bg-teal-100 border border-teal-200"
                   title="Copy total marks vertically for WebSAMS (T1A3/T2A3)"
                 >
                   {copySuccess ? <CheckCircle className="w-4 h-4 mr-1.5" /> : <Copy className="w-4 h-4 mr-1.5" />}
@@ -1311,8 +1648,8 @@ export default function Marks() {
               </div>
             )}
 
-            <div>
-              <table className="w-full text-left border-collapse bg-white">
+            <div className="overflow-x-auto w-full">
+              <table className="w-max mx-auto text-left border-collapse bg-white min-w-max">
                 <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
                   {hasSections && (
                     <tr className="text-gray-600 text-sm uppercase tracking-wider border-b border-gray-200">
@@ -1436,45 +1773,47 @@ export default function Marks() {
                                         <>
                                           {sec.subSections.map(sub => {
                                             const val = (studentMarks && typeof studentMarks === 'object') ? (studentMarks[sub.id] || '') : '';
+                                            const isMissing = val === '';
                                             const currentCol = globalColIndex++;
                                             return (
-                                              <td key={sub.id} className="p-2 text-center">
+                                              <td key={sub.id} className={`p-2 text-center ${isMissing ? 'bg-red-50' : ''}`}>
                                                 <input 
                                                   type="text" 
                                                   data-row={rowIndex}
                                                   data-col={currentCol}
-                                                  value={studentView ? '***' : val}
+                                                  value={studentView ? (isMissing ? '' : '***') : val}
                                                   onChange={(e) => { if(!studentView) handleMarkChange(student.id, e.target.value, sub.id) }}
                                                   onKeyDown={(e) => handleKeyDown(e, rowIndex, currentCol)}
                                                   disabled={inputMethod === 'bulk' || studentView}
                                                   className={`w-full max-w-[70px] border rounded-md p-1.5 text-center outline-none transition-colors focus:ring-2 focus:ring-blue-500 ${
-                                                    (inputMethod === 'bulk' || studentView) ? 'bg-gray-100 text-gray-500' : 'bg-white'
-                                                  } ${val && !studentView ? 'border-gray-300' : 'border-dashed border-gray-300'}`}
+                                                    isMissing ? 'bg-red-50 border-red-300' : (inputMethod === 'bulk' || studentView ? 'bg-gray-100 text-gray-500' : 'bg-white')
+                                                  } ${!isMissing && !studentView ? 'border-gray-300' : 'border-dashed border-gray-300'}`}
                                                 />
                                               </td>
                                             );
                                           })}
-                                          <td className="p-2 font-semibold text-gray-600 bg-gray-50/50 text-center border-r border-gray-200">
-                                            {studentView ? '***' : (secRawTotal !== null ? secRawTotal.toFixed(1) : '-')}
+                                          <td className={`p-2 font-semibold text-gray-600 text-center border-r border-gray-200 ${secRawTotal === null ? 'bg-red-50' : 'bg-gray-50/50'}`}>
+                                            {secRawTotal === null ? '-' : (studentView ? '***' : secRawTotal.toFixed(1))}
                                           </td>
                                         </>
                                       ) : (
-                                        <td className="p-2 text-center border-r border-gray-200">
+                                        <td className={`p-2 text-center border-r border-gray-200 ${((studentMarks && typeof studentMarks === 'object') ? (studentMarks[sec.id] || '') : '') === '' ? 'bg-red-50' : ''}`}>
                                           {(() => {
                                             const val = (studentMarks && typeof studentMarks === 'object') ? (studentMarks[sec.id] || '') : '';
+                                            const isMissing = val === '';
                                             const currentCol = globalColIndex++;
                                             return (
                                               <input 
                                                 type="text" 
                                                 data-row={rowIndex}
                                                 data-col={currentCol}
-                                                value={studentView ? '***' : val}
+                                                value={studentView ? (isMissing ? '' : '***') : val}
                                                 onChange={(e) => { if(!studentView) handleMarkChange(student.id, e.target.value, sec.id) }}
                                                 onKeyDown={(e) => handleKeyDown(e, rowIndex, currentCol)}
                                                 disabled={inputMethod === 'bulk' || studentView}
                                                 className={`w-full max-w-[70px] border rounded-md p-1.5 text-center outline-none transition-colors focus:ring-2 focus:ring-blue-500 ${
-                                                  (inputMethod === 'bulk' || studentView) ? 'bg-gray-100 text-gray-500' : 'bg-white'
-                                                } ${val && !studentView ? 'border-gray-300' : 'border-dashed border-gray-300'}`}
+                                                  isMissing ? 'bg-red-50 border-red-300' : (inputMethod === 'bulk' || studentView ? 'bg-gray-100 text-gray-500' : 'bg-white')
+                                                } ${!isMissing && !studentView ? 'border-gray-300' : 'border-dashed border-gray-300'}`}
                                               />
                                             );
                                           })()}
@@ -1483,23 +1822,23 @@ export default function Marks() {
                                     </React.Fragment>
                                   );
                                 })}
-                                <td className="p-3 font-semibold text-center text-gray-600">
-                                  {studentView ? '***' : (scaledTotal !== null ? scaledTotal.toFixed(1) : '-')}
+                                <td className={`p-3 font-semibold text-center text-gray-600 ${scaledTotal === null ? 'bg-red-50' : ''}`}>
+                                  {scaledTotal === null ? '-' : (studentView ? '***' : scaledTotal.toFixed(1))}
                                 </td>
                               </>
                             ) : (
-                              <td className="p-3">
+                              <td className={`p-3 ${!hasMark ? 'bg-red-50' : ''}`}>
                                 <input 
                                   type="text" 
                                   data-row={rowIndex}
                                   data-col={0}
-                                  value={studentView ? '***' : (studentMarks || '')}
+                                  value={studentView ? (!hasMark ? '' : '***') : (studentMarks || '')}
                                   onChange={(e) => { if(!studentView) handleMarkChange(student.id, e.target.value) }}
                                   onKeyDown={(e) => handleKeyDown(e, rowIndex, 0)}
                                   disabled={inputMethod === 'bulk' || studentView}
                                   placeholder={inputMethod === 'bulk' ? "Pasted from above..." : "Enter mark..."}
                                   className={`w-full max-w-[200px] border rounded-md p-2 outline-none transition-colors focus:ring-2 focus:ring-blue-500 ${
-                                    (inputMethod === 'bulk' || studentView) ? 'bg-gray-100 text-gray-500' : 'bg-white'
+                                    !hasMark ? 'bg-red-50 border-red-300' : (inputMethod === 'bulk' || studentView ? 'bg-gray-100 text-gray-500' : 'bg-white')
                                   } ${hasMark && !studentView ? 'border-gray-300' : 'border-dashed border-gray-300'}`}
                                 />
                               </td>
@@ -1518,8 +1857,8 @@ export default function Marks() {
                               </td>
                             )}
                             
-                            <td className={`p-3 font-bold text-center border-l border-gray-200 ${isTopMark && !studentView ? 'bg-yellow-200 text-yellow-800' : 'text-blue-700 bg-blue-50/50'}`}>
-                              {studentView ? '***' : (finalTotal !== null ? finalTotal.toFixed(1) : '-')}
+                            <td className={`p-3 font-bold text-center border-l border-gray-200 ${finalTotal === null ? 'bg-red-50' : (isTopMark && !studentView ? 'bg-yellow-200 text-yellow-800' : 'text-blue-700 bg-blue-50/50')}`}>
+                              {finalTotal === null ? '-' : (studentView ? '***' : finalTotal.toFixed(1))}
                             </td>
 
                             <td className="p-3 text-center">
@@ -1532,6 +1871,43 @@ export default function Marks() {
                           </tr>
                         );
                       })}
+
+                      {/* Statistics Row */}
+                      {currentClassStudents.length > 0 && (
+                        <tr className="bg-blue-50/50 border-t-2 border-blue-200">
+                          <td colSpan={2} className="p-3 font-bold text-right text-blue-800 border-r border-gray-200">
+                            Statistics<br/>
+                            <span className="text-[10px] font-normal text-blue-600">Mean / Median / Pass</span>
+                          </td>
+                          
+                          {hasSections ? (
+                            <>
+                              {selectedAssessment.sectionsConfig.map(sec => (
+                                <React.Fragment key={sec.id}>
+                                  {sec.hasSubSections ? (
+                                    <>
+                                      {sec.subSections.map(sub => (
+                                        <StatCell key={sub.id} stats={getStats(statsData[sub.id].marks, statsData[sub.id].fullMark)} />
+                                      ))}
+                                      <StatCell stats={getStats(statsData[`sec_${sec.id}`].marks, statsData[`sec_${sec.id}`].fullMark)} isBold borderRight />
+                                    </>
+                                  ) : (
+                                    <StatCell stats={getStats(statsData[sec.id].marks, statsData[sec.id].fullMark)} borderRight />
+                                  )}
+                                </React.Fragment>
+                              ))}
+                              <StatCell stats={getStats(statsData.scaledTotal.marks, statsData.scaledTotal.fullMark)} isBold />
+                            </>
+                          ) : (
+                            <StatCell stats={getStats(statsData.main.marks, statsData.main.fullMark)} />
+                          )}
+                          
+                          {showDeduct && !studentView && <td className="p-2 border-l border-gray-200 bg-gray-50"></td>}
+                          
+                          <StatCell stats={getStats(statsData.final.marks, statsData.final.fullMark)} isBold borderLeft bg="bg-blue-100/50" />
+                          <td className="p-3"></td>
+                        </tr>
+                      )}
                     </>
                   )}
                 </tbody>
@@ -1541,10 +1917,109 @@ export default function Marks() {
         )}
       </div>
 
+      {/* Term Manager Modal */}
+      {showTermManager && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md flex flex-col">
+            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-lg">
+              <h2 className="text-lg font-bold text-gray-800 flex items-center">
+                <Settings className="w-5 h-5 mr-2 text-gray-600" />
+                Manage Terms for {selectedClass}
+              </h2>
+              <button 
+                onClick={() => setShowTermManager(false)}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            <div className="p-6">
+              <form onSubmit={handleAddTerm} className="mb-6 bg-gray-50 p-4 rounded-lg border border-gray-200">
+                <h3 className="font-semibold text-gray-700 mb-3 text-sm">Add New Term</h3>
+                <div className="flex space-x-2">
+                  <input 
+                    type="text" 
+                    value={newTermName}
+                    onChange={(e) => setNewTermName(e.target.value)}
+                    placeholder="e.g. Term 3"
+                    className="flex-1 border border-gray-300 rounded p-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                  <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-blue-700">Add</button>
+                </div>
+              </form>
+
+              <h3 className="font-semibold text-gray-700 mb-2 text-sm">Existing Terms</h3>
+              <ul className="divide-y divide-gray-100 border border-gray-200 rounded-md max-h-64 overflow-y-auto">
+                {terms.map((t, index) => (
+                  <li key={t} className="flex flex-col p-3 hover:bg-gray-50">
+                    {editingTerm === t ? (
+                      <div className="flex items-center space-x-2">
+                        <input 
+                          type="text" 
+                          value={editTermName}
+                          onChange={(e) => setEditTermName(e.target.value)}
+                          className="flex-1 border border-gray-300 rounded p-1 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          autoFocus
+                        />
+                        <button onClick={() => handleUpdateTerm(t)} className="text-green-600 hover:text-green-800 p-1"><CheckCircle className="w-4 h-4" /></button>
+                        <button onClick={() => setEditingTerm(null)} className="text-gray-400 hover:text-gray-600 p-1"><X className="w-4 h-4" /></button>
+                      </div>
+                    ) : (
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm font-medium text-gray-700">{t}</span>
+                        <div className="flex items-center space-x-1">
+                          <button onClick={() => handleMoveTerm(index, 'up')} disabled={index === 0} className={`p-1 ${index === 0 ? 'text-gray-300' : 'text-gray-500 hover:text-blue-600'}`}><ChevronUp className="w-4 h-4" /></button>
+                          <button onClick={() => handleMoveTerm(index, 'down')} disabled={index === terms.length - 1} className={`p-1 ${index === terms.length - 1 ? 'text-gray-300' : 'text-gray-500 hover:text-blue-600'}`}><ChevronDown className="w-4 h-4" /></button>
+                          <button onClick={() => { setEditingTerm(t); setEditTermName(t); }} className="text-blue-500 hover:text-blue-700 p-1 ml-2"><Edit2 className="w-4 h-4" /></button>
+                          <button onClick={() => handleDeleteTerm(t)} className="text-red-400 hover:text-red-600 p-1"><Trash2 className="w-4 h-4" /></button>
+                        </div>
+                      </div>
+                    )}
+                  </li>
+                ))}
+                {terms.length === 0 && <li className="p-3 text-sm text-gray-500 text-center">No terms available.</li>}
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SD Graph Modal */}
+      {showGraphModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl flex flex-col">
+            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-lg">
+              <h2 className="text-lg font-bold text-gray-800 flex items-center">
+                <BarChart2 className="w-5 h-5 mr-2 text-purple-600" />
+                Score Distribution
+              </h2>
+              <button 
+                onClick={() => setShowGraphModal(false)}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            <div className="p-6 h-96">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={getGraphData()}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" />
+                  <YAxis allowDecimals={false} />
+                  <Tooltip />
+                  <Bar dataKey="count" fill="#8b5cf6" name="Number of Students" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Term Score Modal */}
       {showTermScoreModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-5xl max-h-[90vh] flex flex-col">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-5xl h-[85vh] flex flex-col">
             <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-lg">
               <h2 className="text-lg font-bold text-gray-800 flex items-center">
                 <Calculator className="w-5 h-5 mr-2 text-purple-600" />
@@ -1559,22 +2034,55 @@ export default function Marks() {
             </div>
             
             <div className="p-4 bg-white flex flex-col md:flex-row justify-between items-center border-b border-gray-200 gap-4">
-              <div className="flex items-center space-x-3 w-full md:w-auto">
-                <label className="font-semibold text-gray-700 text-sm">Preset:</label>
-                <select 
-                  value={selectedPresetId}
-                  onChange={(e) => setSelectedPresetId(e.target.value)}
-                  className="border border-gray-300 rounded-md p-2 text-sm outline-none focus:ring-2 focus:ring-purple-500 min-w-[200px]"
-                >
-                  {presets.length === 0 && <option value="">No presets available</option>}
-                  {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-                <button 
-                  onClick={() => setShowPresetManager(true)}
-                  className="text-sm bg-gray-100 text-gray-700 px-3 py-2 rounded-md hover:bg-gray-200 transition-colors font-medium border border-gray-300"
-                >
-                  Manage Presets
-                </button>
+              <div className="flex items-center space-x-3 w-full md:w-auto flex-wrap gap-y-2">
+                <div className="flex items-center space-x-2">
+                  <label className="font-semibold text-gray-700 text-sm">Class:</label>
+                  <select 
+                    value={modalClass}
+                    onChange={(e) => {
+                      setModalClass(e.target.value);
+                      setTermScoresData([]);
+                    }}
+                    className="border border-gray-300 rounded-md p-1.5 text-sm outline-none focus:ring-2 focus:ring-purple-500"
+                  >
+                    {classes.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                
+                <div className="flex items-center space-x-2">
+                  <label className="font-semibold text-gray-700 text-sm">Term:</label>
+                  <select 
+                    value={modalTerm}
+                    onChange={(e) => {
+                      setModalTerm(e.target.value);
+                      setTermScoresData([]);
+                    }}
+                    className="border border-gray-300 rounded-md p-1.5 text-sm outline-none focus:ring-2 focus:ring-purple-500"
+                  >
+                    {modalTermsList.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+
+                <div className="flex items-center space-x-2 pl-2 border-l border-gray-200">
+                  <label className="font-semibold text-gray-700 text-sm">Preset:</label>
+                  <select 
+                    value={selectedPresetId}
+                    onChange={(e) => {
+                      setSelectedPresetId(e.target.value);
+                      setTermScoresData([]);
+                    }}
+                    className="border border-gray-300 rounded-md p-1.5 text-sm outline-none focus:ring-2 focus:ring-purple-500 min-w-[160px]"
+                  >
+                    {presets.length === 0 && <option value="">No presets available</option>}
+                    {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                  <button 
+                    onClick={() => setShowPresetManager(true)}
+                    className="text-sm bg-gray-100 text-gray-700 px-2 py-1.5 rounded-md hover:bg-gray-200 transition-colors font-medium border border-gray-300"
+                  >
+                    Manage
+                  </button>
+                </div>
               </div>
 
               <div className="flex items-center space-x-3 w-full md:w-auto">
@@ -1598,6 +2106,35 @@ export default function Marks() {
               </div>
             </div>
 
+            {/* Formula Display Area */}
+            {selectedPresetId && (
+              <div className="bg-purple-50 px-4 py-3 border-b border-purple-100 flex items-start">
+                <Info className="w-5 h-5 text-purple-600 mr-2 flex-shrink-0 mt-0.5" />
+                <div>
+                  <h4 className="text-sm font-bold text-purple-800">Calculation Formula</h4>
+                  <p className="text-sm text-purple-700 mt-1">
+                    {(() => {
+                      const preset = presets.find(p => p.id === selectedPresetId);
+                      if (!preset) return '';
+                      if (preset.name === 'JS Geography') {
+                        return "Overall Score = [ (Sum of Assignments & Quizzes) / (Total Full Marks) × 50% ] + [ (Uniform Test Score) / (UT Full Mark) × 50% ]";
+                      }
+                      if (preset.name === 'Learning Attitude (Homework)') {
+                        return "Overall Score = Math.round( (Sum of Assignments) / (Total Full Marks) × 5 )";
+                      }
+                      if (preset.name === 'Learning Attitude (Lesson)') {
+                        return "Overall Score = 4 + (1 if Assignment > 90%) - Math.floor(Records / 2). (Capped at 3 if Assignment Total < 60%). Range: 0-5.";
+                      }
+                      const parts = Object.entries(preset.weights)
+                        .filter(([_, w]) => w > 0)
+                        .map(([c, w]) => `(${c} × ${w}%)`);
+                      return parts.length > 0 ? `Overall Score = ${parts.join(' + ')}` : "No weights configured.";
+                    })()}
+                  </p>
+                </div>
+              </div>
+            )}
+
             <div className="flex-1 overflow-auto p-4 bg-gray-50">
               {termScoresData.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-gray-500">
@@ -1605,7 +2142,7 @@ export default function Marks() {
                   <p>Select a preset and click "Calculate Scores" to view term results.</p>
                 </div>
               ) : (
-                <table className="w-full text-left border-collapse bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
+                <table className="w-max mx-auto text-left border-collapse bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
                   <thead className="bg-gray-100 sticky top-0">
                     <tr className="text-gray-600 text-sm uppercase tracking-wider">
                       <th className="p-3 border-b border-gray-200 w-16">No.</th>

@@ -5,7 +5,7 @@ import {
   PlusCircle, Trash2, ClipboardPaste, FormInput, Calculator,
   Layers, X, BarChart2, Copy, Eye, EyeOff, Settings, Edit2, Edit,
   ChevronUp, ChevronDown, MinusCircle, ToggleLeft, ToggleRight, Percent, Info,
-  Link as LinkIcon, ExternalLink, Search, Download, ArrowLeft, Tag
+  Link as LinkIcon, ExternalLink, Search, Download, ArrowLeft, Tag, Edit3
 } from 'lucide-react';
 import { 
   collection, getDocs, doc, setDoc, updateDoc, 
@@ -93,21 +93,24 @@ export default function Marks() {
   const [inputMethod, setInputMethod] = useState('individual'); 
   const [bulkText, setBulkText] = useState('');
 
-  // Graph Modal State
-  const [showGraphModal, setShowGraphModal] = useState(false);
-
-  // Mark Overview Modal State
+  // Mark Overview & Graph Modal State
   const [showOverviewModal, setShowOverviewModal] = useState(false);
 
   // All Classes Modal State
   const [showAllClassesModal, setShowAllClassesModal] = useState(false);
   const [allClassesStudentView, setAllClassesStudentView] = useState(true);
 
+  // Amend Mark Modal State
+  const [showAmendModal, setShowAmendModal] = useState(false);
+  const [amendRows, setAmendRows] = useState([]);
+  const [hasUnsavedAmendments, setHasUnsavedAmendments] = useState(false);
+
   // Student View State
   const [studentView, setStudentView] = useState(false);
 
-  // Deduct Column State
+  // Deduct & Total View State
   const [showDeduct, setShowDeduct] = useState(false);
+  const [showRawTotal, setShowRawTotal] = useState(false);
 
   // Term Score Calculator State
   const [showTermScoreModal, setShowTermScoreModal] = useState(false);
@@ -733,6 +736,143 @@ export default function Marks() {
   };
 
   // ============================================================================
+  // AMEND MARKS LOGIC
+  // ============================================================================
+  const openAmendModal = () => {
+    const initialRows = Array.from({ length: 8 }).map(() => ({ 
+      id: generateId(), 
+      query: '', 
+      student: null, 
+      marks: {}, 
+      originalMarks: {} 
+    }));
+    setAmendRows(initialRows);
+    setHasUnsavedAmendments(false);
+    setShowAmendModal(true);
+  };
+
+  const closeAmendModal = () => {
+    if (hasUnsavedAmendments) {
+      if (!window.confirm("You have unsaved amendments. Are you sure you want to close without saving?")) {
+        return;
+      }
+    }
+    setShowAmendModal(false);
+  };
+
+  const handleAddAmendRow = () => {
+    setAmendRows(prev => [...prev, { id: generateId(), query: '', student: null, marks: {}, originalMarks: {} }]);
+  };
+
+  const handleRemoveAmendRow = (id) => {
+    setAmendRows(prev => prev.filter(r => r.id !== id));
+  };
+
+  // Main table only displays the selected class by default
+  const currentClassStudents = useMemo(() => {
+    return students
+      .filter(s => s.className === selectedClass)
+      .sort((a, b) => String(a.classNumber).localeCompare(String(b.classNumber), undefined, { numeric: true }));
+  }, [students, selectedClass]);
+
+  // Determine if selected assessment is shared across multiple classes
+  const assessmentClasses = useMemo(() => {
+    return selectedAssessment?.classes || (selectedAssessment?.className ? [selectedAssessment.className] : []);
+  }, [selectedAssessment]);
+
+  // All classes students for the combined modal
+  const allClassesStudents = useMemo(() => {
+    if (!selectedAssessment || assessmentClasses.length <= 1) return [];
+    return students
+      .filter(s => assessmentClasses.includes(s.className))
+      .sort((a, b) => {
+        if (a.className !== b.className) return a.className.localeCompare(b.className);
+        return String(a.classNumber).localeCompare(String(b.classNumber), undefined, { numeric: true });
+      });
+  }, [students, selectedAssessment, assessmentClasses]);
+
+  const handleAmendQueryChange = (rowId, query) => {
+    let foundStudent = null;
+    const q = query.trim().toUpperCase();
+    if (q) {
+      // Search in all classes linked to this assessment, or just current class if not shared
+      const searchPool = assessmentClasses.length > 1 ? allClassesStudents : currentClassStudents;
+      
+      foundStudent = searchPool.find(s => {
+        const match1 = s.classNumber.toString() === q && s.className === selectedClass;
+        const match2 = `${s.className}${s.classNumber}`.replace(/\s/g, '').toUpperCase() === q;
+        return match1 || match2;
+      });
+    }
+
+    setAmendRows(prev => prev.map(r => {
+      if (r.id === rowId) {
+        const initialMarks = foundStudent ? JSON.parse(JSON.stringify(marksData[foundStudent.id] || {})) : {};
+        return { 
+          ...r, 
+          query, 
+          student: foundStudent, 
+          marks: initialMarks, 
+          originalMarks: JSON.parse(JSON.stringify(initialMarks)) 
+        };
+      }
+      return r;
+    }));
+  };
+
+  const adjustAmendMark = (rowId, subId, amount) => {
+    setHasUnsavedAmendments(true);
+    setAmendRows(prev => prev.map(r => {
+      if (r.id === rowId && r.student) {
+        const currentVal = parseFloat(r.marks[subId]) || 0;
+        const newVal = Math.max(0, currentVal + amount); 
+        return {
+          ...r,
+          marks: { ...r.marks, [subId]: newVal.toString() }
+        };
+      }
+      return r;
+    }));
+  };
+
+  const saveAmendments = async () => {
+    const updatedMarksData = { ...marksData };
+    let hasChanges = false;
+
+    amendRows.forEach(r => {
+      if (r.student && r.query.trim() !== '') {
+        updatedMarksData[r.student.id] = r.marks;
+        hasChanges = true;
+      }
+    });
+
+    if (!hasChanges) {
+      alert("No valid students to save.");
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const assessmentRef = doc(db, "assessments", selectedAssessment.id);
+      await updateDoc(assessmentRef, { marks: updatedMarksData });
+      
+      const updatedAssessment = { ...selectedAssessment, marks: updatedMarksData };
+      setSelectedAssessment(updatedAssessment);
+      setAssessments(assessments.map(a => a.id === updatedAssessment.id ? updatedAssessment : a));
+      setMarksData(updatedMarksData);
+      
+      setHasUnsavedAmendments(false);
+      setShowAmendModal(false);
+      alert("Amendments saved successfully!");
+    } catch (error) {
+      console.error("Error saving amendments:", error);
+      alert("Failed to save amendments.");
+    }
+    setIsSaving(false);
+  };
+
+
+  // ============================================================================
   // CALCULATIONS & STATS
   // ============================================================================
   const calculateTotal = (studentMarks) => {
@@ -772,6 +912,22 @@ export default function Marks() {
     return hasMark ? total : null;
   };
 
+  const calculatePaperRawTotal = (studentMarks, config) => {
+    if (!studentMarks || typeof studentMarks !== 'object' || !config) return null;
+    let total = 0;
+    let hasValidMark = false;
+
+    config.forEach(sec => {
+      const secRawTotal = calculateSectionRawTotal(studentMarks, sec);
+      if (secRawTotal !== null) {
+        total += secRawTotal;
+        hasValidMark = true;
+      }
+    });
+
+    return hasValidMark ? parseFloat(total.toFixed(1)) : null;
+  };
+
   const calculateScaledTotal = (studentMarks, config) => {
     if (!studentMarks || typeof studentMarks !== 'object' || !config) return null;
     let total = 0;
@@ -792,29 +948,6 @@ export default function Marks() {
 
     return hasValidMark ? parseFloat(total.toFixed(1)) : null;
   };
-
-  // Main table only displays the selected class by default
-  const currentClassStudents = useMemo(() => {
-    return students
-      .filter(s => s.className === selectedClass)
-      .sort((a, b) => String(a.classNumber).localeCompare(String(b.classNumber), undefined, { numeric: true }));
-  }, [students, selectedClass]);
-
-  // Determine if selected assessment is shared across multiple classes
-  const assessmentClasses = useMemo(() => {
-    return selectedAssessment?.classes || (selectedAssessment?.className ? [selectedAssessment.className] : []);
-  }, [selectedAssessment]);
-
-  // All classes students for the combined modal
-  const allClassesStudents = useMemo(() => {
-    if (!selectedAssessment || assessmentClasses.length <= 1) return [];
-    return students
-      .filter(s => assessmentClasses.includes(s.className))
-      .sort((a, b) => {
-        if (a.className !== b.className) return a.className.localeCompare(b.className);
-        return String(a.classNumber).localeCompare(String(b.classNumber), undefined, { numeric: true });
-      });
-  }, [students, selectedAssessment, assessmentClasses]);
 
   // Calculate overall stats for all classes modal
   const allClassesStatsData = useMemo(() => {
@@ -958,7 +1091,7 @@ export default function Marks() {
         <h3 className={`text-xl font-bold border-b pb-3 mb-4 ${isHighlight ? 'text-indigo-800 border-indigo-100' : 'text-gray-800 border-gray-100'}`}>
           {title} <span className="text-base font-normal text-gray-500 ml-2">(Full: {fullMark})</span>
         </h3>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-6">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
           <div className="flex flex-col">
             <span className="text-gray-500 text-sm uppercase tracking-wider font-semibold mb-1">Mean</span>
             <span className="text-3xl font-bold text-blue-600">{stats.mean}</span>
@@ -1779,13 +1912,14 @@ export default function Marks() {
                       onClick={() => setShowOverviewModal(true)}
                       className="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200"
                     >
-                      <Layers className="w-4 h-4 mr-1.5" /> Mark Overview
+                      <BarChart2 className="w-4 h-4 mr-1.5" /> Overview & Graph
                     </button>
                     <button 
-                      onClick={() => setShowGraphModal(true)}
-                      className="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200"
+                      onClick={openAmendModal}
+                      className="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors bg-orange-50 text-orange-700 hover:bg-orange-100 border border-orange-200"
+                      title="Amend individual component marks with buttons"
                     >
-                      <BarChart2 className="w-4 h-4 mr-1.5" /> SD Graph
+                      <Edit3 className="w-4 h-4 mr-1.5" /> Amend Mark
                     </button>
                   </>
                 )}
@@ -1882,7 +2016,19 @@ export default function Marks() {
                             )}
                           </React.Fragment>
                         ))}
-                        <th className="p-3 border-b w-24 text-gray-700 font-bold align-top text-center">Total (100%)</th>
+                        <th className="p-3 border-b w-28 text-gray-700 font-bold align-top text-center">
+                          <div className="flex flex-col items-center justify-center">
+                            <span>Total ({showRawTotal ? selectedAssessment.paperFullMark : '100%'})</span>
+                            <button 
+                              onClick={() => setShowRawTotal(!showRawTotal)}
+                              className="flex items-center mt-1 text-[10px] font-semibold text-gray-500 hover:text-blue-600 transition-colors bg-gray-100 px-2 py-0.5 rounded-full border border-gray-200"
+                              title="Toggle Total Mark View"
+                            >
+                              {showRawTotal ? <ToggleRight className="w-3 h-3 mr-1 text-blue-600" /> : <ToggleLeft className="w-3 h-3 mr-1" />}
+                              {showRawTotal ? 'Raw' : '100%'}
+                            </button>
+                          </div>
+                        </th>
                       </>
                     ) : (
                       <th className="p-3 border-b w-32 align-top">Mark / Grade</th>
@@ -1933,11 +2079,16 @@ export default function Marks() {
 
                         const rawTotal = calculateTotal(studentMarks);
                         const scaledTotal = hasSections ? calculateScaledTotal(studentMarks, selectedAssessment.sectionsConfig) : rawTotal;
+                        const rawPaperTotal = hasSections ? calculatePaperRawTotal(studentMarks, selectedAssessment.sectionsConfig) : rawTotal;
                         
                         const deduction = parseFloat(marksData[`${s.id}_deduction`]) || 0;
                         let finalTotal = null;
                         if (scaledTotal !== null) {
-                          finalTotal = (scaledTotal - deduction);
+                          if (showRawTotal && hasSections) {
+                            finalTotal = rawPaperTotal - deduction;
+                          } else {
+                            finalTotal = scaledTotal - deduction;
+                          }
                         }
 
                         const isTopMark = topStudentIds.has(s.id);
@@ -2011,7 +2162,7 @@ export default function Marks() {
                                   );
                                 })}
                                 <td className={`p-3 font-semibold text-center text-gray-600 ${scaledTotal === null ? 'bg-red-50' : ''}`}>
-                                  {scaledTotal === null ? '-' : (studentView ? '***' : scaledTotal.toFixed(1))}
+                                  {scaledTotal === null ? '-' : (studentView ? '***' : (showRawTotal ? rawPaperTotal.toFixed(1) : scaledTotal.toFixed(1)))}
                                 </td>
                               </>
                             ) : (
@@ -2197,6 +2348,164 @@ export default function Marks() {
         </div>
       )}
 
+      {/* Amend Mark Modal */}
+      {showAmendModal && selectedAssessment && isMultiSectionCategory && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[100] p-4 sm:p-6">
+          <div className="bg-gray-50 rounded-2xl shadow-2xl w-full max-w-7xl h-[90vh] flex flex-col overflow-hidden">
+            <div className="p-5 border-b border-gray-200 flex justify-between items-center bg-white rounded-t-2xl shrink-0">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-800 flex items-center">
+                  <Edit3 className="w-7 h-7 mr-3 text-orange-600" />
+                  Amend Marks - {selectedAssessment.name}
+                </h2>
+                <p className="text-sm text-gray-500 mt-1">Type class number (e.g. 20) or full class+no (e.g. 4A15) to load a student.</p>
+              </div>
+              <div className="flex items-center space-x-3">
+                <button 
+                  onClick={saveAmendments}
+                  disabled={isSaving}
+                  className="flex items-center px-4 py-2 bg-orange-600 text-white font-bold rounded-lg hover:bg-orange-700 transition-colors disabled:opacity-70 shadow-sm"
+                >
+                  {isSaving ? <Loader2 className="w-5 h-5 mr-2 animate-spin" /> : <Save className="w-5 h-5 mr-2" />}
+                  Save Changes
+                </button>
+                <button 
+                  onClick={closeAmendModal}
+                  className="text-gray-400 hover:text-gray-600 transition-colors p-2 bg-gray-100 hover:bg-gray-200 rounded-full"
+                >
+                  <X className="w-7 h-7" />
+                </button>
+              </div>
+            </div>
+            
+            <div className="p-6 overflow-y-auto overflow-x-auto flex-1">
+              <table className="w-max min-w-full text-left border-collapse bg-white shadow-sm border border-gray-200 rounded-lg">
+                <thead className="bg-gray-100 sticky top-0 z-10">
+                  <tr className="text-gray-600 text-sm uppercase tracking-wider">
+                    <th className="p-3 border-b border-gray-200 w-32 text-center">Student No.</th>
+                    <th className="p-3 border-b border-gray-200 w-48 border-r border-gray-200">Name</th>
+                    {selectedAssessment.sectionsConfig.map(sec => (
+                      <React.Fragment key={sec.id}>
+                        {sec.hasSubSections ? (
+                          sec.subSections.map(sub => (
+                            <th key={sub.id} className="p-3 border-b border-gray-200 text-center min-w-[200px]">
+                              {sec.name} - {sub.name} <br/><span className="text-[10px] normal-case text-gray-500">Full: {sub.fullMark}</span>
+                            </th>
+                          ))
+                        ) : (
+                          <th key={sec.id} className="p-3 border-b border-gray-200 text-center min-w-[200px] border-r border-gray-200">
+                            {sec.name} <br/><span className="text-[10px] normal-case text-gray-500">Full: {sec.fullMark}</span>
+                          </th>
+                        )}
+                      </React.Fragment>
+                    ))}
+                    <th className="p-3 border-b border-gray-200 text-center text-orange-800 font-bold border-l border-gray-200">Total</th>
+                    <th className="p-3 border-b border-gray-200 text-center w-16"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {amendRows.map((row, idx) => {
+                    const scaledTotal = row.student ? calculateScaledTotal(row.marks, selectedAssessment.sectionsConfig) : null;
+                    const deduction = row.student ? (parseFloat(marksData[`${row.student.id}_deduction`]) || 0) : 0;
+                    const finalTotal = scaledTotal !== null ? scaledTotal - deduction : null;
+
+                    return (
+                      <tr key={row.id} className="hover:bg-gray-50">
+                        <td className="p-3 text-center">
+                          <input 
+                            type="text"
+                            value={row.query}
+                            onChange={(e) => handleAmendQueryChange(row.id, e.target.value)}
+                            placeholder="e.g. 20"
+                            className="w-24 border border-gray-300 rounded p-2 text-center outline-none focus:ring-2 focus:ring-orange-500 font-bold"
+                          />
+                        </td>
+                        <td className="p-3 border-r border-gray-200">
+                          {row.student ? (
+                            <div>
+                              <div className="font-bold text-gray-800">{row.student.englishName}</div>
+                              <div className="text-xs text-gray-500">{row.student.className} ({row.student.classNumber})</div>
+                            </div>
+                          ) : (
+                            <span className="text-gray-400 italic text-sm">Student not found</span>
+                          )}
+                        </td>
+
+                        {selectedAssessment.sectionsConfig.map(sec => (
+                          <React.Fragment key={sec.id}>
+                            {sec.hasSubSections ? (
+                              sec.subSections.map(sub => {
+                                const val = row.marks[sub.id] !== undefined ? row.marks[sub.id] : '';
+                                const origVal = parseFloat(row.originalMarks[sub.id]) || 0;
+                                const currentVal = parseFloat(val) || 0;
+                                const diff = currentVal - origVal;
+
+                                return (
+                                  <td key={sub.id} className="p-2 text-center">
+                                    {row.student ? (
+                                      <div className="flex items-center justify-center space-x-1">
+                                        <button onClick={() => adjustAmendMark(row.id, sub.id, -1)} className="w-8 h-8 flex items-center justify-center bg-red-100 text-red-700 rounded hover:bg-red-200 font-bold">-1</button>
+                                        <button onClick={() => adjustAmendMark(row.id, sub.id, -0.5)} className="w-8 h-8 flex items-center justify-center bg-red-50 text-red-600 rounded hover:bg-red-100 text-xs font-bold">-.5</button>
+                                        <div className="w-14 flex flex-col items-center justify-center">
+                                          <span className="font-bold text-gray-800">{val !== '' ? parseFloat(val).toFixed(1) : '-'}</span>
+                                          {diff !== 0 && <span className={`text-[10px] font-bold ${diff > 0 ? 'text-green-600' : 'text-red-600'}`}>{diff > 0 ? `+${diff}` : diff}</span>}
+                                        </div>
+                                        <button onClick={() => adjustAmendMark(row.id, sub.id, 0.5)} className="w-8 h-8 flex items-center justify-center bg-green-50 text-green-600 rounded hover:bg-green-100 text-xs font-bold">+.5</button>
+                                        <button onClick={() => adjustAmendMark(row.id, sub.id, 1)} className="w-8 h-8 flex items-center justify-center bg-green-100 text-green-700 rounded hover:bg-green-200 font-bold">+1</button>
+                                      </div>
+                                    ) : <span className="text-gray-300">-</span>}
+                                  </td>
+                                );
+                              })
+                            ) : (
+                              <td key={sec.id} className="p-2 text-center border-r border-gray-200">
+                                {row.student ? (
+                                  <div className="flex items-center justify-center space-x-1">
+                                    <button onClick={() => adjustAmendMark(row.id, sec.id, -1)} className="w-8 h-8 flex items-center justify-center bg-red-100 text-red-700 rounded hover:bg-red-200 font-bold">-1</button>
+                                    <button onClick={() => adjustAmendMark(row.id, sec.id, -0.5)} className="w-8 h-8 flex items-center justify-center bg-red-50 text-red-600 rounded hover:bg-red-100 text-xs font-bold">-.5</button>
+                                    <div className="w-14 flex flex-col items-center justify-center">
+                                      <span className="font-bold text-gray-800">{row.marks[sec.id] !== undefined && row.marks[sec.id] !== '' ? parseFloat(row.marks[sec.id]).toFixed(1) : '-'}</span>
+                                      {(() => {
+                                        const origVal = parseFloat(row.originalMarks[sec.id]) || 0;
+                                        const currentVal = parseFloat(row.marks[sec.id]) || 0;
+                                        const diff = currentVal - origVal;
+                                        return diff !== 0 ? <span className={`text-[10px] font-bold ${diff > 0 ? 'text-green-600' : 'text-red-600'}`}>{diff > 0 ? `+${diff}` : diff}</span> : null;
+                                      })()}
+                                    </div>
+                                    <button onClick={() => adjustAmendMark(row.id, sec.id, 0.5)} className="w-8 h-8 flex items-center justify-center bg-green-50 text-green-600 rounded hover:bg-green-100 text-xs font-bold">+.5</button>
+                                    <button onClick={() => adjustAmendMark(row.id, sec.id, 1)} className="w-8 h-8 flex items-center justify-center bg-green-100 text-green-700 rounded hover:bg-green-200 font-bold">+1</button>
+                                  </div>
+                                ) : <span className="text-gray-300">-</span>}
+                              </td>
+                            )}
+                          </React.Fragment>
+                        ))}
+                        <td className="p-3 text-center font-bold text-orange-700 bg-orange-50/50 border-l border-gray-200">
+                          {finalTotal !== null ? finalTotal.toFixed(1) : '-'}
+                        </td>
+                        <td className="p-3 text-center">
+                          <button onClick={() => handleRemoveAmendRow(row.id)} className="text-gray-400 hover:text-red-500 p-1">
+                            <Trash2 className="w-5 h-5" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <div className="mt-4">
+                <button 
+                  onClick={handleAddAmendRow}
+                  className="flex items-center px-4 py-2 bg-gray-100 text-gray-700 font-medium rounded-lg hover:bg-gray-200 transition-colors border border-gray-300"
+                >
+                  <Plus className="w-5 h-5 mr-2" /> Add Row
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Term Manager Modal */}
       {showTermManager && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -2265,45 +2574,14 @@ export default function Marks() {
         </div>
       )}
 
-      {/* SD Graph Modal */}
-      {showGraphModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl flex flex-col">
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-lg">
-              <h2 className="text-lg font-bold text-gray-800 flex items-center">
-                <BarChart2 className="w-5 h-5 mr-2 text-purple-600" />
-                Score Distribution
-              </h2>
-              <button 
-                onClick={() => setShowGraphModal(false)}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-            <div className="p-6 h-96">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={getGraphData()}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" />
-                  <YAxis allowDecimals={false} />
-                  <Tooltip />
-                  <Bar dataKey="count" fill="#8b5cf6" name="Number of Students" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Mark Overview Modal */}
+      {/* Mark Overview & Graph Combined Modal */}
       {showOverviewModal && selectedAssessment && (
         <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[100] p-4 sm:p-6">
-          <div className="bg-gray-50 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+          <div className="bg-gray-50 rounded-2xl shadow-2xl w-full max-w-7xl max-h-[90vh] flex flex-col overflow-hidden">
             <div className="p-5 border-b border-gray-200 flex justify-between items-center bg-white rounded-t-2xl shrink-0">
               <h2 className="text-2xl font-bold text-gray-800 flex items-center">
-                <Layers className="w-7 h-7 mr-3 text-indigo-600" />
-                Component Statistics Overview
+                <BarChart2 className="w-7 h-7 mr-3 text-indigo-600" />
+                Analytics Overview - {selectedAssessment.name}
               </h2>
               <button 
                 onClick={() => setShowOverviewModal(false)}
@@ -2312,25 +2590,45 @@ export default function Marks() {
                 <X className="w-7 h-7" />
               </button>
             </div>
-            <div className="p-6 overflow-y-auto flex-1 space-y-6">
-              {/* Render Overall */}
-              {renderStatCard("Overall Total", getStats(statsData.final.marks, statsData.final.fullMark), statsData.final.fullMark, true)}
+            <div className="p-6 overflow-y-auto flex-1 flex flex-col lg:flex-row gap-8">
               
-              {/* Render Sections */}
-              {selectedAssessment.sectionsConfig?.map(sec => (
-                <div key={sec.id} className="space-y-4">
-                  {sec.hasSubSections ? (
-                    <>
-                      {sec.subSections.map(sub => (
-                        renderStatCard(`${sec.name} - ${sub.name}`, getStats(statsData[sub.id].marks, statsData[sub.id].fullMark), sub.fullMark)
-                      ))}
-                      {renderStatCard(`${sec.name} (Total)`, getStats(statsData[`sec_${sec.id}`].marks, statsData[`sec_${sec.id}`].fullMark), statsData[`sec_${sec.id}`].fullMark, false, true)}
-                    </>
-                  ) : (
-                    renderStatCard(sec.name, getStats(statsData[sec.id].marks, statsData[sec.id].fullMark), sec.fullMark)
-                  )}
+              {/* Left Side: Mark Overview */}
+              <div className="w-full lg:w-1/2 space-y-6">
+                <h3 className="text-lg font-bold text-gray-700 border-b border-gray-200 pb-2">Component Statistics</h3>
+                {renderStatCard("Overall Total", getStats(statsData.final.marks, statsData.final.fullMark), statsData.final.fullMark, true)}
+                
+                {selectedAssessment.sectionsConfig?.map(sec => (
+                  <div key={sec.id} className="space-y-4">
+                    {sec.hasSubSections ? (
+                      <>
+                        {sec.subSections.map(sub => (
+                          renderStatCard(`${sec.name} - ${sub.name}`, getStats(statsData[sub.id].marks, statsData[sub.id].fullMark), sub.fullMark)
+                        ))}
+                        {renderStatCard(`${sec.name} (Total)`, getStats(statsData[`sec_${sec.id}`].marks, statsData[`sec_${sec.id}`].fullMark), statsData[`sec_${sec.id}`].fullMark, false, true)}
+                      </>
+                    ) : (
+                      renderStatCard(sec.name, getStats(statsData[sec.id].marks, statsData[sec.id].fullMark), sec.fullMark)
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Right Side: SD Graph */}
+              <div className="w-full lg:w-1/2 flex flex-col">
+                <h3 className="text-lg font-bold text-gray-700 border-b border-gray-200 pb-2 mb-4">Score Distribution</h3>
+                <div className="flex-1 min-h-[400px] bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={getGraphData()}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="name" />
+                      <YAxis allowDecimals={false} />
+                      <Tooltip />
+                      <Bar dataKey="count" fill="#8b5cf6" name="Number of Students" />
+                    </BarChart>
+                  </ResponsiveContainer>
                 </div>
-              ))}
+              </div>
+
             </div>
           </div>
         </div>
@@ -2673,276 +2971,6 @@ export default function Marks() {
                   ))}
                 </div>
               )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Add/Edit Assessment Modal */}
-      {showAddAssessment && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-lg">
-              <h2 className="text-lg font-bold text-gray-800 flex items-center">
-                {isEditingAssessment ? (
-                  <Edit className="w-5 h-5 mr-2 text-blue-600" />
-                ) : (
-                  isMultiSectionCategory ? <Settings className="w-5 h-5 mr-2 text-blue-600" /> : <PlusCircle className="w-5 h-5 mr-2 text-green-600" />
-                )}
-                {isEditingAssessment ? `Edit ${selectedCategory} Settings` : (isMultiSectionCategory ? `Configure ${selectedCategory} for ${selectedTerm}` : `Add New ${selectedCategory}`)}
-              </h2>
-              <button 
-                onClick={() => setShowAddAssessment(false)}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-
-            <div className="p-6 overflow-y-auto flex-1">
-              <form id="add-assessment-form" onSubmit={handleSaveAssessment} className="space-y-5">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {!isMultiSectionCategory && (
-                    <div>
-                      <label className="block text-sm font-semibold text-gray-700 mb-1">Assessment Name</label>
-                      <input 
-                        type="text" 
-                        value={newAssessmentName}
-                        onChange={(e) => setNewAssessmentName(e.target.value)}
-                        placeholder="e.g. Chapter 1 Quiz"
-                        className="w-full border border-gray-300 rounded-md p-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        required
-                      />
-                    </div>
-                  )}
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">Term Assignment</label>
-                    <select 
-                      value={formTerm}
-                      onChange={(e) => setFormTerm(e.target.value)}
-                      className="w-full border border-gray-300 rounded-md p-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                      required
-                    >
-                      {terms.map(t => <option key={t} value={t}>{t}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">Date</label>
-                    <input 
-                      type="date" 
-                      value={newAssessmentDate}
-                      onChange={(e) => setNewAssessmentDate(e.target.value)}
-                      className="w-full border border-gray-300 rounded-md p-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                      required
-                    />
-                  </div>
-                  {!isMultiSectionCategory && (
-                    <div>
-                      <label className="block text-sm font-semibold text-gray-700 mb-1">Full Mark</label>
-                      <input 
-                        type="number" 
-                        value={fullMark}
-                        onChange={(e) => setFullMark(e.target.value)}
-                        className="w-full border border-gray-300 rounded-md p-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        required
-                      />
-                    </div>
-                  )}
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-semibold text-gray-700 mb-1 flex items-center gap-2">
-                      <LinkIcon className="w-4 h-4 text-blue-600" /> Link Archive Document (Optional)
-                    </label>
-                    <div className="flex items-center gap-3">
-                      <div className="flex-1 border border-gray-300 rounded-md p-2 text-sm bg-gray-50 text-gray-600 flex items-center justify-between">
-                        {linkedDocId ? (
-                          <span className="font-medium text-blue-700 truncate">
-                            {archives.find(a => a.id === linkedDocId)?.title || 'Unknown Document'}
-                          </span>
-                        ) : (
-                          <span className="italic text-gray-400">No document linked</span>
-                        )}
-                        {linkedDocId && (
-                          <button type="button" onClick={() => setLinkedDocId('')} className="text-gray-400 hover:text-red-500">
-                            <X className="w-4 h-4" />
-                          </button>
-                        )}
-                      </div>
-                      <button 
-                        type="button"
-                        onClick={() => setShowDocLinker(true)}
-                        className="bg-blue-50 text-blue-700 px-4 py-2 rounded-md text-sm font-medium border border-blue-200 hover:bg-blue-100 transition-colors"
-                      >
-                        {linkedDocId ? 'Change' : 'Select Document'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {isMultiSectionCategory && (
-                  <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 space-y-4">
-                    <div className="flex flex-col md:flex-row md:justify-between md:items-end mb-2 gap-3">
-                      <div>
-                        <label className="block text-sm font-bold text-gray-800 mb-1">Paper Full Mark</label>
-                        <div className="flex items-center">
-                          <input 
-                            type="number" 
-                            value={paperFullMark}
-                            onChange={(e) => setPaperFullMark(e.target.value)}
-                            className="w-32 border border-gray-300 rounded-md p-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                            required
-                          />
-                          <span className="ml-2 text-xs text-gray-500">Used to calculate section weightings</span>
-                        </div>
-                      </div>
-                      <button 
-                        type="button" 
-                        onClick={autoCalculateWeights} 
-                        className="text-sm bg-blue-100 text-blue-700 px-3 py-1.5 rounded-md hover:bg-blue-200 font-medium flex items-center"
-                      >
-                        <Calculator className="w-4 h-4 mr-1.5" />
-                        Auto-calc Weights
-                      </button>
-                    </div>
-                    
-                    <div className="space-y-3">
-                      <label className="block text-sm font-semibold text-gray-700">Sections Configuration</label>
-                      {sectionsConfig.map((sec, sIdx) => (
-                        <div key={sec.id} className="border border-gray-300 bg-white rounded-md p-3 relative shadow-sm">
-                          {sectionsConfig.length > 1 && (
-                            <button type="button" onClick={() => handleRemoveSection(sec.id)} className="absolute top-2 right-2 text-red-400 hover:text-red-600">
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
-                          <div className="flex flex-col space-y-3 pr-6">
-                            <div className="flex space-x-3">
-                              <div className="flex-1">
-                                <label className="text-xs text-gray-500 mb-1 block">Section Name</label>
-                                <input
-                                  type="text"
-                                  value={sec.name}
-                                  onChange={(e) => updateSection(sec.id, 'name', e.target.value)}
-                                  placeholder="Section Name"
-                                  className="w-full border border-gray-300 rounded p-1.5 text-sm outline-none focus:ring-1 focus:ring-blue-500 font-medium"
-                                  required
-                                />
-                              </div>
-                              <div className="w-24">
-                                <label className="text-xs text-gray-500 mb-1 block">Full Mark</label>
-                                <input
-                                  type="number"
-                                  value={sec.fullMark}
-                                  onChange={(e) => updateSection(sec.id, 'fullMark', e.target.value)}
-                                  placeholder="Mark"
-                                  className="w-full border border-gray-300 rounded p-1.5 text-sm outline-none focus:ring-1 focus:ring-blue-500 text-center"
-                                  required
-                                />
-                              </div>
-                              <div className="w-24">
-                                <label className="text-xs text-gray-500 mb-1 block">Weight (%)</label>
-                                <div className="flex items-center">
-                                  <input
-                                    type="number"
-                                    value={sec.weight}
-                                    onChange={(e) => updateSection(sec.id, 'weight', e.target.value)}
-                                    placeholder="Wt %"
-                                    className="w-full border border-gray-300 rounded p-1.5 text-sm outline-none focus:ring-1 focus:ring-blue-500 text-center"
-                                    required
-                                  />
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="pt-3 mt-3 border-t border-gray-100">
-                            <button 
-                              type="button" 
-                              onClick={() => toggleSubSections(sec.id)} 
-                              className={`text-xs px-3 py-1.5 rounded-md flex items-center font-medium transition-colors ${sec.hasSubSections ? 'bg-red-50 text-red-600 hover:bg-red-100' : 'bg-blue-50 text-blue-600 hover:bg-blue-100'}`}
-                            >
-                              <Layers className="w-4 h-4 mr-1.5" /> 
-                              {sec.hasSubSections ? 'Disable Sub-sections' : 'Enable Sub-sections'}
-                            </button>
-                          </div>
-
-                          {sec.hasSubSections && (
-                            <div className="pl-4 border-l-2 border-blue-200 space-y-2 mt-3">
-                              {sec.subSections.map((sub, subIdx) => (
-                                <div key={sub.id} className="flex space-x-3 items-center bg-gray-50 p-2 rounded border border-gray-200">
-                                  <div className="flex-1">
-                                    <input
-                                      type="text"
-                                      value={sub.name}
-                                      onChange={(e) => updateSubSection(sec.id, sub.id, 'name', e.target.value)}
-                                      placeholder="Sub-section Name"
-                                      className="w-full border border-gray-300 rounded p-1.5 text-xs outline-none focus:ring-1 focus:ring-blue-500"
-                                      required
-                                    />
-                                  </div>
-                                  <div className="w-20">
-                                    <input
-                                      type="number"
-                                      value={sub.fullMark}
-                                      onChange={(e) => updateSubSection(sec.id, sub.id, 'fullMark', e.target.value)}
-                                      placeholder="Full Mark"
-                                      className="w-full border border-gray-300 rounded p-1.5 text-xs outline-none focus:ring-1 focus:ring-blue-500 text-center"
-                                      required
-                                    />
-                                  </div>
-                                  {sec.subSections.length > 1 && (
-                                    <button type="button" onClick={() => handleRemoveSubSection(sec.id, sub.id)} className="text-red-400 hover:text-red-600 p-1">
-                                      <Trash2 className="w-4 h-4" />
-                                    </button>
-                                  )}
-                                </div>
-                              ))}
-                              <button type="button" onClick={() => handleAddSubSection(sec.id)} className="text-xs text-blue-600 flex items-center mt-2 font-medium hover:text-blue-800">
-                                <Plus className="w-4 h-4 mr-1" /> Add Sub-section
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                      <button type="button" onClick={handleAddSection} className="w-full border-2 border-dashed border-gray-300 text-gray-600 py-2 rounded-md text-sm font-medium hover:bg-gray-50 hover:border-gray-400 transition-colors flex justify-center items-center">
-                        <Plus className="w-4 h-4 mr-1" /> Add Another Section
-                      </button>
-                    </div>
-                  </div>
-                )}
-                
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">Assign to Classes</label>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 bg-white p-3 rounded-md border border-gray-300">
-                    {classes.map(c => (
-                      <label key={c} className="flex items-center text-sm text-gray-700 cursor-pointer p-1 hover:bg-gray-50 rounded">
-                        <input 
-                          type="checkbox" 
-                          checked={selectedClassesForNew.includes(c)}
-                          onChange={() => toggleClassForNew(c)}
-                          className="mr-2 rounded text-green-600 focus:ring-green-500 w-4 h-4"
-                        />
-                        {c}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              </form>
-            </div>
-
-            <div className="p-4 border-t border-gray-200 bg-gray-50 rounded-b-lg flex justify-end space-x-3">
-              <button 
-                type="button"
-                onClick={() => setShowAddAssessment(false)}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button 
-                type="submit" 
-                form="add-assessment-form"
-                className="px-6 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 shadow-sm"
-              >
-                {isEditingAssessment ? 'Save Changes' : (isMultiSectionCategory ? 'Save Configuration' : 'Create Assessment')}
-              </button>
             </div>
           </div>
         </div>

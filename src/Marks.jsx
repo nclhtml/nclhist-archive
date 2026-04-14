@@ -40,7 +40,7 @@ export default function Marks() {
   const [categories, setCategories] = useState([
     'Assignments', 'Quizzes', 'Uniform Test', 'Exam', 'Others'
   ]);
-  const [archives, setArchives] = useState([]); // Added for document linking
+  const [archives, setArchives] = useState([]); 
   
   // Terms State
   const [termsMap, setTermsMap] = useState({});
@@ -70,7 +70,7 @@ export default function Marks() {
   const [fullMark, setFullMark] = useState(100); 
   const [paperFullMark, setPaperFullMark] = useState(100); 
   const [formTerm, setFormTerm] = useState('');
-  const [linkedDocId, setLinkedDocId] = useState(''); // Added for document linking
+  const [linkedDocId, setLinkedDocId] = useState(''); 
   
   // Multi-section State for UT/Exam
   const [sectionsConfig, setSectionsConfig] = useState([
@@ -96,6 +96,13 @@ export default function Marks() {
   // Graph Modal State
   const [showGraphModal, setShowGraphModal] = useState(false);
 
+  // Mark Overview Modal State
+  const [showOverviewModal, setShowOverviewModal] = useState(false);
+
+  // All Classes Modal State
+  const [showAllClassesModal, setShowAllClassesModal] = useState(false);
+  const [allClassesStudentView, setAllClassesStudentView] = useState(true);
+
   // Student View State
   const [studentView, setStudentView] = useState(false);
 
@@ -113,7 +120,7 @@ export default function Marks() {
   const [newPresetWeights, setNewPresetWeights] = useState({});
   
   // Modal specific selections
-  const [modalClass, setModalClass] = useState('');
+  const [modalClasses, setModalClasses] = useState([]); 
   const [modalTerm, setModalTerm] = useState('');
 
   // Document Linker State
@@ -152,6 +159,7 @@ export default function Marks() {
           if (loadedClasses.length > 0) {
             setSelectedClass(loadedClasses[0]);
             setSelectedClassesForNew([loadedClasses[0]]);
+            setModalClasses([loadedClasses[0]]);
           }
         }
 
@@ -785,9 +793,46 @@ export default function Marks() {
     return hasValidMark ? parseFloat(total.toFixed(1)) : null;
   };
 
-  const currentClassStudents = students
-    .filter(s => s.className === selectedClass)
-    .sort((a, b) => String(a.classNumber).localeCompare(String(b.classNumber), undefined, { numeric: true }));
+  // Main table only displays the selected class by default
+  const currentClassStudents = useMemo(() => {
+    return students
+      .filter(s => s.className === selectedClass)
+      .sort((a, b) => String(a.classNumber).localeCompare(String(b.classNumber), undefined, { numeric: true }));
+  }, [students, selectedClass]);
+
+  // Determine if selected assessment is shared across multiple classes
+  const assessmentClasses = useMemo(() => {
+    return selectedAssessment?.classes || (selectedAssessment?.className ? [selectedAssessment.className] : []);
+  }, [selectedAssessment]);
+
+  // All classes students for the combined modal
+  const allClassesStudents = useMemo(() => {
+    if (!selectedAssessment || assessmentClasses.length <= 1) return [];
+    return students
+      .filter(s => assessmentClasses.includes(s.className))
+      .sort((a, b) => {
+        if (a.className !== b.className) return a.className.localeCompare(b.className);
+        return String(a.classNumber).localeCompare(String(b.classNumber), undefined, { numeric: true });
+      });
+  }, [students, selectedAssessment, assessmentClasses]);
+
+  // Calculate overall stats for all classes modal
+  const allClassesStatsData = useMemo(() => {
+    if (!selectedAssessment || !showAllClassesModal) return null;
+    const marks = [];
+    const hasSections = selectedAssessment.sectionsConfig && selectedAssessment.sectionsConfig.length > 0;
+    allClassesStudents.forEach(student => {
+      const studentMarks = marksData[student.id];
+      const rawTotal = calculateTotal(studentMarks);
+      const scaledTotal = hasSections ? calculateScaledTotal(studentMarks, selectedAssessment.sectionsConfig) : rawTotal;
+      const deduction = parseFloat(marksData[`${student.id}_deduction`]) || 0;
+      if (scaledTotal !== null) {
+        marks.push(scaledTotal - deduction);
+      }
+    });
+    const fullMark = hasSections ? 100 : (selectedAssessment.fullMark || 100);
+    return { marks, fullMark };
+  }, [allClassesStudents, marksData, selectedAssessment, showAllClassesModal]);
 
   let topStudentIds = new Set();
   const hasSections = selectedAssessment?.sectionsConfig && selectedAssessment.sectionsConfig.length > 0;
@@ -906,6 +951,37 @@ export default function Marks() {
     );
   };
 
+  const renderStatCard = (title, stats, fullMark, isHighlight = false, isSubTotal = false) => {
+    if (!stats) return null;
+    return (
+      <div className={`bg-white border rounded-xl p-5 shadow-sm ${isHighlight ? 'border-indigo-300 ring-1 ring-indigo-100' : (isSubTotal ? 'border-blue-200 bg-blue-50/30' : 'border-gray-200')}`}>
+        <h3 className={`text-xl font-bold border-b pb-3 mb-4 ${isHighlight ? 'text-indigo-800 border-indigo-100' : 'text-gray-800 border-gray-100'}`}>
+          {title} <span className="text-base font-normal text-gray-500 ml-2">(Full: {fullMark})</span>
+        </h3>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-6">
+          <div className="flex flex-col">
+            <span className="text-gray-500 text-sm uppercase tracking-wider font-semibold mb-1">Mean</span>
+            <span className="text-3xl font-bold text-blue-600">{stats.mean}</span>
+          </div>
+          <div className="flex flex-col">
+            <span className="text-gray-500 text-sm uppercase tracking-wider font-semibold mb-1">Median</span>
+            <span className="text-3xl font-bold text-blue-600">{stats.median}</span>
+          </div>
+          <div className="flex flex-col">
+            <span className="text-gray-500 text-sm uppercase tracking-wider font-semibold mb-1">Pass</span>
+            <span className={`text-3xl font-bold ${stats.passCount >= stats.total / 2 ? 'text-green-600' : 'text-red-500'}`}>
+              {stats.passCount}<span className="text-xl text-gray-400">/{stats.total}</span>
+            </span>
+          </div>
+          <div className="flex flex-col">
+            <span className="text-gray-500 text-sm uppercase tracking-wider font-semibold mb-1">Max</span>
+            <span className="text-3xl font-bold text-purple-600">{stats.max}</span>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const handleCopyTotals = () => {
     const totalsList = currentClassStudents.map(student => {
       const studentMarks = marksData[student.id];
@@ -991,8 +1067,36 @@ export default function Marks() {
     }));
   };
 
+  const assignHighlights = (data) => {
+    const N = data.length;
+    if (N < 3) return data;
+    const sorted = [...data].sort((a, b) => parseFloat(b.overallScore) - parseFloat(a.overallScore));
+    
+    // Top 3
+    for(let i=0; i<Math.min(3, N); i++) sorted[i].highlight = 'top';
+    
+    // Middle 3
+    const midTarget = Math.floor(N / 3);
+    const midStart = Math.max(3, midTarget - 1); 
+    for(let i=midStart; i<Math.min(midStart+3, N); i++) {
+        if (!sorted[i].highlight) sorted[i].highlight = 'middle';
+    }
+    
+    // Bottom 3
+    const botTarget = Math.floor((2 * N) / 3);
+    const botStart = Math.max(midStart + 3, botTarget - 1);
+    for(let i=botStart; i<Math.min(botStart+3, N); i++) {
+        if (!sorted[i].highlight) sorted[i].highlight = 'bottom';
+    }
+
+    return sorted.sort((a, b) => {
+      if (a.student.className !== b.student.className) return a.student.className.localeCompare(b.student.className);
+      return String(a.student.classNumber).localeCompare(String(b.student.classNumber), undefined, { numeric: true });
+    });
+  };
+
   const calculateTermScores = async () => {
-    if (!selectedPresetId || !modalClass || !modalTerm) return;
+    if (!selectedPresetId || modalClasses.length === 0 || !modalTerm) return;
     setIsCalculatingScores(true);
     
     const preset = presets.find(p => p.id === selectedPresetId);
@@ -1009,15 +1113,18 @@ export default function Marks() {
         .map(doc => ({ id: doc.id, ...doc.data() }))
         .filter(a => {
           const matchesClass = (a.classes && Array.isArray(a.classes)) 
-            ? a.classes.includes(modalClass) 
-            : a.className === modalClass;
+            ? a.classes.some(c => modalClasses.includes(c))
+            : modalClasses.includes(a.className);
           const matchesTerm = a.term === modalTerm;
           return matchesClass && matchesTerm;
         });
 
       const modalStudents = students
-        .filter(s => s.className === modalClass)
-        .sort((a, b) => String(a.classNumber).localeCompare(String(b.classNumber), undefined, { numeric: true }));
+        .filter(s => modalClasses.includes(s.className))
+        .sort((a, b) => {
+          if (a.className !== b.className) return a.className.localeCompare(b.className);
+          return String(a.classNumber).localeCompare(String(b.classNumber), undefined, { numeric: true });
+        });
 
       let scoresData = [];
 
@@ -1091,7 +1198,7 @@ export default function Marks() {
           return {
             student,
             categoryScores,
-            overallScore: score.toString() // Integer
+            overallScore: score.toString() 
           };
         });
       } else if (preset.name === 'Learning Attitude (Lesson)') {
@@ -1108,7 +1215,7 @@ export default function Marks() {
           if (assignPercent < 0.6) {
             score = Math.min(score, 3);
           }
-          score = Math.max(0, Math.min(5, score)); // Ensure it stays within 0-5
+          score = Math.max(0, Math.min(5, score)); 
 
           let categoryScores = {
             'Lesson Attitude': { score: score, raw: recordCount, full: 0, weight: 100 }
@@ -1117,7 +1224,7 @@ export default function Marks() {
           return {
             student,
             categoryScores,
-            overallScore: score.toString() // Integer
+            overallScore: score.toString() 
           };
         });
       } else {
@@ -1149,7 +1256,7 @@ export default function Marks() {
         });
       }
 
-      setTermScoresData(scoresData);
+      setTermScoresData(assignHighlights(scoresData));
     } catch (error) {
       console.error("Error calculating term scores:", error);
       alert("Failed to calculate term scores.");
@@ -1164,7 +1271,6 @@ export default function Marks() {
   const handleCopyTermScores = () => {
     if (termScoresData.length === 0) return;
     
-    // overallScore is already formatted correctly as either an integer string or a 1-decimal string based on preset
     const rows = termScoresData.map(data => data.overallScore);
     
     const textToCopy = rows.join('\n');
@@ -1179,17 +1285,19 @@ export default function Marks() {
 
   // Modal Terms Logic
   const modalTermsList = useMemo(() => {
-    if (!modalClass) return [];
-    return termsMap[modalClass] && termsMap[modalClass].length > 0 
-      ? termsMap[modalClass] 
-      : getDefaultTerms(modalClass);
-  }, [modalClass, termsMap]);
+    if (modalClasses.length === 0) return [];
+    // Just use the first selected class to determine terms for simplicity
+    const refClass = modalClasses[0];
+    return termsMap[refClass] && termsMap[refClass].length > 0 
+      ? termsMap[refClass] 
+      : getDefaultTerms(refClass);
+  }, [modalClasses, termsMap]);
 
   useEffect(() => {
-    if (modalClass && !modalTermsList.includes(modalTerm)) {
+    if (modalClasses.length > 0 && !modalTermsList.includes(modalTerm)) {
       setModalTerm(modalTermsList[0] || '');
     }
-  }, [modalClass, modalTermsList, modalTerm]);
+  }, [modalClasses, modalTermsList, modalTerm]);
 
   // ============================================================================
   // DOCUMENT LINKING LOGIC
@@ -1211,84 +1319,6 @@ export default function Marks() {
     if (parentDoc) {
       setPreviewItem({ parent: parentDoc, isFullPaper: true });
     }
-  };
-
-  // ============================================================================
-  // FETCH LINKED MARKS (From App.jsx)
-  // ============================================================================
-  const handleViewLinkedMarks = async (docId, docTitle) => {
-    setCurrentMarksDocTitle(docTitle);
-    setShowMarksModal(true);
-    setIsLoadingMarks(true);
-    
-    try {
-      // Fetch assessments linked to this doc
-      const q = query(collection(db, "assessments"), where("linkedDocId", "==", docId));
-      const snap = await getDocs(q);
-      const assessmentsData = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-
-      // Fetch students to map names
-      const stuSnap = await getDocs(collection(db, "students"));
-      const studentsData = stuSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-      const studentMap = {};
-      studentsData.forEach(s => studentMap[s.id] = s);
-
-      // Process data for display
-      let records = [];
-      assessmentsData.forEach(assessment => {
-        const marks = assessment.marks || {};
-        Object.keys(marks).forEach(studentId => {
-          if (studentId.endsWith('_deduction')) return; // skip deduction keys
-          const student = studentMap[studentId];
-          if (!student) return;
-
-          const markVal = marks[studentId];
-          let finalMark = null;
-
-          // Simplified calculation for display
-          if (assessment.sectionsConfig && assessment.sectionsConfig.length > 0) {
-            let total = 0;
-            if (typeof markVal === 'object') {
-               Object.values(markVal).forEach(v => {
-                 if(v && !isNaN(parseFloat(v))) total += parseFloat(v);
-               });
-               finalMark = total;
-            } else {
-               finalMark = parseFloat(markVal);
-            }
-            const deduction = parseFloat(marks[`${studentId}_deduction`]) || 0;
-            if (!isNaN(finalMark)) finalMark -= deduction;
-          } else {
-            finalMark = parseFloat(markVal);
-            const deduction = parseFloat(marks[`${studentId}_deduction`]) || 0;
-            if (!isNaN(finalMark)) finalMark -= deduction;
-          }
-
-          if (finalMark !== null && !isNaN(finalMark)) {
-            records.push({
-              assessmentName: assessment.name,
-              term: assessment.term,
-              category: assessment.category,
-              className: student.className,
-              classNumber: student.classNumber,
-              studentName: student.englishName,
-              mark: finalMark.toFixed(1)
-            });
-          }
-        });
-      });
-
-      // Sort records by class, then class number
-      records.sort((a, b) => {
-        if (a.className !== b.className) return a.className.localeCompare(b.className);
-        return String(a.classNumber).localeCompare(String(b.classNumber), undefined, { numeric: true });
-      });
-
-      setLinkedMarksData(records);
-    } catch (error) {
-      console.error("Error fetching marks:", error);
-    }
-    setIsLoadingMarks(false);
   };
 
   // ============================================================================
@@ -1399,7 +1429,7 @@ export default function Marks() {
           <div className="pt-3 border-t border-gray-100">
             <button 
               onClick={() => {
-                setModalClass(selectedClass);
+                setModalClasses([selectedClass]);
                 setModalTerm(selectedTerm);
                 setTermScoresData([]);
                 setShowTermScoreModal(true);
@@ -1722,6 +1752,18 @@ export default function Marks() {
               </div>
               
               <div className="flex items-center space-x-3 flex-wrap gap-y-2 pl-8">
+                {assessmentClasses.length > 1 && (
+                  <button 
+                    onClick={() => {
+                      setAllClassesStudentView(true);
+                      setShowAllClassesModal(true);
+                    }}
+                    className="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200"
+                    title="View scores for all classes linked to this assessment"
+                  >
+                    <Users className="w-4 h-4 mr-1.5" /> All Classes
+                  </button>
+                )}
                 <button 
                   onClick={handleCopyTotals}
                   className="flex items-center justify-center w-[135px] px-3 py-2 text-sm font-medium rounded-md transition-colors bg-teal-50 text-teal-700 hover:bg-teal-100 border border-teal-200"
@@ -1732,12 +1774,20 @@ export default function Marks() {
                 </button>
 
                 {isMultiSectionCategory && (
-                  <button 
-                    onClick={() => setShowGraphModal(true)}
-                    className="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200"
-                  >
-                    <BarChart2 className="w-4 h-4 mr-1.5" /> SD Graph
-                  </button>
+                  <>
+                    <button 
+                      onClick={() => setShowOverviewModal(true)}
+                      className="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200"
+                    >
+                      <Layers className="w-4 h-4 mr-1.5" /> Mark Overview
+                    </button>
+                    <button 
+                      onClick={() => setShowGraphModal(true)}
+                      className="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200"
+                    >
+                      <BarChart2 className="w-4 h-4 mr-1.5" /> SD Graph
+                    </button>
+                  </>
                 )}
 
                 <div className="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
@@ -1867,13 +1917,13 @@ export default function Marks() {
                   {currentClassStudents.length === 0 ? (
                     <tr>
                       <td colSpan={hasSections ? ((!studentView && showDeduct) ? 12 : 11) : ((!studentView && showDeduct) ? 6 : 5)} className="p-8 text-center text-gray-500">
-                        No students found in {selectedClass}. Please add students in the Manage Classes tab.
+                        No students found. Please add students in the Manage Classes tab.
                       </td>
                     </tr>
                   ) : (
                     <>
-                      {currentClassStudents.map((student, rowIndex) => {
-                        const studentMarks = marksData[student.id];
+                      {currentClassStudents.map((s, rowIndex) => {
+                        const studentMarks = marksData[s.id];
                         let hasMark = false;
                         if (hasSections) {
                           hasMark = studentMarks && typeof studentMarks === 'object' && Object.values(studentMarks).some(v => v.toString().trim() !== '');
@@ -1884,21 +1934,21 @@ export default function Marks() {
                         const rawTotal = calculateTotal(studentMarks);
                         const scaledTotal = hasSections ? calculateScaledTotal(studentMarks, selectedAssessment.sectionsConfig) : rawTotal;
                         
-                        const deduction = parseFloat(marksData[`${student.id}_deduction`]) || 0;
+                        const deduction = parseFloat(marksData[`${s.id}_deduction`]) || 0;
                         let finalTotal = null;
                         if (scaledTotal !== null) {
                           finalTotal = (scaledTotal - deduction);
                         }
 
-                        const isTopMark = topStudentIds.has(student.id);
+                        const isTopMark = topStudentIds.has(s.id);
                         let globalColIndex = 0;
 
                         return (
-                          <tr key={student.id} className="hover:bg-gray-50 transition-colors">
-                            <td className="p-3 font-medium text-gray-800 text-center">{student.classNumber}</td>
+                          <tr key={s.id} className="hover:bg-gray-50 transition-colors">
+                            <td className="p-3 font-medium text-gray-800 text-center">{s.classNumber}</td>
                             <td className="p-3 text-gray-700 border-r border-gray-200">
-                              <div className="truncate">{student.englishName}</div>
-                              <div className="text-xs text-gray-400 truncate">{student.chineseName}</div>
+                              <div className="truncate">{s.englishName}</div>
+                              <div className="text-xs text-gray-400 truncate">{s.chineseName}</div>
                             </td>
                             
                             {hasSections ? (
@@ -1920,7 +1970,7 @@ export default function Marks() {
                                                   data-row={rowIndex}
                                                   data-col={currentCol}
                                                   value={studentView ? (isMissing ? '' : '***') : val}
-                                                  onChange={(e) => { if(!studentView) handleMarkChange(student.id, e.target.value, sub.id) }}
+                                                  onChange={(e) => { if(!studentView) handleMarkChange(s.id, e.target.value, sub.id) }}
                                                   onKeyDown={(e) => handleKeyDown(e, rowIndex, currentCol)}
                                                   disabled={inputMethod === 'bulk' || studentView}
                                                   className={`w-full max-w-[70px] border rounded-md p-1.5 text-center outline-none transition-colors focus:ring-2 focus:ring-blue-500 ${
@@ -1946,7 +1996,7 @@ export default function Marks() {
                                                 data-row={rowIndex}
                                                 data-col={currentCol}
                                                 value={studentView ? (isMissing ? '' : '***') : val}
-                                                onChange={(e) => { if(!studentView) handleMarkChange(student.id, e.target.value, sec.id) }}
+                                                onChange={(e) => { if(!studentView) handleMarkChange(s.id, e.target.value, sec.id) }}
                                                 onKeyDown={(e) => handleKeyDown(e, rowIndex, currentCol)}
                                                 disabled={inputMethod === 'bulk' || studentView}
                                                 className={`w-full max-w-[70px] border rounded-md p-1.5 text-center outline-none transition-colors focus:ring-2 focus:ring-blue-500 ${
@@ -1971,7 +2021,7 @@ export default function Marks() {
                                   data-row={rowIndex}
                                   data-col={0}
                                   value={studentView ? (!hasMark ? '' : '***') : (studentMarks || '')}
-                                  onChange={(e) => { if(!studentView) handleMarkChange(student.id, e.target.value) }}
+                                  onChange={(e) => { if(!studentView) handleMarkChange(s.id, e.target.value) }}
                                   onKeyDown={(e) => handleKeyDown(e, rowIndex, 0)}
                                   disabled={inputMethod === 'bulk' || studentView}
                                   placeholder={inputMethod === 'bulk' ? "Pasted from above..." : "Enter mark..."}
@@ -1987,8 +2037,8 @@ export default function Marks() {
                                 <input 
                                   type="number" 
                                   step="any"
-                                  value={marksData[`${student.id}_deduction`] || ''}
-                                  onChange={(e) => handleDeductionChange(student.id, e.target.value)}
+                                  value={marksData[`${s.id}_deduction`] || ''}
+                                  onChange={(e) => handleDeductionChange(s.id, e.target.value)}
                                   placeholder="-0"
                                   className="w-full max-w-[60px] border rounded-md p-1.5 text-center outline-none transition-colors focus:ring-2 focus:ring-red-500 text-red-600 font-medium bg-white border-red-200 hover:border-red-300"
                                 />
@@ -2054,6 +2104,98 @@ export default function Marks() {
           </div>
         )}
       </div>
+
+      {/* All Classes Modal */}
+      {showAllClassesModal && selectedAssessment && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[100] p-4 sm:p-6">
+          <div className="bg-gray-50 rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="p-5 border-b border-gray-200 flex justify-between items-center bg-white rounded-t-2xl shrink-0">
+              <h2 className="text-2xl font-bold text-gray-800 flex items-center">
+                <Users className="w-7 h-7 mr-3 text-blue-600" />
+                All Classes Performance - {selectedAssessment.name}
+              </h2>
+              <div className="flex items-center">
+                <button 
+                  onClick={() => setAllClassesStudentView(!allClassesStudentView)}
+                  className={`flex items-center px-3 py-1.5 text-sm font-bold rounded-md transition-colors border shadow-sm mr-4 ${
+                    allClassesStudentView 
+                      ? 'bg-amber-100 text-amber-800 border-amber-300' 
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border-gray-300'
+                  }`}
+                >
+                  {allClassesStudentView ? <EyeOff className="w-4 h-4 mr-2" /> : <Eye className="w-4 h-4 mr-2" />}
+                  {allClassesStudentView ? 'Student View: ON' : 'Student View: OFF'}
+                </button>
+                <button 
+                  onClick={() => setShowAllClassesModal(false)}
+                  className="text-gray-400 hover:text-gray-600 transition-colors p-2 bg-gray-100 hover:bg-gray-200 rounded-full"
+                >
+                  <X className="w-7 h-7" />
+                </button>
+              </div>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1">
+              {allClassesStatsData && (
+                <div className="mb-6">
+                  {renderStatCard("Overall Performance (All Classes)", getStats(allClassesStatsData.marks, allClassesStatsData.fullMark), allClassesStatsData.fullMark, true)}
+                </div>
+              )}
+              <table className="w-full text-left border-collapse bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
+                <thead className="bg-gray-100 sticky top-0 z-10">
+                  <tr className="text-gray-600 text-sm uppercase tracking-wider">
+                    <th className="p-3 border-b border-gray-200 w-20 text-center">Class</th>
+                    <th className="p-3 border-b border-gray-200 w-16 text-center">No.</th>
+                    <th className="p-3 border-b border-gray-200">Name</th>
+                    {hasSections && selectedAssessment.sectionsConfig.map(sec => (
+                      <th key={sec.id} className="p-3 border-b border-gray-200 text-center">{sec.name}</th>
+                    ))}
+                    <th className="p-3 border-b border-gray-200 text-center text-blue-800 font-bold">Total</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {allClassesStudents.length === 0 ? (
+                    <tr>
+                      <td colSpan={hasSections ? selectedAssessment.sectionsConfig.length + 4 : 4} className="p-8 text-center text-gray-500">
+                        No students found across linked classes.
+                      </td>
+                    </tr>
+                  ) : (
+                    allClassesStudents.map(student => {
+                      const studentMarks = marksData[student.id];
+                      const rawTotal = calculateTotal(studentMarks);
+                      const scaledTotal = hasSections ? calculateScaledTotal(studentMarks, selectedAssessment.sectionsConfig) : rawTotal;
+                      const deduction = parseFloat(marksData[`${student.id}_deduction`]) || 0;
+                      let finalTotal = null;
+                      if (scaledTotal !== null) {
+                        finalTotal = (scaledTotal - deduction);
+                      }
+
+                      return (
+                        <tr key={student.id} className="hover:bg-gray-50">
+                          <td className="p-3 text-center font-medium text-gray-600">{student.className}</td>
+                          <td className="p-3 text-center font-medium text-gray-800">{student.classNumber}</td>
+                          <td className="p-3 text-gray-800 font-medium">{student.englishName}</td>
+                          {hasSections && selectedAssessment.sectionsConfig.map(sec => {
+                            const secRawTotal = calculateSectionRawTotal(studentMarks, sec);
+                            return (
+                              <td key={sec.id} className="p-3 text-center text-gray-600">
+                                {secRawTotal === null ? '-' : (allClassesStudentView ? '***' : secRawTotal.toFixed(1))}
+                              </td>
+                            );
+                          })}
+                          <td className="p-3 text-center font-bold text-blue-700 bg-blue-50/50">
+                            {finalTotal === null ? '-' : (allClassesStudentView ? '***' : finalTotal.toFixed(1))}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Term Manager Modal */}
       {showTermManager && (
@@ -2154,6 +2296,46 @@ export default function Marks() {
         </div>
       )}
 
+      {/* Mark Overview Modal */}
+      {showOverviewModal && selectedAssessment && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[100] p-4 sm:p-6">
+          <div className="bg-gray-50 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="p-5 border-b border-gray-200 flex justify-between items-center bg-white rounded-t-2xl shrink-0">
+              <h2 className="text-2xl font-bold text-gray-800 flex items-center">
+                <Layers className="w-7 h-7 mr-3 text-indigo-600" />
+                Component Statistics Overview
+              </h2>
+              <button 
+                onClick={() => setShowOverviewModal(false)}
+                className="text-gray-400 hover:text-gray-600 transition-colors p-2 bg-gray-100 hover:bg-gray-200 rounded-full"
+              >
+                <X className="w-7 h-7" />
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1 space-y-6">
+              {/* Render Overall */}
+              {renderStatCard("Overall Total", getStats(statsData.final.marks, statsData.final.fullMark), statsData.final.fullMark, true)}
+              
+              {/* Render Sections */}
+              {selectedAssessment.sectionsConfig?.map(sec => (
+                <div key={sec.id} className="space-y-4">
+                  {sec.hasSubSections ? (
+                    <>
+                      {sec.subSections.map(sub => (
+                        renderStatCard(`${sec.name} - ${sub.name}`, getStats(statsData[sub.id].marks, statsData[sub.id].fullMark), sub.fullMark)
+                      ))}
+                      {renderStatCard(`${sec.name} (Total)`, getStats(statsData[`sec_${sec.id}`].marks, statsData[`sec_${sec.id}`].fullMark), statsData[`sec_${sec.id}`].fullMark, false, true)}
+                    </>
+                  ) : (
+                    renderStatCard(sec.name, getStats(statsData[sec.id].marks, statsData[sec.id].fullMark), sec.fullMark)
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Term Score Modal */}
       {showTermScoreModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -2174,20 +2356,26 @@ export default function Marks() {
             <div className="p-4 bg-white flex flex-col md:flex-row justify-between items-center border-b border-gray-200 gap-4">
               <div className="flex items-center space-x-3 w-full md:w-auto flex-wrap gap-y-2">
                 <div className="flex items-center space-x-2">
-                  <label className="font-semibold text-gray-700 text-sm">Class:</label>
-                  <select 
-                    value={modalClass}
-                    onChange={(e) => {
-                      setModalClass(e.target.value);
-                      setTermScoresData([]);
-                    }}
-                    className="border border-gray-300 rounded-md p-1.5 text-sm outline-none focus:ring-2 focus:ring-purple-500"
-                  >
-                    {classes.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
+                  <label className="font-semibold text-gray-700 text-sm">Classes:</label>
+                  <div className="flex flex-wrap gap-1 max-w-[200px] max-h-16 overflow-y-auto">
+                    {classes.map(c => (
+                      <label key={c} className="flex items-center text-xs bg-gray-100 px-2 py-1 rounded cursor-pointer hover:bg-gray-200">
+                        <input 
+                          type="checkbox" 
+                          checked={modalClasses.includes(c)}
+                          onChange={() => {
+                            setModalClasses(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]);
+                            setTermScoresData([]);
+                          }}
+                          className="mr-1 rounded text-purple-600 focus:ring-purple-500"
+                        />
+                        {c}
+                      </label>
+                    ))}
+                  </div>
                 </div>
                 
-                <div className="flex items-center space-x-2">
+                <div className="flex items-center space-x-2 pl-2 border-l border-gray-200">
                   <label className="font-semibold text-gray-700 text-sm">Term:</label>
                   <select 
                     value={modalTerm}
@@ -2235,7 +2423,7 @@ export default function Marks() {
                 </button>
                 <button 
                   onClick={calculateTermScores}
-                  disabled={!selectedPresetId || isCalculatingScores}
+                  disabled={!selectedPresetId || isCalculatingScores || modalClasses.length === 0}
                   className="bg-purple-600 text-white px-6 py-2 rounded-md font-medium hover:bg-purple-700 transition-colors flex items-center disabled:opacity-50 shadow-sm"
                 >
                   {isCalculatingScores ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Calculator className="w-4 h-4 mr-2" />}
@@ -2283,7 +2471,8 @@ export default function Marks() {
                 <table className="w-max mx-auto text-left border-collapse bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
                   <thead className="bg-gray-100 sticky top-0">
                     <tr className="text-gray-600 text-sm uppercase tracking-wider">
-                      <th className="p-3 border-b border-gray-200 w-16">No.</th>
+                      {modalClasses.length > 1 && <th className="p-3 border-b border-gray-200 w-16 text-center">Class</th>}
+                      <th className="p-3 border-b border-gray-200 w-16 text-center">No.</th>
                       <th className="p-3 border-b border-gray-200">Name</th>
                       {displayCategories.map(cat => {
                         const weight = termScoresData[0].categoryScores[cat]?.weight || 0;
@@ -2297,26 +2486,42 @@ export default function Marks() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {termScoresData.map((data, idx) => (
-                      <tr key={idx} className="hover:bg-gray-50">
-                        <td className="p-3 text-center font-medium text-gray-800">{data.student.classNumber}</td>
-                        <td className="p-3">
-                          <div className="text-gray-800 font-medium">{data.student.englishName}</div>
-                        </td>
-                        {displayCategories.map(cat => {
-                          const catData = data.categoryScores[cat];
-                          return (
-                            <td key={cat} className="p-3 text-center">
-                              <div className="font-semibold text-gray-700">{catData.score.toFixed(1)}</div>
-                              <div className="text-[10px] text-gray-400">({catData.raw.toFixed(1)}/{catData.full})</div>
-                            </td>
-                          );
-                        })}
-                        <td className="p-3 text-center font-bold text-purple-700 bg-purple-50/50 text-lg">
-                          {data.overallScore}
-                        </td>
-                      </tr>
-                    ))}
+                    {termScoresData.map((data, idx) => {
+                      let rowBg = 'hover:bg-gray-50';
+                      let scoreBg = 'bg-purple-50/50 text-purple-700';
+                      if (data.highlight === 'top') {
+                        rowBg = 'bg-green-50 hover:bg-green-100';
+                        scoreBg = 'bg-green-100 text-green-800';
+                      } else if (data.highlight === 'middle') {
+                        rowBg = 'bg-blue-50 hover:bg-blue-100';
+                        scoreBg = 'bg-blue-100 text-blue-800';
+                      } else if (data.highlight === 'bottom') {
+                        rowBg = 'bg-orange-50 hover:bg-orange-100';
+                        scoreBg = 'bg-orange-100 text-orange-800';
+                      }
+
+                      return (
+                        <tr key={idx} className={rowBg}>
+                          {modalClasses.length > 1 && <td className="p-3 text-center font-medium text-gray-600">{data.student.className}</td>}
+                          <td className="p-3 text-center font-medium text-gray-800">{data.student.classNumber}</td>
+                          <td className="p-3">
+                            <div className="text-gray-800 font-medium">{data.student.englishName}</div>
+                          </td>
+                          {displayCategories.map(cat => {
+                            const catData = data.categoryScores[cat];
+                            return (
+                              <td key={cat} className="p-3 text-center">
+                                <div className="font-semibold text-gray-700">{catData.score.toFixed(1)}</div>
+                                <div className="text-[10px] text-gray-400">({catData.raw.toFixed(1)}/{catData.full})</div>
+                              </td>
+                            );
+                          })}
+                          <td className={`p-3 text-center font-bold text-lg ${scoreBg}`}>
+                            {data.overallScore}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               )}

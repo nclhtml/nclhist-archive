@@ -461,7 +461,7 @@ export default function AdvancedHistoryArchive() {
     year: currentYear,
     language: 'English',
     overallGrade: '',
-    scores: Array.from({ length: 6 }, () => ({ tag: '', mark: '', pagesStr: '' }))
+    scores: Array.from({ length: 6 }, () => ({ tag: '', mark: '', subMarks: {}, pagesStr: '' }))
   });
   const [isManageSamplesModalOpen, setIsManageSamplesModalOpen] = useState(false);
   const [allSamples, setAllSamples] = useState([]);
@@ -794,15 +794,24 @@ export default function AdvancedHistoryArchive() {
   useEffect(() => {
     const fetchSamples = async () => {
       if (previewItem && !previewItem.isFullPaper) {
-        let currentTag = "";
+        let exactTag = "";
+        let parentTag = "";
+
         if (previewItem.parent.paperType === "Paper 2 (Essay)") {
-          currentTag = `${previewItem.parent.title} Q${previewItem.child.label}`;
+          exactTag = `${previewItem.parent.title} Q${previewItem.child.label}`;
+          parentTag = `${previewItem.parent.title} Q${previewItem.child.label.replace(/[a-z]/gi, '')}`;
         } else if (previewItem.parent.paperType === "Paper 1 (DBQ)") {
-          currentTag = `${previewItem.parent.title} Q1${previewItem.child.label}`;
+          exactTag = `${previewItem.parent.title} Q1${previewItem.child.label}`;
+          parentTag = `${previewItem.parent.title} Q1`;
         }
 
+        // Add fallbacks in case the user named the document "2025D Q1" directly
+        const titleTag = previewItem.parent.title;
+        const titleWithChildTag = `${previewItem.parent.title}${previewItem.child.label}`; // e.g. "2025D Q1a"
+
         try {
-          const q = query(collection(db, "student_samples"), where("questionTags", "array-contains", currentTag));
+          const searchTags = [exactTag, parentTag, titleTag, titleWithChildTag];
+          const q = query(collection(db, "student_samples"), where("questionTags", "array-contains-any", searchTags));
           const snap = await getDocs(q);
           setPreviewSamples(snap.docs.map(d => ({ id: d.id, ...d.data() })));
         } catch (error) {
@@ -1267,10 +1276,13 @@ export default function AdvancedHistoryArchive() {
   };
 
   // --- HANDLE STUDENT SAMPLE SUBMIT (Split & Upload) ---
+  // --- HANDLE STUDENT SAMPLE SUBMIT (Split & Upload / Edit) ---
   const handleSampleSubmit = async (e) => {
     e.preventDefault();
     if (!user?.isAdmin) return;
-    if (!sampleForm.year || !loadedPdfDoc) {
+
+    // Require PDF only if it's a brand new upload
+    if (!editingId && (!sampleForm.year || !loadedPdfDoc)) {
       alert("Please provide a year and a valid PDF file.");
       return;
     }
@@ -1282,41 +1294,56 @@ export default function AdvancedHistoryArchive() {
       const questionTags = validScores.map(s => s.tag.trim());
       const scoresData = {};
 
-      for (const score of validScores) {
-        const pageIndices = parsePages(score.pagesStr, pdfPageCount);
-        if (pageIndices.length === 0) {
-          alert(`Invalid page selection for tag ${score.tag}. Skipping this entry.`);
-          continue;
+      if (loadedPdfDoc) {
+        // --- NEW PDF UPLOADED (Create or Replace) ---
+        for (const score of validScores) {
+          const pageIndices = parsePages(score.pagesStr, pdfPageCount);
+          if (pageIndices.length === 0) {
+            alert(`Invalid page selection for tag ${score.tag}. Skipping this entry.`);
+            continue;
+          }
+
+          const splitPdf = await PDFDocument.create();
+          const copiedPages = await splitPdf.copyPages(loadedPdfDoc, pageIndices);
+          copiedPages.forEach(p => splitPdf.addPage(p));
+          const splitBytes = await splitPdf.save();
+
+          const splitFileName = `${safeName}_${score.tag.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.pdf`;
+          const splitStoragePath = `pdfs/student_samples/${splitFileName}`;
+          const splitRef = ref(storage, splitStoragePath);
+
+          await uploadBytes(splitRef, splitBytes, { contentType: 'application/pdf' });
+          const splitUrl = await getDownloadURL(splitRef);
+
+          scoresData[score.tag.trim()] = {
+            mark: score.mark,
+            subMarks: score.subMarks || {}, // Save sub-marks
+            fileUrl: splitUrl,
+            pagesStr: score.pagesStr
+          };
         }
-
-        // Split PDF
-        const splitPdf = await PDFDocument.create();
-        const copiedPages = await splitPdf.copyPages(loadedPdfDoc, pageIndices);
-        copiedPages.forEach(p => splitPdf.addPage(p));
-        const splitBytes = await splitPdf.save();
-
-        // Upload Split PDF
-        const splitFileName = `${safeName}_${score.tag.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.pdf`;
-        const splitStoragePath = `pdfs/student_samples/${splitFileName}`;
-        const splitRef = ref(storage, splitStoragePath);
-        
-        await uploadBytes(splitRef, splitBytes, { contentType: 'application/pdf' });
-        const splitUrl = await getDownloadURL(splitRef);
-
-        scoresData[score.tag.trim()] = { 
-          mark: score.mark, 
-          fileUrl: splitUrl,
-          pagesStr: score.pagesStr
-        };
+      } else if (editingId) {
+        // --- EDITING EXISTING (No new PDF uploaded) ---
+        const existingSample = allSamples.find(s => s.id === editingId);
+        for (const score of validScores) {
+          // Preserve the old fileUrl if we aren't uploading a new PDF
+          const existingFileUrl = existingSample?.scoresData?.[score.tag.trim()]?.fileUrl || '';
+          scoresData[score.tag.trim()] = {
+            mark: score.mark,
+            subMarks: score.subMarks || {},
+            fileUrl: existingFileUrl,
+            pagesStr: score.pagesStr
+          };
+        }
       }
 
       if (Object.keys(scoresData).length === 0) {
-        alert("No valid scores with page selections found. Aborting upload.");
+        alert("No valid scores found. Aborting.");
         setIsLoading(false);
         return;
       }
 
-      await addDoc(collection(db, "student_samples"), {
+      const payload = {
         year: sampleForm.year,
         language: sampleForm.language,
         overallGrade: sampleForm.overallGrade,
@@ -1324,12 +1351,20 @@ export default function AdvancedHistoryArchive() {
         scoresData,
         addedAt: new Date().toISOString(),
         addedBy: user.email
-      });
+      };
+
+      if (editingId) {
+        await updateDoc(doc(db, "student_samples", editingId), payload);
+        setAllSamples(prev => prev.map(s => s.id === editingId ? { id: editingId, ...payload } : s));
+        alert("Student sample updated successfully!");
+      } else {
+        await addDoc(collection(db, "student_samples"), payload);
+        alert("Student sample split and uploaded successfully!");
+      }
 
       closeModal();
-      alert("Student sample split and uploaded successfully!");
     } catch (error) {
-      console.error("Error uploading student sample:", error);
+      console.error("Error saving student sample:", error);
       alert("Failed to save student sample.");
     } finally {
       setIsLoading(false);
@@ -1346,6 +1381,34 @@ export default function AdvancedHistoryArchive() {
     setIsLoading(false);
   };
 
+  const handleEditSample = (sample) => {
+    setEditingId(sample.id);
+    setUploadSelection('sample');
+    
+    // Transform scoresData back into the array format for the form
+    const scoresArray = Object.keys(sample.scoresData || {}).map(tag => ({
+      tag: tag,
+      mark: sample.scoresData[tag].mark || '',
+      subMarks: sample.scoresData[tag].subMarks || {},
+      pagesStr: sample.scoresData[tag].pagesStr || ''
+    }));
+    
+    // Pad with empty rows up to 6
+    while(scoresArray.length < 6) {
+      scoresArray.push({ tag: '', mark: '', subMarks: {}, pagesStr: '' });
+    }
+
+    setSampleForm({
+      year: sample.year,
+      language: sample.language || 'English',
+      overallGrade: sample.overallGrade || '',
+      scores: scoresArray
+    });
+    
+    setIsManageSamplesModalOpen(false);
+    setIsUploadModalOpen(true);
+  };
+  
   const handleDeleteSample = async (sampleId, scoresData) => {
     if (!window.confirm("Are you sure you want to delete this sample? This will also remove the attached PDFs.")) return;
     setIsLoading(true);
@@ -2011,7 +2074,10 @@ export default function AdvancedHistoryArchive() {
                                       <div className="text-sm font-bold text-slate-800">[{sample.language}] Grade: {sample.overallGrade}</div>
                                       <div className="text-xs text-slate-500 mt-1">Tags: {sample.questionTags?.join(', ')}</div>
                                     </div>
-                                    <button onClick={() => handleDeleteSample(sample.id, sample.scoresData)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                                    <div className="flex gap-2">
+                                      <button onClick={() => handleEditSample(sample)} className="p-2 text-blue-500 hover:bg-blue-50 rounded-lg"><Edit size={16} /></button>
+                                      <button onClick={() => handleDeleteSample(sample.id, sample.scoresData)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                                    </div>
                                   </div>
                                 ))}
                               </div>
@@ -2508,8 +2574,8 @@ export default function AdvancedHistoryArchive() {
                   </button>
 
                   {((!viewingAnswer && !activeSample && previewItem.parent.hasFile) || (viewingAnswer && previewItem.parent.hasAnswer) || activeSample) && (
-                    <a 
-                      href={activeSample ? activeSample.fileUrl : (viewingAnswer ? previewItem.parent.answerFileUrl : previewItem.parent.fileUrl)}
+                    <a
+                      href={activeSample ? activeSample.currentFileUrl : (viewingAnswer ? previewItem.parent.answerFileUrl : previewItem.parent.fileUrl)}
                       target="_blank"
                       rel="noreferrer"
                       className="hidden sm:flex px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 transition-all items-center gap-2"
@@ -2644,10 +2710,24 @@ export default function AdvancedHistoryArchive() {
                         </h3>
                         <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
                           {previewSamples.map(sample => {
-                            const currentTag = previewItem.parent.paperType === "Paper 2 (Essay)"
+                            const exactTag = previewItem.parent.paperType === "Paper 2 (Essay)"
                               ? `${previewItem.parent.title} Q${previewItem.child.label}`
                               : `${previewItem.parent.title} Q1${previewItem.child.label}`;
-                            const scoreData = sample.scoresData[currentTag];
+                            const parentTag = previewItem.parent.paperType === "Paper 2 (Essay)"
+                              ? `${previewItem.parent.title} Q${previewItem.child.label.replace(/[a-z]/gi, '')}`
+                              : `${previewItem.parent.title} Q1`;
+
+                            const titleTag = previewItem.parent.title;
+                            const titleWithChildTag = `${previewItem.parent.title}${previewItem.child.label}`;
+
+                            // Check all possible tag combinations
+                            const scoreData = sample.scoresData[exactTag] ||
+                              sample.scoresData[parentTag] ||
+                              sample.scoresData[titleTag] ||
+                              sample.scoresData[titleWithChildTag];
+
+                            // If we still don't have scoreData, skip rendering this sample
+                            if (!scoreData) return null;
 
                             return (
                               <div key={sample.id} className={`p-3 border rounded-lg transition-colors ${activeSample?.id === sample.id ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-slate-200 hover:border-indigo-300'}`}>
@@ -2661,7 +2741,7 @@ export default function AdvancedHistoryArchive() {
                                     Mark (this question): <span className="font-bold text-slate-900">{scoreData?.mark}</span>
                                   </div>
                                   <button 
-                                    onClick={() => setActiveSample(sample)}
+                                    onClick={() => setActiveSample({ ...sample, currentFileUrl: scoreData.fileUrl })}
                                     className={`text-xs font-bold px-3 py-1.5 rounded-md transition-colors ${activeSample?.id === sample.id ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'}`}
                                   >
                                     View Sample
@@ -2679,7 +2759,7 @@ export default function AdvancedHistoryArchive() {
                 <div className="flex-1 bg-slate-200 flex flex-col h-full relative">
                   {activeSample ? (
                     <iframe 
-                      src={`${activeSample.fileUrl}#view=Fit&pagemode=thumbs`}
+                      src={`${activeSample.currentFileUrl}#view=Fit&pagemode=thumbs`}
                       className="w-full h-full"
                       title="Student Sample Preview"
                     />
@@ -3018,7 +3098,18 @@ export default function AdvancedHistoryArchive() {
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                             <div>
                               <label className="label">Year</label>
-                              <select required className="input-field" value={sampleForm.year} onChange={(e) => setSampleForm({ ...sampleForm, year: e.target.value })}>
+                              <select required className="input-field" value={sampleForm.year} onChange={(e) => {
+                                const newYear = e.target.value;
+                                const newScores = Array.from({ length: 6 }, (_, i) => {
+                                  let defaultTag = '';
+                                  if (newYear && newYear !== 'Others') {
+                                    if (i < 4) defaultTag = `${newYear}D Q${i + 1}`;
+                                    else defaultTag = `${newYear}E`;
+                                  }
+                                  return { tag: defaultTag, mark: '', subMarks: {}, pagesStr: '' };
+                                });
+                                setSampleForm({ ...sampleForm, year: newYear, scores: newScores });
+                              }}>
                                 {/* Generate years dynamically */}
                                 {Array.from({ length: new Date().getFullYear() - 2011 }, (_, i) => new Date().getFullYear() - i).map(y => (
                                   <option key={y} value={y}>{y}</option>
@@ -3048,11 +3139,13 @@ export default function AdvancedHistoryArchive() {
                             <div className="col-span-full">
                               <label className="label flex justify-between">
                                 <span>Full Student Sample Document (PDF)</span>
-                                <span className="text-red-500 font-bold text-xs">*Required</span>
+                                <span className={`${editingId ? 'text-slate-400' : 'text-red-500'} font-bold text-xs`}>
+                                  {editingId ? '*Optional (Leave blank to keep existing)' : '*Required'}
+                                </span>
                               </label>
                               <div className="relative">
-                                <input 
-                                  type="file" accept=".pdf" required
+                                <input
+                                  type="file" accept=".pdf" required={!editingId}
                                   onChange={handleSampleFileChange}
                                   className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
                                 />
@@ -3076,46 +3169,148 @@ export default function AdvancedHistoryArchive() {
                               <div className="col-span-4 text-xs font-bold text-slate-500 uppercase">Pages (e.g. 1, 3-5)</div>
                             </div>
 
-                            {sampleForm.scores.map((score, idx) => (
-                              <div key={idx} className="grid grid-cols-12 gap-3 items-center bg-slate-50 p-2 rounded-lg border border-slate-100">
-                                <div className="col-span-5">
-                                  <input 
-                                    type="text" placeholder="e.g. 2016D Q3"
-                                    className="w-full p-2 bg-white border border-slate-200 rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                                    value={score.tag}
-                                    onChange={(e) => {
-                                      const newScores = [...sampleForm.scores];
-                                      newScores[idx].tag = e.target.value;
-                                      setSampleForm({...sampleForm, scores: newScores});
-                                    }}
-                                  />
+                            {sampleForm.scores.map((score, idx) => {
+                              // Auto-detect subquestions based on the tag
+                              let matchedParent = null;
+                              if (score.tag.trim()) {
+                                const tagLower = score.tag.trim().toLowerCase();
+                                // Match if the tag is exactly the title, or starts with the title
+                                matchedParent = archives.find(a =>
+                                  tagLower === a.title.toLowerCase() ||
+                                  tagLower.startsWith(a.title.toLowerCase())
+                                );
+                              }
+
+                              return (
+                                <div key={idx} className="flex flex-col bg-slate-50 p-3 rounded-lg border border-slate-100 gap-3">
+                                  <div className="grid grid-cols-12 gap-3 items-center">
+                                    <div className="col-span-5">
+                                      <input 
+                                        type="text" placeholder="e.g. 2016D Q1"
+                                        className="w-full p-2 bg-white border border-slate-200 rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                        value={score.tag}
+                                        onChange={(e) => {
+                                          const newScores = [...sampleForm.scores];
+                                          newScores[idx].tag = e.target.value;
+                                          setSampleForm({ ...sampleForm, scores: newScores });
+                                        }}
+                                      />
+                                    </div>
+                                    <div className="col-span-3">
+                                      <input
+                                        type="text" placeholder="Total Mark"
+                                        className="w-full p-2 bg-white border border-slate-200 rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                        value={score.mark}
+                                        onChange={(e) => {
+                                          const newScores = [...sampleForm.scores];
+                                          newScores[idx].mark = e.target.value;
+                                          setSampleForm({ ...sampleForm, scores: newScores });
+                                        }}
+                                        // --- ADD THIS ONPASTE BLOCK HERE ---
+                                        onPaste={(e) => {
+                                          const pasteData = e.clipboardData.getData('text');
+                                          if (pasteData.includes('\n')) {
+                                            e.preventDefault();
+                                            const lines = pasteData.trim().split('\n').map(l => l.trim()).filter(l => l);
+
+                                            const newScores = [...sampleForm.scores];
+                                            let currentLineIdx = 0;
+
+                                            for (let i = idx; i < newScores.length; i++) {
+                                              if (currentLineIdx >= lines.length) break;
+
+                                              const currentScore = newScores[i];
+
+                                              let currentMatchedParent = null;
+                                              if (currentScore.tag.trim()) {
+                                                const tagLower = currentScore.tag.trim().toLowerCase();
+                                                currentMatchedParent = archives.find(a =>
+                                                  tagLower === a.title.toLowerCase() || tagLower.startsWith(a.title.toLowerCase())
+                                                );
+                                              }
+
+                                              // If it matches a parent with sub-questions, distribute the marks
+                                              if (currentMatchedParent && currentMatchedParent.subQuestions && currentMatchedParent.subQuestions.length > 0) {
+                                                const newSubMarks = { ...currentScore.subMarks };
+                                                let markerTotals = [];
+
+                                                currentMatchedParent.subQuestions.forEach((subQ) => {
+                                                  if (currentLineIdx < lines.length) {
+                                                    const line = lines[currentLineIdx];
+                                                    const marks = line.split(/\s+/).map(m => parseInt(m, 10)).filter(m => !isNaN(m));
+
+                                                    if (marks.length > 0) {
+                                                      marks.forEach((m, mIdx) => {
+                                                        markerTotals[mIdx] = (markerTotals[mIdx] || 0) + m;
+                                                      });
+                                                      const allSame = marks.every(m => m === marks[0]);
+                                                      newSubMarks[subQ.label] = allSame ? String(marks[0]) : marks.join('/');
+                                                    }
+                                                    currentLineIdx++;
+                                                  }
+                                                });
+
+                                                currentScore.subMarks = newSubMarks;
+                                                if (markerTotals.length > 0) {
+                                                  const allTotalsSame = markerTotals.every(t => t === markerTotals[0]);
+                                                  currentScore.mark = allTotalsSame ? String(markerTotals[0]) : markerTotals.join('/');
+                                                }
+                                              } else {
+                                                // If no sub-questions exist, just dump the line into the total mark
+                                                currentScore.mark = lines[currentLineIdx];
+                                                currentLineIdx++;
+                                              }
+                                            }
+                                            setSampleForm({ ...sampleForm, scores: newScores });
+                                          }
+                                        }}
+                                      // --- END ONPASTE BLOCK ---
+                                      />
+                                    </div>
+                                    <div className="col-span-4">
+                                      <input 
+                                        type="text" placeholder="e.g. 1, 3-5"
+                                        className="w-full p-2 bg-white border border-slate-200 rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                        value={score.pagesStr}
+                                        onChange={(e) => {
+                                          const newScores = [...sampleForm.scores];
+                                          newScores[idx].pagesStr = e.target.value;
+                                          setSampleForm({...sampleForm, scores: newScores});
+                                        }}
+                                      />
+                                    </div>
+                                  </div>
+
+                                  {/* Dynamic Sub-question Mark Inputs */}
+                                  {matchedParent && matchedParent.subQuestions && matchedParent.subQuestions.length > 0 && (
+                                    <div className="pl-4 border-l-2 border-indigo-200 ml-2 grid grid-cols-2 sm:grid-cols-4 gap-2 mt-1">
+                                      {matchedParent.subQuestions.map((sq) => (
+                                        <div key={sq.id} className="flex items-center gap-2">
+                                          <span className="text-xs font-bold text-slate-500 w-6">Q{sq.label}</span>
+
+                                          {/* Add this input back in! */}
+                                          <input
+                                            type="text"
+                                            placeholder="Mark"
+                                            className="w-16 p-1 bg-white border border-slate-200 rounded text-xs focus:ring-2 focus:ring-indigo-500 outline-none"
+                                            value={score.subMarks?.[sq.label] || ''}
+                                            onChange={(e) => {
+                                              const newScores = [...sampleForm.scores];
+                                              newScores[idx].subMarks = {
+                                                ...newScores[idx].subMarks,
+                                                [sq.label]: e.target.value
+                                              };
+                                              setSampleForm({ ...sampleForm, scores: newScores });
+                                            }}
+                                          />
+
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
-                                <div className="col-span-3">
-                                  <input 
-                                    type="number" placeholder="Mark"
-                                    className="w-full p-2 bg-white border border-slate-200 rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                                    value={score.mark}
-                                    onChange={(e) => {
-                                      const newScores = [...sampleForm.scores];
-                                      newScores[idx].mark = e.target.value;
-                                      setSampleForm({...sampleForm, scores: newScores});
-                                    }}
-                                  />
-                                </div>
-                                <div className="col-span-4">
-                                  <input 
-                                    type="text" placeholder="e.g. 1, 3-5"
-                                    className="w-full p-2 bg-white border border-slate-200 rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                                    value={score.pagesStr}
-                                    onChange={(e) => {
-                                      const newScores = [...sampleForm.scores];
-                                      newScores[idx].pagesStr = e.target.value;
-                                      setSampleForm({...sampleForm, scores: newScores});
-                                    }}
-                                  />
-                                </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         </div>
                       </form>
@@ -3208,7 +3403,62 @@ export default function AdvancedHistoryArchive() {
           </div>
         )}
       </AnimatePresence>
+      {/* --- LINKED MARKS MODAL --- */}
+      <AnimatePresence>
+        {showMarksModal && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-xl w-full max-w-3xl max-h-[80vh] flex flex-col shadow-2xl overflow-hidden"
+            >
+              <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    <BarChart2 size={20} className="text-teal-600" /> Assessment Marks
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-1">Showing marks linked to: <span className="font-bold">{currentMarksDocTitle}</span></p>
+                </div>
+                <button onClick={() => setShowMarksModal(false)} className="text-slate-400 hover:text-slate-800">
+                  <X size={20} />
+                </button>
+              </div>
 
+              <div className="flex-1 overflow-y-auto p-6 bg-slate-50/50">
+                {isLoadingMarks ? (
+                  <div className="flex justify-center py-10"><Loader2 className="animate-spin text-teal-600" size={32} /></div>
+                ) : linkedMarksData.length === 0 ? (
+                  <div className="text-center py-10 text-slate-500 italic">No assessment marks linked to this document yet.</div>
+                ) : (
+                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                    <table className="w-full text-left text-sm">
+                      <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase text-xs font-bold">
+                        <tr>
+                          <th className="px-4 py-3">Student</th>
+                          <th className="px-4 py-3">Class</th>
+                          <th className="px-4 py-3">Assessment</th>
+                          <th className="px-4 py-3 text-right">Mark</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {linkedMarksData.map((record, idx) => (
+                          <tr key={idx} className="hover:bg-slate-50">
+                            <td className="px-4 py-3 font-medium text-slate-800">{record.studentName}</td>
+                            <td className="px-4 py-3 text-slate-600">{record.className} ({record.classNumber})</td>
+                            <td className="px-4 py-3 text-slate-600">{record.assessmentName}</td>
+                            <td className="px-4 py-3 text-right font-bold text-teal-600">{record.mark} / {record.fullMark}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
       <style>{`
         .custom-scrollbar::-webkit-scrollbar {
           width: 4px;

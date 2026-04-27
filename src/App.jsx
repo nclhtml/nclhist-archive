@@ -5,9 +5,13 @@ import {
   Sparkles, ArrowUpDown, Eye, BookOpen, ArrowLeft, 
   FileDigit, Settings, Hash, ChevronLeft, ChevronRight,
   Users, Shield, Layers, Save, Calendar, Clock, LayoutList, FileStack,
-  BarChart2
+  BarChart2, GraduationCap, FileOutput, GripHorizontal, FolderOpen
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+
+// --- PDF-LIB IMPORT ---
+// Note: Ensure 'pdf-lib' is installed in your project (npm install pdf-lib)
+import { PDFDocument } from 'pdf-lib';
 
 // --- ACTUAL FIREBASE & AUTH IMPORTS ---
 import { db, storage } from './firebase.js';
@@ -54,6 +58,29 @@ const ensureArray = (data) => {
   if (Array.isArray(data)) return data;
   if (data && typeof data === 'string') return [data];
   return [];
+};
+
+// --- HELPER: Parse Page Strings (e.g., "1, 3-5") ---
+const parsePages = (pageStr, maxPages) => {
+  const pages = new Set();
+  if (!pageStr) return [];
+  const parts = pageStr.split(',');
+  for (let p of parts) {
+    if (p.includes('-')) {
+      const [startStr, endStr] = p.split('-');
+      const start = parseInt(startStr.trim(), 10);
+      const end = parseInt(endStr.trim(), 10);
+      if (start && end && start <= end) {
+        for (let i = start; i <= end; i++) {
+          if (i <= maxPages && i > 0) pages.add(i - 1); // 0-indexed
+        }
+      }
+    } else {
+      const num = parseInt(p.trim(), 10);
+      if (num && num <= maxPages && num > 0) pages.add(num - 1);
+    }
+  }
+  return Array.from(pages).sort((a, b) => a - b);
 };
 
 // --- REUSABLE COMPONENT: GRID CHECKBOX GROUP (No Scroll) ---
@@ -367,6 +394,7 @@ export default function AdvancedHistoryArchive() {
   const [archives, setArchives] = useState([]); 
   
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [uploadSelection, setUploadSelection] = useState(null); // 'question' | 'sample' | null
   const [isManageFiltersOpen, setIsManageFiltersOpen] = useState(false); 
   const [isUserManagementOpen, setIsUserManagementOpen] = useState(false); 
   const [manageTab, setManageTab] = useState('users'); // 'users' | 'tiers'
@@ -378,6 +406,8 @@ export default function AdvancedHistoryArchive() {
   // Preview Modal State
   const [previewItem, setPreviewItem] = useState(null); 
   const [viewingAnswer, setViewingAnswer] = useState(false); 
+  const [previewSamples, setPreviewSamples] = useState([]);
+  const [activeSample, setActiveSample] = useState(null);
 
   // Linked Marks Modal State
   const [showMarksModal, setShowMarksModal] = useState(false);
@@ -425,6 +455,22 @@ export default function AdvancedHistoryArchive() {
   const [selectedFile, setSelectedFile] = useState(null);
   const [selectedAnswerFile, setSelectedAnswerFile] = useState(null); 
 
+  // Student Sample Form State
+  const currentYear = new Date().getFullYear().toString();
+  const [sampleForm, setSampleForm] = useState({
+    year: currentYear,
+    language: 'English',
+    overallGrade: '',
+    scores: Array.from({ length: 6 }, () => ({ tag: '', mark: '', pagesStr: '' }))
+  });
+  const [isManageSamplesModalOpen, setIsManageSamplesModalOpen] = useState(false);
+  const [allSamples, setAllSamples] = useState([]);
+  const [expandedSampleYears, setExpandedSampleYears] = useState({});
+  const [selectedSampleFile, setSelectedSampleFile] = useState(null);
+  const [loadedPdfDoc, setLoadedPdfDoc] = useState(null);
+  const [pdfPageCount, setPdfPageCount] = useState(0);
+  const [samplePdfPreviewUrl, setSamplePdfPreviewUrl] = useState('');
+
   // --- USER MANAGEMENT STATE ---
   const [managedUsers, setManagedUsers] = useState([]);
   const [newUserEmail, setNewUserEmail] = useState('');
@@ -441,6 +487,13 @@ export default function AdvancedHistoryArchive() {
   const [selectedRoleForAccess, setSelectedRoleForAccess] = useState('viewer');
   const [newRoleInput, setNewRoleInput] = useState('');
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+
+  // --- CLEANUP BLOB URLS ---
+  useEffect(() => {
+    return () => {
+      if (samplePdfPreviewUrl) URL.revokeObjectURL(samplePdfPreviewUrl);
+    };
+  }, [samplePdfPreviewUrl]);
 
   // --- FETCH SYSTEM SETTINGS (ROLES, TIERS, ACCESS) ---
   useEffect(() => {
@@ -737,6 +790,33 @@ export default function AdvancedHistoryArchive() {
     setIsLoadingMarks(false);
   };
 
+  // --- FETCH STUDENT SAMPLES FOR PREVIEW ---
+  useEffect(() => {
+    const fetchSamples = async () => {
+      if (previewItem && !previewItem.isFullPaper) {
+        let currentTag = "";
+        if (previewItem.parent.paperType === "Paper 2 (Essay)") {
+          currentTag = `${previewItem.parent.title} Q${previewItem.child.label}`;
+        } else if (previewItem.parent.paperType === "Paper 1 (DBQ)") {
+          currentTag = `${previewItem.parent.title} Q1${previewItem.child.label}`;
+        }
+
+        try {
+          const q = query(collection(db, "student_samples"), where("questionTags", "array-contains", currentTag));
+          const snap = await getDocs(q);
+          setPreviewSamples(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        } catch (error) {
+          console.error("Error fetching student samples:", error);
+        }
+      } else {
+        setPreviewSamples([]);
+      }
+      setActiveSample(null);
+    };
+
+    fetchSamples();
+  }, [previewItem]);
+
   // --- HELPER: Auto Labelling ---
   const getNextLabel = (index, type) => {
     if (type === "Paper 1 (DBQ)") return String.fromCharCode(97 + index); 
@@ -821,7 +901,15 @@ export default function AdvancedHistoryArchive() {
         const qTypesStr = childTypes.join(" ");
         const sTypesStr = childSourceTypes.join(" ");
         
-        const searchString = `${parent.title} ${parentTopicsStr} ${childTopicsStr} ${qTypesStr} ${sTypesStr} ${child.content}`.toLowerCase();
+        // Construct specific tag for search (e.g. "2026E Q1" or "2025D Q1a")
+        let specificTag = "";
+        if (parent.paperType === "Paper 2 (Essay)") {
+          specificTag = `${parent.title} Q${child.label}`;
+        } else if (parent.paperType === "Paper 1 (DBQ)") {
+          specificTag = `${parent.title} Q1${child.label}`;
+        }
+
+        const searchString = `${parent.title} ${specificTag} ${parentTopicsStr} ${childTopicsStr} ${qTypesStr} ${sTypesStr} ${child.content}`.toLowerCase();
         const matchSearch = searchTerm === '' || searchString.includes(searchTerm.toLowerCase());
 
         if (matchQuestionType && matchSourceType && matchMarks && matchSearch && matchTopic) {
@@ -1037,6 +1125,7 @@ export default function AdvancedHistoryArchive() {
     e.stopPropagation(); 
     if (!user?.isAdmin) return;
     setEditingId(parentItem.id);
+    setUploadSelection('question');
     
     const itemData = JSON.parse(JSON.stringify(parentItem));
     itemData.topic = ensureArray(itemData.topic);
@@ -1116,16 +1205,17 @@ export default function AdvancedHistoryArchive() {
         answerFileUrl = await getDownloadURL(ansRef);
       }
 
-      const payload = {
-        ...uploadForm,
-        hasFile: !!fileUrl,
-        fileUrl: fileUrl,
-        hasAnswer: !!answerFileUrl,
-        answerFileUrl: answerFileUrl,
-        updatedAt: new Date().toISOString(),
-        updatedBy: user?.email || 'anonymous',
-        tier: uploadForm.tier || '10' // <-- SAVE TIER
-      };
+      const payload = JSON.parse(JSON.stringify({
+        year: sampleForm.year, // Changed from studentName
+        language: sampleForm.language || 'English',
+        overallGrade: sampleForm.overallGrade || '',
+        questionTags,
+        scoresData,
+        addedAt: new Date().toISOString(),
+        addedBy: user.email
+      }));
+
+      await addDoc(collection(db, "student_samples"), payload);
 
       if (editingId) {
         await updateDoc(doc(db, "archives", editingId), payload);
@@ -1152,9 +1242,141 @@ export default function AdvancedHistoryArchive() {
     }
   };
 
+  // --- HANDLE STUDENT SAMPLE FILE SELECTION (Generate Previews) ---
+  const handleSampleFileChange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    setSelectedSampleFile(file);
+    setIsLoading(true);
+    
+    try {
+      const fileBytes = await file.arrayBuffer();
+      const pdfDoc = await PDFDocument.load(fileBytes);
+      setLoadedPdfDoc(pdfDoc);
+      setPdfPageCount(pdfDoc.getPageCount());
+      
+      if (samplePdfPreviewUrl) URL.revokeObjectURL(samplePdfPreviewUrl);
+      setSamplePdfPreviewUrl(URL.createObjectURL(file));
+    } catch (error) {
+      console.error("Error generating PDF previews:", error);
+      alert("Failed to load PDF. Ensure it is a valid, unprotected PDF file.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // --- HANDLE STUDENT SAMPLE SUBMIT (Split & Upload) ---
+  const handleSampleSubmit = async (e) => {
+    e.preventDefault();
+    if (!user?.isAdmin) return;
+    if (!sampleForm.year || !loadedPdfDoc) {
+      alert("Please provide a year and a valid PDF file.");
+      return;
+    }
+    setIsLoading(true);
+
+    try {
+      const safeName = String(sampleForm.year).replace(/[^a-zA-Z0-9\s\-_]/g, '').trim();
+      const validScores = sampleForm.scores.filter(s => s.tag.trim() !== '');
+      const questionTags = validScores.map(s => s.tag.trim());
+      const scoresData = {};
+
+      for (const score of validScores) {
+        const pageIndices = parsePages(score.pagesStr, pdfPageCount);
+        if (pageIndices.length === 0) {
+          alert(`Invalid page selection for tag ${score.tag}. Skipping this entry.`);
+          continue;
+        }
+
+        // Split PDF
+        const splitPdf = await PDFDocument.create();
+        const copiedPages = await splitPdf.copyPages(loadedPdfDoc, pageIndices);
+        copiedPages.forEach(p => splitPdf.addPage(p));
+        const splitBytes = await splitPdf.save();
+
+        // Upload Split PDF
+        const splitFileName = `${safeName}_${score.tag.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.pdf`;
+        const splitStoragePath = `pdfs/student_samples/${splitFileName}`;
+        const splitRef = ref(storage, splitStoragePath);
+        
+        await uploadBytes(splitRef, splitBytes, { contentType: 'application/pdf' });
+        const splitUrl = await getDownloadURL(splitRef);
+
+        scoresData[score.tag.trim()] = { 
+          mark: score.mark, 
+          fileUrl: splitUrl,
+          pagesStr: score.pagesStr
+        };
+      }
+
+      if (Object.keys(scoresData).length === 0) {
+        alert("No valid scores with page selections found. Aborting upload.");
+        setIsLoading(false);
+        return;
+      }
+
+      await addDoc(collection(db, "student_samples"), {
+        year: sampleForm.year,
+        language: sampleForm.language,
+        overallGrade: sampleForm.overallGrade,
+        questionTags,
+        scoresData,
+        addedAt: new Date().toISOString(),
+        addedBy: user.email
+      });
+
+      closeModal();
+      alert("Student sample split and uploaded successfully!");
+    } catch (error) {
+      console.error("Error uploading student sample:", error);
+      alert("Failed to save student sample.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  const fetchAllSamples = async () => {
+    setIsLoading(true);
+    try {
+      const snap = await getDocs(collection(db, "student_samples"));
+      setAllSamples(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (error) {
+      console.error("Error fetching all samples:", error);
+    }
+    setIsLoading(false);
+  };
+
+  const handleDeleteSample = async (sampleId, scoresData) => {
+    if (!window.confirm("Are you sure you want to delete this sample? This will also remove the attached PDFs.")) return;
+    setIsLoading(true);
+    try {
+      // Delete associated PDFs from storage
+      if (scoresData) {
+        for (const key in scoresData) {
+          const fileUrl = scoresData[key].fileUrl;
+          if (fileUrl) {
+            try { await deleteObject(ref(storage, fileUrl)); } catch (e) { console.warn("Failed to delete PDF:", e); }
+          }
+        }
+      }
+      // Delete Firestore document
+      await deleteDoc(doc(db, "student_samples", sampleId));
+      setAllSamples(prev => prev.filter(s => s.id !== sampleId));
+    } catch (error) {
+      console.error("Error deleting sample:", error);
+      alert("Failed to delete sample.");
+    }
+    setIsLoading(false);
+  };
+
+  const openManageSamplesModal = () => {
+    fetchAllSamples();
+    setIsManageSamplesModalOpen(true);
+  };
   const closeModal = () => {
     setIsUploadModalOpen(false);
     setTimeout(() => {
+      setUploadSelection(null);
       setEditingId(null);
       setDeleteConfirm(false);
       setUploadForm({
@@ -1163,12 +1385,22 @@ export default function AdvancedHistoryArchive() {
       });
       setSelectedFile(null);
       setSelectedAnswerFile(null);
+      setSampleForm({
+        studentName: '', language: 'English', overallGrade: '',
+        scores: Array.from({ length: 6 }, () => ({ tag: '', mark: '', pagesStr: '' }))
+      });
+      setSelectedSampleFile(null);
+      setLoadedPdfDoc(null);
+      setPdfPageCount(0);
+      if (samplePdfPreviewUrl) URL.revokeObjectURL(samplePdfPreviewUrl);
+      setSamplePdfPreviewUrl('');
     }, 300);
   };
 
   const closePreview = () => {
     setPreviewItem(null);
     setViewingAnswer(false);
+    setActiveSample(null);
   };
 
   useEffect(() => {
@@ -1250,6 +1482,9 @@ export default function AdvancedHistoryArchive() {
                     className="btn-secondary flex-1 md:flex-none hover:bg-purple-50 hover:text-purple-700 hover:border-purple-200"
                   >
                     <Users size={18} /> Manage Access
+                  </button>
+                  <button onClick={openManageSamplesModal} className="btn-secondary flex-1 md:flex-none hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200">
+                    <FolderOpen size={18} /> Manage Samples
                   </button>
                   <button onClick={() => setIsUploadModalOpen(true)} className="btn-primary flex-1 md:flex-none">
                     <Upload size={18} /> Upload
@@ -1469,7 +1704,7 @@ export default function AdvancedHistoryArchive() {
                 <Search className="absolute left-4 top-3.5 text-slate-400" size={20} />
                 <input
                   type="text"
-                  placeholder="Search for topics, question types, or titles..."
+                  placeholder="Search for topics, question types, or titles (e.g., 2026E Q1, 2025D Q1a)..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500 outline-none"
@@ -1743,6 +1978,54 @@ export default function AdvancedHistoryArchive() {
             </div>
           </div>
         )}
+        <AnimatePresence>
+          {isManageSamplesModalOpen && user?.isAdmin && (
+            <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+                <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">Manage Student Samples</h2>
+                    <p className="text-xs text-slate-500 mt-1">View or delete uploaded student samples organized by year.</p>
+                  </div>
+                  <button onClick={() => setIsManageSamplesModalOpen(false)} className="text-slate-400 hover:text-slate-800"><X size={20} /></button>
+                </div>
+                <div className="flex-1 overflow-y-auto p-6 bg-slate-50/50">
+                  {isLoading ? (
+                    <div className="flex justify-center py-10"><Loader2 className="animate-spin text-indigo-600" size={32} /></div>
+                  ) : (
+                    <div className="space-y-4">
+                      {Array.from(new Set(allSamples.map(s => s.year))).sort((a, b) => b.localeCompare(a)).map(year => {
+                        const yearSamples = allSamples.filter(s => s.year === year);
+                        const isExpanded = expandedSampleYears[year];
+                        return (
+                          <div key={year} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                            <button onClick={() => setExpandedSampleYears(prev => ({ ...prev, [year]: !prev[year] }))} className="w-full flex items-center justify-between p-4 bg-slate-50 hover:bg-slate-100 font-bold text-slate-700">
+                              <span>{year} <span className="bg-indigo-100 text-indigo-700 text-xs px-2 py-0.5 rounded-full ml-2">{yearSamples.length}</span></span>
+                              <ChevronDown size={16} className={`transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                            </button>
+                            {isExpanded && (
+                              <div className="p-4 border-t border-slate-100 space-y-3">
+                                {yearSamples.map(sample => (
+                                  <div key={sample.id} className="flex justify-between p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                                    <div>
+                                      <div className="text-sm font-bold text-slate-800">[{sample.language}] Grade: {sample.overallGrade}</div>
+                                      <div className="text-xs text-slate-500 mt-1">Tags: {sample.questionTags?.join(', ')}</div>
+                                    </div>
+                                    <button onClick={() => handleDeleteSample(sample.id, sample.scoresData)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
       </main>
 
       {/* --- USER MANAGEMENT MODAL (ADMIN ONLY) --- */}
@@ -2201,16 +2484,16 @@ export default function AdvancedHistoryArchive() {
                 <div className="flex items-center gap-3">
                   {!viewingAnswer && previewItem.parent.hasAnswer && (
                     <button 
-                      onClick={() => setViewingAnswer(true)}
+                      onClick={() => { setViewingAnswer(true); setActiveSample(null); }}
                       className="hidden sm:flex px-4 py-2 rounded-lg bg-green-600 text-white text-sm font-bold hover:bg-green-700 transition-all items-center gap-2"
                     >
                       <BookOpen size={16} /> Show Answer
                     </button>
                   )}
 
-                  {viewingAnswer && (
+                  {(viewingAnswer || activeSample) && (
                     <button 
-                      onClick={() => setViewingAnswer(false)}
+                      onClick={() => { setViewingAnswer(false); setActiveSample(null); }}
                       className="hidden sm:flex px-4 py-2 rounded-lg bg-slate-600 text-white text-sm font-bold hover:bg-slate-700 transition-all items-center gap-2"
                     >
                       <ArrowLeft size={16} /> Return to Question
@@ -2224,14 +2507,14 @@ export default function AdvancedHistoryArchive() {
                     <BarChart2 size={16} /> View Marks
                   </button>
 
-                  {((!viewingAnswer && previewItem.parent.hasFile) || (viewingAnswer && previewItem.parent.hasAnswer)) && (
+                  {((!viewingAnswer && !activeSample && previewItem.parent.hasFile) || (viewingAnswer && previewItem.parent.hasAnswer) || activeSample) && (
                     <a 
-                      href={viewingAnswer ? previewItem.parent.answerFileUrl : previewItem.parent.fileUrl}
+                      href={activeSample ? activeSample.fileUrl : (viewingAnswer ? previewItem.parent.answerFileUrl : previewItem.parent.fileUrl)}
                       target="_blank"
                       rel="noreferrer"
                       className="hidden sm:flex px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 transition-all items-center gap-2"
                     >
-                      <Download size={16} /> {viewingAnswer ? "Download Answer" : "Download PDF"}
+                      <Download size={16} /> {activeSample ? "Download Sample" : (viewingAnswer ? "Download Answer" : "Download PDF")}
                     </a>
                   )}
                   
@@ -2248,106 +2531,145 @@ export default function AdvancedHistoryArchive() {
               <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
                 
                 {!viewingAnswer && (
-                  <div className={`${previewItem.parent.hasFile ? 'md:w-1/3 lg:w-1/4 border-r border-slate-200' : 'w-full'} p-6 overflow-y-auto bg-slate-50 custom-scrollbar`}>
-                    
-                    {/* FULL PAPER LEFT PANEL */}
-                    {previewItem.isFullPaper ? (
-                      <div className="space-y-6">
-                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                          <h3 className="text-sm font-bold text-slate-800 mb-2">Paper Overview</h3>
-                          <div className="flex flex-wrap gap-2">
-                            {ensureArray(previewItem.parent.topic).map((t, i) => (
-                              <span key={i} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1">
-                                <Tag size={12} /> {t}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-
-                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                          <LayoutList size={14} /> All Sub-Questions
-                        </h3>
-
-                        {previewItem.parent.subQuestions.map((sq, idx) => (
-                          <div key={sq.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                            <div className="flex justify-between items-start mb-2">
-                              <span className="bg-slate-800 text-white text-xs px-2 py-1 rounded-md font-bold">
-                                Q{sq.label}
-                              </span>
-                              {sq.marks && (
-                                <span className="text-xs text-slate-500 font-normal border border-slate-200 px-1.5 py-0.5 rounded bg-slate-50">
-                                  {sq.marks} Marks
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap mb-3">
-                              {sq.content || <span className="text-slate-400 italic">No text content available.</span>}
-                            </div>
-                            <div className="flex flex-wrap gap-1.5">
-                              {ensureArray(sq.topic).map((t, i) => (
-                                <span key={`t-${i}`} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px] font-medium border border-blue-100">
-                                  {t}
-                                </span>
-                              ))}
-                              {ensureArray(sq.questionType).map((qt, i) => (
-                                <span key={`qt-${i}`} className="px-1.5 py-0.5 bg-green-50 text-green-700 rounded text-[10px] font-medium border border-green-100">
-                                  {qt}
-                                </span>
-                              ))}
-                              {ensureArray(sq.sourceType).map((st, i) => (
-                                <span key={`st-${i}`} className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-medium border border-slate-200">
-                                  {st}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      /* SINGLE SUB-QUESTION LEFT PANEL */
-                      <div className="prose max-w-none">
-                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
-                          <FileText size={14} /> Question Content
-                        </h3>
-                        <div className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap bg-white p-4 rounded-lg border border-slate-200 shadow-sm">
-                          {previewItem.child.content || <span className="text-slate-400 italic">No text content available. Please refer to the PDF.</span>}
-                        </div>
-
-                        <div className="mt-6 space-y-4">
-                          <div>
-                            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Topics</h4>
+                  <div className={`${previewItem.parent.hasFile || previewSamples.length > 0 ? 'md:w-1/3 lg:w-1/4 border-r border-slate-200' : 'w-full'} flex flex-col bg-slate-50`}>
+                    <div className="flex-1 p-6 overflow-y-auto custom-scrollbar">
+                      {/* FULL PAPER LEFT PANEL */}
+                      {previewItem.isFullPaper ? (
+                        <div className="space-y-6">
+                          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                            <h3 className="text-sm font-bold text-slate-800 mb-2">Paper Overview</h3>
                             <div className="flex flex-wrap gap-2">
-                              {[...ensureArray(previewItem.parent.topic), ...ensureArray(previewItem.child.topic)].map((t, i) => (
+                              {ensureArray(previewItem.parent.topic).map((t, i) => (
                                 <span key={i} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1">
                                   <Tag size={12} /> {t}
                                 </span>
                               ))}
                             </div>
                           </div>
-                          
-                          <div>
-                            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Question Types</h4>
-                            <div className="flex flex-wrap gap-2">
-                              {ensureArray(previewItem.child.questionType).map((qt, i) => (
-                                <span key={i} className="px-2 py-1 bg-green-50 text-green-700 rounded-md text-xs font-medium border border-green-100">
-                                  {qt}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
 
-                          {ensureArray(previewItem.child.sourceType).length > 0 && (
-                            <div>
-                              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Source Types</h4>
-                              <div className="flex flex-wrap gap-2">
-                                {ensureArray(previewItem.child.sourceType).map((st, i) => (
-                                  <span key={i} className="px-2 py-1 bg-slate-100 text-slate-600 rounded-md text-xs font-medium border border-slate-200 flex items-center gap-1">
-                                    <FileDigit size={12} /> {st}
+                          <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                            <LayoutList size={14} /> All Sub-Questions
+                          </h3>
+
+                          {previewItem.parent.subQuestions.map((sq, idx) => (
+                            <div key={sq.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                              <div className="flex justify-between items-start mb-2">
+                                <span className="bg-slate-800 text-white text-xs px-2 py-1 rounded-md font-bold">
+                                  Q{sq.label}
+                                </span>
+                                {sq.marks && (
+                                  <span className="text-xs text-slate-500 font-normal border border-slate-200 px-1.5 py-0.5 rounded bg-slate-50">
+                                    {sq.marks} Marks
+                                  </span>
+                                )}
+                              </div>
+                              <div className={`leading-relaxed whitespace-pre-wrap mb-3 ${previewItem.parent.paperType === "Paper 2 (Essay)" && !previewItem.parent.hasFile ? 'text-4xl md:text-5xl font-medium text-slate-800 py-4' : 'text-sm text-slate-700'}`}>
+                                {sq.content || <span className="text-slate-400 italic text-sm">No text content available.</span>}
+                              </div>
+                              <div className="flex flex-wrap gap-1.5">
+                                {ensureArray(sq.topic).map((t, i) => (
+                                  <span key={`t-${i}`} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px] font-medium border border-blue-100">
+                                    {t}
+                                  </span>
+                                ))}
+                                {ensureArray(sq.questionType).map((qt, i) => (
+                                  <span key={`qt-${i}`} className="px-1.5 py-0.5 bg-green-50 text-green-700 rounded text-[10px] font-medium border border-green-100">
+                                    {qt}
+                                  </span>
+                                ))}
+                                {ensureArray(sq.sourceType).map((st, i) => (
+                                  <span key={`st-${i}`} className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-medium border border-slate-200">
+                                    {st}
                                   </span>
                                 ))}
                               </div>
                             </div>
-                          )}
+                          ))}
+                        </div>
+                      ) : (
+                        /* SINGLE SUB-QUESTION LEFT PANEL */
+                        <div className="prose max-w-none">
+                          <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                            <FileText size={14} /> Question Content
+                          </h3>
+                          <div className={`leading-relaxed whitespace-pre-wrap bg-white p-4 rounded-lg border border-slate-200 shadow-sm ${previewItem.parent.paperType === "Paper 2 (Essay)" && !previewItem.parent.hasFile ? 'text-4xl md:text-5xl font-medium text-slate-900 p-8' : 'text-sm text-slate-800'}`}>
+                            {previewItem.child.content || <span className="text-slate-400 italic text-sm">No text content available. Please refer to the PDF.</span>}
+                          </div>
+
+                          <div className="mt-6 space-y-4">
+                            <div>
+                              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Topics</h4>
+                              <div className="flex flex-wrap gap-2">
+                                {[...ensureArray(previewItem.parent.topic), ...ensureArray(previewItem.child.topic)].map((t, i) => (
+                                  <span key={i} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1">
+                                    <Tag size={12} /> {t}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                            
+                            <div>
+                              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Question Types</h4>
+                              <div className="flex flex-wrap gap-2">
+                                {ensureArray(previewItem.child.questionType).map((qt, i) => (
+                                  <span key={i} className="px-2 py-1 bg-green-50 text-green-700 rounded-md text-xs font-medium border border-green-100">
+                                    {qt}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+
+                            {ensureArray(previewItem.child.sourceType).length > 0 && (
+                              <div>
+                                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Source Types</h4>
+                                <div className="flex flex-wrap gap-2">
+                                  {ensureArray(previewItem.child.sourceType).map((st, i) => (
+                                    <span key={i} className="px-2 py-1 bg-slate-100 text-slate-600 rounded-md text-xs font-medium border border-slate-200 flex items-center gap-1">
+                                      <FileDigit size={12} /> {st}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* STUDENT SAMPLES SECTION (Bottom Left) */}
+                    {!previewItem.isFullPaper && previewSamples.length > 0 && (
+                      <div className="p-4 border-t border-slate-200 bg-white shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-10">
+                        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                          <GraduationCap size={14} /> Student Samples
+                        </h3>
+                        <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
+                          {previewSamples.map(sample => {
+                            const currentTag = previewItem.parent.paperType === "Paper 2 (Essay)"
+                              ? `${previewItem.parent.title} Q${previewItem.child.label}`
+                              : `${previewItem.parent.title} Q1${previewItem.child.label}`;
+                            const scoreData = sample.scoresData[currentTag];
+
+                            return (
+                              <div key={sample.id} className={`p-3 border rounded-lg transition-colors ${activeSample?.id === sample.id ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-slate-200 hover:border-indigo-300'}`}>
+                                <div className="flex justify-between items-start mb-2">
+                                  <div className="text-xs font-medium text-slate-700">
+                                    <span className="font-bold text-slate-900">[{sample.language}]</span> Overall grade: <span className="font-bold text-indigo-600">{sample.overallGrade}</span>
+                                  </div>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                  <div className="text-xs text-slate-600">
+                                    Mark (this question): <span className="font-bold text-slate-900">{scoreData?.mark}</span>
+                                  </div>
+                                  <button 
+                                    onClick={() => setActiveSample(sample)}
+                                    className={`text-xs font-bold px-3 py-1.5 rounded-md transition-colors ${activeSample?.id === sample.id ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'}`}
+                                  >
+                                    View Sample
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
@@ -2355,7 +2677,13 @@ export default function AdvancedHistoryArchive() {
                 )}
 
                 <div className="flex-1 bg-slate-200 flex flex-col h-full relative">
-                  {viewingAnswer ? (
+                  {activeSample ? (
+                    <iframe 
+                      src={`${activeSample.fileUrl}#view=Fit&pagemode=thumbs`}
+                      className="w-full h-full"
+                      title="Student Sample Preview"
+                    />
+                  ) : viewingAnswer ? (
                     previewItem.parent.hasAnswer ? (
                       <iframe 
                         src={`${previewItem.parent.answerFileUrl}#view=Fit&pagemode=thumbs&page=1&zoom=page-fit`}
@@ -2383,110 +2711,6 @@ export default function AdvancedHistoryArchive() {
         )}
       </AnimatePresence>
 
-      {/* --- LINKED MARKS MODAL --- */}
-      <AnimatePresence>
-        {showMarksModal && (
-          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[80] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden"
-            >
-              <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50 flex-wrap gap-4">
-                <div>
-                  <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                    <BarChart2 size={20} className="text-teal-600" /> Linked Marks Record
-                  </h2>
-                  <p className="text-sm text-slate-500 mt-1">
-                    Showing all student marks linked to: <span className="font-bold text-slate-700">{currentMarksDocTitle}</span>
-                  </p>
-                </div>
-
-                {!isLoadingMarks && linkedMarksData.length > 0 && (() => {
-                  const validMarks = linkedMarksData.map(r => parseFloat(r.mark)).filter(m => !isNaN(m)).sort((a, b) => a - b);
-                  if (validMarks.length === 0) return null;
-                  const sum = validMarks.reduce((a, b) => a + b, 0);
-                  const mean = (sum / validMarks.length).toFixed(1);
-                  const mid = Math.floor(validMarks.length / 2);
-                  const median = validMarks.length % 2 !== 0 ? validMarks[mid].toFixed(1) : ((validMarks[mid - 1] + validMarks[mid]) / 2).toFixed(1);
-                  const max = validMarks[validMarks.length - 1].toFixed(1);
-                  const min = validMarks[0].toFixed(1);
-                  const passCount = linkedMarksData.filter(r => parseFloat(r.mark) >= (r.fullMark / 2)).length;
-                  const total = validMarks.length;
-
-                  return (
-                    <div className="hidden md:flex items-center gap-4 text-xs bg-white border border-slate-200 rounded-lg px-4 py-1.5 shadow-sm">
-                      <div className="flex flex-col items-center"><span className="text-slate-400 font-semibold uppercase text-[10px]">Mean</span><span className="font-bold text-slate-700 text-sm">{mean}</span></div>
-                      <div className="w-px h-6 bg-slate-200"></div>
-                      <div className="flex flex-col items-center"><span className="text-slate-400 font-semibold uppercase text-[10px]">Median</span><span className="font-bold text-slate-700 text-sm">{median}</span></div>
-                      <div className="w-px h-6 bg-slate-200"></div>
-                      <div className="flex flex-col items-center"><span className="text-slate-400 font-semibold uppercase text-[10px]">Pass</span><span className={`font-bold text-sm ${passCount >= total / 2 ? 'text-green-600' : 'text-red-500'}`}>{passCount}/{total}</span></div>
-                      <div className="w-px h-6 bg-slate-200"></div>
-                      <div className="flex flex-col items-center"><span className="text-slate-400 font-semibold uppercase text-[10px]">Max</span><span className="font-bold text-blue-600 text-sm">{max}</span></div>
-                      <div className="w-px h-6 bg-slate-200"></div>
-                      <div className="flex flex-col items-center"><span className="text-slate-400 font-semibold uppercase text-[10px]">Min</span><span className="font-bold text-orange-500 text-sm">{min}</span></div>
-                    </div>
-                  );
-                })()}
-
-                <button onClick={() => setShowMarksModal(false)} className="text-slate-400 hover:text-slate-800 ml-auto md:ml-0">
-                  <X size={20} />
-                </button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-6 bg-slate-50">
-                {isLoadingMarks ? (
-                  <div className="flex flex-col items-center justify-center py-20">
-                    <Loader2 className="animate-spin text-teal-600 mb-4" size={40} />
-                    <p className="text-slate-500">Loading marks data...</p>
-                  </div>
-                ) : linkedMarksData.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-20 text-slate-400 bg-white rounded-xl border border-slate-200 border-dashed">
-                    <BarChart2 size={48} className="mb-4 text-slate-300" />
-                    <h3 className="text-lg font-semibold text-slate-600">No Marks Found</h3>
-                    <p className="text-sm max-w-xs text-center mt-2">
-                      There are currently no student marks linked to this document.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                    <table className="w-full text-left text-sm border-collapse">
-                      <thead className="bg-slate-100 border-b border-slate-200 text-slate-600 uppercase text-xs font-bold sticky top-0">
-                        <tr>
-                          <th className="px-4 py-3 border-r border-slate-200">Class</th>
-                          <th className="px-4 py-3 border-r border-slate-200">No.</th>
-                          <th className="px-4 py-3 border-r border-slate-200">Student Name</th>
-                          <th className="px-4 py-3 border-r border-slate-200">Assessment Name</th>
-                          <th className="px-4 py-3 border-r border-slate-200">Term / Category</th>
-                          <th className="px-4 py-3 text-right text-teal-700">Total Mark</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {linkedMarksData.map((record, idx) => (
-                          <tr key={idx} className="hover:bg-slate-50 transition-colors">
-                            <td className="px-4 py-3 font-medium text-slate-700 border-r border-slate-200">{record.className}</td>
-                            <td className="px-4 py-3 text-slate-600 border-r border-slate-200">{record.classNumber}</td>
-                            <td className="px-4 py-3 font-medium text-slate-800 border-r border-slate-200">{record.studentName}</td>
-                            <td className="px-4 py-3 text-slate-700 border-r border-slate-200">{record.assessmentName}</td>
-                            <td className="px-4 py-3 text-slate-500 text-xs border-r border-slate-200">
-                              {record.term} <span className="mx-1">•</span> {record.category}
-                            </td>
-                            <td className="px-4 py-3 text-right font-bold text-teal-700 bg-teal-50/30">
-                              {record.mark}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
       {/* --- UPLOAD / EDIT MODAL --- */}
       <AnimatePresence>
         {isUploadModalOpen && user?.isAdmin && (
@@ -2498,16 +2722,20 @@ export default function AdvancedHistoryArchive() {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-white rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col max-h-full overflow-hidden"
+              className={`bg-white rounded-2xl w-full shadow-2xl flex flex-col overflow-hidden ${
+                uploadSelection === 'sample' && selectedSampleFile 
+                  ? 'max-w-full h-full' 
+                  : (uploadSelection ? 'max-w-4xl max-h-full' : 'max-w-2xl max-h-full')
+              }`}
             >
               {/* Modal Header */}
               <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-2xl shrink-0">
                 <div>
                   <h2 className="text-xl font-bold text-slate-800">
-                    {editingId ? 'Edit Question Set' : 'Upload New Question Set'}
+                    {!uploadSelection ? 'Select Upload Type' : (uploadSelection === 'question' ? (editingId ? 'Edit Question Set' : 'Upload New Question Set') : 'Upload Student Sample')}
                   </h2>
                   <p className="text-sm text-slate-500">
-                    {editingId ? 'Modify the parent document and its sub-questions.' : 'Add a parent document and its sub-questions.'}
+                    {!uploadSelection ? 'Choose what kind of document you want to add to the archive.' : (uploadSelection === 'question' ? 'Add or modify a parent document and its sub-questions.' : 'Upload a student sample PDF and assign marks.')}
                   </p>
                 </div>
                 <button 
@@ -2519,242 +2747,406 @@ export default function AdvancedHistoryArchive() {
               </div>
               
               {/* Modal Body */}
-              <div className="flex-1 overflow-y-auto p-6 bg-slate-50/50">
-                <form id="upload-form" onSubmit={handleUploadSubmit} className="space-y-8">
-                  
-                  {/* SECTION 1: PARENT DETAILS */}
-                  <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-                    <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                      <FileText size={16} /> Parent Document Details
-                    </h3>
-                    
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div className="col-span-full">
-                        <label className="label flex justify-between items-center">
-                          <span>Document Title</span>
-                          <span className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded font-medium flex items-center gap-1">
-                            <Sparkles size={10} /> Auto-detects "2012D" or "2013E"
-                          </span>
-                        </label>
-                        <input 
-                          type="text" required placeholder="e.g. 2021E (Type '2012D' to auto-select DBQ)"
-                          className="input-field"
-                          value={uploadForm.title} 
-                          onChange={handleTitleChange}
-                        />
+              <div className={`flex-1 overflow-y-auto bg-slate-50/50 ${uploadSelection === 'sample' && selectedSampleFile ? 'p-0' : 'p-6'}`}>
+                
+                {/* SELECTION SCREEN */}
+                {!uploadSelection && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 p-4">
+                    <button 
+                      onClick={() => setUploadSelection('question')}
+                      className="flex flex-col items-center justify-center p-8 bg-white border-2 border-slate-200 rounded-2xl hover:border-blue-500 hover:bg-blue-50 transition-all group"
+                    >
+                      <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                        <FileText size={32} />
                       </div>
+                      <h3 className="text-lg font-bold text-slate-800 mb-2">Question Set</h3>
+                      <p className="text-sm text-slate-500 text-center">Upload exam papers, mock tests, and their sub-questions.</p>
+                    </button>
 
-                      <div>
-                        <label className="label">Paper Type</label>
-                        <select required className="input-field" value={uploadForm.paperType} onChange={(e) => handleParentChange('paperType', e.target.value)}>
-                          <option value="">Select Paper</option>
-                          {PAPER_TYPES.map(p => <option key={p} value={p}>{p}</option>)}
-                        </select>
+                    <button 
+                      onClick={() => setUploadSelection('sample')}
+                      className="flex flex-col items-center justify-center p-8 bg-white border-2 border-slate-200 rounded-2xl hover:border-indigo-500 hover:bg-indigo-50 transition-all group"
+                    >
+                      <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                        <GraduationCap size={32} />
                       </div>
-
-                      {/* TIER SELECTION */}
-                      <div>
-                        <label className="label flex items-center gap-2">
-                          <Layers size={14} /> Document Tier Level
-                        </label>
-                        <select required className="input-field" value={uploadForm.tier} onChange={(e) => handleParentChange('tier', e.target.value)}>
-                          {systemTiers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                        </select>
-                      </div>
-
-                      {/* Parent Topic - Disabled for Paper 2 */}
-                      <div>
-                        <label className={`label flex items-center gap-2 ${uploadForm.paperType === "Paper 2 (Essay)" ? 'text-slate-300' : ''}`}>
-                          <Tag size={14} /> Main Topic(s) (Paper 1 Only)
-                        </label>
-                        <CreatableSelect 
-                          options={availableTopics}
-                          value={uploadForm.topic}
-                          onChange={(val) => handleParentChange('topic', val)}
-                          onCreate={handleCreateTopic}
-                          placeholder={uploadForm.paperType === "Paper 2 (Essay)" ? "Not applicable" : "Select or type new topic..."}
-                          disabled={uploadForm.paperType === "Paper 2 (Essay)"}
-                          icon={Tag}
-                          isMulti={true} 
-                        />
-                      </div>
-
-                      <div>
-                        <label className="label">Origin</label>
-                        <select required className="input-field" value={uploadForm.origin} onChange={(e) => handleParentChange('origin', e.target.value)}>
-                          <option value="">Select Origin</option>
-                          {ORIGINS.map(o => <option key={o} value={o}>{o}</option>)}
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="label">Year</label>
-                        <input type="number" required className="input-field" value={uploadForm.year} onChange={(e) => handleParentChange('year', e.target.value)} />
-                      </div>
-
-                      <div>
-                        <label className="label flex justify-between">
-                          <span>PDF Document (Question)</span>
-                          <span className="text-slate-400 font-normal italic">Optional</span>
-                        </label>
-                        <div className="relative">
-                          <input 
-                            type="file" accept=".pdf"
-                            onChange={(e) => setSelectedFile(e.target.files[0])}
-                            className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-                          />
-                        </div>
-                      </div>
-
-                      <div>
-                        <label className="label flex justify-between">
-                          <span className="text-green-700">Answer Document (PDF)</span>
-                          <span className="text-slate-400 font-normal italic">Optional</span>
-                        </label>
-                        <div className="relative">
-                          <input 
-                            type="file" accept=".pdf"
-                            onChange={(e) => setSelectedAnswerFile(e.target.files[0])}
-                            className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-green-50 file:text-green-700 hover:file:bg-green-100"
-                          />
-                        </div>
-                      </div>
-
-                    </div>
+                      <h3 className="text-lg font-bold text-slate-800 mb-2">Student Sample</h3>
+                      <p className="text-sm text-slate-500 text-center">Upload student answers, assign grades, and link to specific questions.</p>
+                    </button>
                   </div>
+                )}
 
-                  {/* SECTION 2: SUB-QUESTIONS */}
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                        <CornerDownRight size={16} /> Sub-Questions (Children)
+                {/* QUESTION UPLOAD FORM */}
+                {uploadSelection === 'question' && (
+                  <form id="upload-form" onSubmit={handleUploadSubmit} className="space-y-8">
+                    {/* SECTION 1: PARENT DETAILS */}
+                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                      <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                        <FileText size={16} /> Parent Document Details
                       </h3>
-                      <button type="button" onClick={addSubQuestion} className="text-sm font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1">
-                        <Plus size={16} /> Add Question
-                      </button>
-                    </div>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="col-span-full">
+                          <label className="label flex justify-between items-center">
+                            <span>Document Title</span>
+                            <span className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded font-medium flex items-center gap-1">
+                              <Sparkles size={10} /> Auto-detects "2012D" or "2013E"
+                            </span>
+                          </label>
+                          <input 
+                            type="text" required placeholder="e.g. 2021E (Type '2012D' to auto-select DBQ)"
+                            className="input-field"
+                            value={uploadForm.title} 
+                            onChange={handleTitleChange}
+                          />
+                        </div>
 
-                    {uploadForm.subQuestions.map((sub, index) => (
-                      <motion.div 
-                        key={sub.id}
-                        initial={{ opacity: 0, x: -10 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm relative group"
-                      >
-                        <div className="absolute -left-3 top-6 w-3 h-px bg-slate-300"></div>
-                        
-                        <div className="flex gap-4 items-start">
-                          <div className="w-16 flex-shrink-0">
-                            <label className="text-xs font-bold text-slate-500 mb-1 block">Label</label>
+                        <div>
+                          <label className="label">Paper Type</label>
+                          <select required className="input-field" value={uploadForm.paperType} onChange={(e) => handleParentChange('paperType', e.target.value)}>
+                            <option value="">Select Paper</option>
+                            {PAPER_TYPES.map(p => <option key={p} value={p}>{p}</option>)}
+                          </select>
+                        </div>
+
+                        {/* TIER SELECTION */}
+                        <div>
+                          <label className="label flex items-center gap-2">
+                            <Layers size={14} /> Document Tier Level
+                          </label>
+                          <select required className="input-field" value={uploadForm.tier} onChange={(e) => handleParentChange('tier', e.target.value)}>
+                            {systemTiers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                          </select>
+                        </div>
+
+                        {/* Parent Topic - Disabled for Paper 2 */}
+                        <div>
+                          <label className={`label flex items-center gap-2 ${uploadForm.paperType === "Paper 2 (Essay)" ? 'text-slate-300' : ''}`}>
+                            <Tag size={14} /> Main Topic(s) (Paper 1 Only)
+                          </label>
+                          <CreatableSelect 
+                            options={availableTopics}
+                            value={uploadForm.topic}
+                            onChange={(val) => handleParentChange('topic', val)}
+                            onCreate={handleCreateTopic}
+                            placeholder={uploadForm.paperType === "Paper 2 (Essay)" ? "Not applicable" : "Select or type new topic..."}
+                            disabled={uploadForm.paperType === "Paper 2 (Essay)"}
+                            icon={Tag}
+                            isMulti={true} 
+                          />
+                        </div>
+
+                        <div>
+                          <label className="label">Origin</label>
+                          <select required className="input-field" value={uploadForm.origin} onChange={(e) => handleParentChange('origin', e.target.value)}>
+                            <option value="">Select Origin</option>
+                            {ORIGINS.map(o => <option key={o} value={o}>{o}</option>)}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="label">Year</label>
+                          <input type="number" required className="input-field" value={uploadForm.year} onChange={(e) => handleParentChange('year', e.target.value)} />
+                        </div>
+
+                        <div>
+                          <label className="label flex justify-between">
+                            <span>PDF Document (Question)</span>
+                            <span className="text-slate-400 font-normal italic">Optional</span>
+                          </label>
+                          <div className="relative">
                             <input 
-                              type="text" 
-                              className="w-full p-2 bg-white border border-slate-200 rounded text-center font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
-                              value={sub.label}
-                              onChange={(e) => updateSubQuestion(index, 'label', e.target.value)}
+                              type="file" accept=".pdf"
+                              onChange={(e) => setSelectedFile(e.target.files[0])}
+                              className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
                             />
                           </div>
+                        </div>
 
-                          <div className="flex-1 space-y-4">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                              <div>
-                                <label className="text-xs font-bold text-slate-500 mb-1 block">Question Type(s)</label>
-                                <CreatableSelect 
-                                  options={uploadForm.paperType ? availableQuestionTypes[uploadForm.paperType] : []}
-                                  value={sub.questionType}
-                                  onChange={(val) => updateSubQuestion(index, 'questionType', val)}
-                                  onCreate={(val) => handleCreateQuestionType(val, uploadForm.paperType)}
-                                  placeholder="Select or add type..."
-                                  disabled={!uploadForm.paperType}
-                                  isMulti={true} 
-                                />
-                              </div>
+                        <div>
+                          <label className="label flex justify-between">
+                            <span className="text-green-700">Answer Document (PDF)</span>
+                            <span className="text-slate-400 font-normal italic">Optional</span>
+                          </label>
+                          <div className="relative">
+                            <input 
+                              type="file" accept=".pdf"
+                              onChange={(e) => setSelectedAnswerFile(e.target.files[0])}
+                              className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-green-50 file:text-green-700 hover:file:bg-green-100"
+                            />
+                          </div>
+                        </div>
 
-                              {uploadForm.paperType === "Paper 1 (DBQ)" && (
-                                <div>
-                                  <label className="text-xs font-bold text-slate-500 mb-1 block flex items-center gap-1">
-                                    <Hash size={10} /> Marks
-                                  </label>
-                                  <input 
-                                    type="number" 
-                                    placeholder="e.g. 4"
-                                    className="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                                    value={sub.marks || ''}
-                                    onChange={(e) => updateSubQuestion(index, 'marks', e.target.value)}
-                                  />
-                                </div>
-                              )}
+                      </div>
+                    </div>
 
-                              {uploadForm.paperType === "Paper 1 (DBQ)" && (
-                                <div>
-                                  <label className="text-xs font-bold text-slate-500 mb-1 block flex items-center gap-1">
-                                    <FileDigit size={10} /> Source Type
-                                  </label>
-                                  <CreatableSelect 
-                                    options={availableSourceTypes}
-                                    value={sub.sourceType}
-                                    onChange={(val) => updateSubQuestion(index, 'sourceType', val)}
-                                    onCreate={handleCreateSourceType}
-                                    placeholder="e.g. Cartoon, Table..."
-                                    icon={FileDigit}
-                                    isMulti={true} 
-                                  />
-                                </div>
-                              )}
+                    {/* SECTION 2: SUB-QUESTIONS */}
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                          <CornerDownRight size={16} /> Sub-Questions (Children)
+                        </h3>
+                        <button type="button" onClick={addSubQuestion} className="text-sm font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1">
+                          <Plus size={16} /> Add Question
+                        </button>
+                      </div>
 
-                              {uploadForm.paperType === "Paper 2 (Essay)" && (
-                                <div>
-                                  <label className="text-xs font-bold text-blue-600 mb-1 block flex items-center gap-1">
-                                    <Tag size={10} /> Essay Topic(s)
-                                  </label>
-                                  <CreatableSelect 
-                                    options={availableTopics}
-                                    value={sub.topic}
-                                    onChange={(val) => updateSubQuestion(index, 'topic', val)}
-                                    onCreate={handleCreateTopic}
-                                    placeholder="Select or type topic..."
-                                    icon={Tag}
-                                    isMulti={true} 
-                                  />
-                                </div>
-                              )}
-                            </div>
-
-                            {/* Content */}
-                            <div>
-                              <label className="text-xs font-bold text-slate-500 mb-1 block">Question Content / Text</label>
-                              <textarea 
-                                placeholder="Type the full question text or essay prompt here..."
-                                rows={4}
-                                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                                value={sub.content}
-                                onChange={(e) => updateSubQuestion(index, 'content', e.target.value)}
+                      {uploadForm.subQuestions.map((sub, index) => (
+                        <motion.div 
+                          key={sub.id}
+                          initial={{ opacity: 0, x: -10 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm relative group"
+                        >
+                          <div className="absolute -left-3 top-6 w-3 h-px bg-slate-300"></div>
+                          
+                          <div className="flex gap-4 items-start">
+                            <div className="w-16 flex-shrink-0">
+                              <label className="text-xs font-bold text-slate-500 mb-1 block">Label</label>
+                              <input 
+                                type="text" 
+                                className="w-full p-2 bg-white border border-slate-200 rounded text-center font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
+                                value={sub.label}
+                                onChange={(e) => updateSubQuestion(index, 'label', e.target.value)}
                               />
                             </div>
+
+                            <div className="flex-1 space-y-4">
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                  <label className="text-xs font-bold text-slate-500 mb-1 block">Question Type(s)</label>
+                                  <CreatableSelect 
+                                    options={uploadForm.paperType ? availableQuestionTypes[uploadForm.paperType] : []}
+                                    value={sub.questionType}
+                                    onChange={(val) => updateSubQuestion(index, 'questionType', val)}
+                                    onCreate={(val) => handleCreateQuestionType(val, uploadForm.paperType)}
+                                    placeholder="Select or add type..."
+                                    disabled={!uploadForm.paperType}
+                                    isMulti={true} 
+                                  />
+                                </div>
+
+                                {uploadForm.paperType === "Paper 1 (DBQ)" && (
+                                  <div>
+                                    <label className="text-xs font-bold text-slate-500 mb-1 block flex items-center gap-1">
+                                      <Hash size={10} /> Marks
+                                    </label>
+                                    <input 
+                                      type="number" 
+                                      placeholder="e.g. 4"
+                                      className="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                      value={sub.marks || ''}
+                                      onChange={(e) => updateSubQuestion(index, 'marks', e.target.value)}
+                                    />
+                                  </div>
+                                )}
+
+                                {uploadForm.paperType === "Paper 1 (DBQ)" && (
+                                  <div>
+                                    <label className="text-xs font-bold text-slate-500 mb-1 block flex items-center gap-1">
+                                      <FileDigit size={10} /> Source Type
+                                    </label>
+                                    <CreatableSelect 
+                                      options={availableSourceTypes}
+                                      value={sub.sourceType}
+                                      onChange={(val) => updateSubQuestion(index, 'sourceType', val)}
+                                      onCreate={handleCreateSourceType}
+                                      placeholder="e.g. Cartoon, Table..."
+                                      icon={FileDigit}
+                                      isMulti={true} 
+                                    />
+                                  </div>
+                                )}
+
+                                {uploadForm.paperType === "Paper 2 (Essay)" && (
+                                  <div>
+                                    <label className="text-xs font-bold text-blue-600 mb-1 block flex items-center gap-1">
+                                      <Tag size={10} /> Essay Topic(s)
+                                    </label>
+                                    <CreatableSelect 
+                                      options={availableTopics}
+                                      value={sub.topic}
+                                      onChange={(val) => updateSubQuestion(index, 'topic', val)}
+                                      onCreate={handleCreateTopic}
+                                      placeholder="Select or type topic..."
+                                      icon={Tag}
+                                      isMulti={true} 
+                                    />
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Content */}
+                              <div>
+                                <label className="text-xs font-bold text-slate-500 mb-1 block">Question Content / Text</label>
+                                <textarea 
+                                  placeholder="Type the full question text or essay prompt here..."
+                                  rows={4}
+                                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                  value={sub.content}
+                                  onChange={(e) => updateSubQuestion(index, 'content', e.target.value)}
+                                />
+                              </div>
+                            </div>
+
+                            {uploadForm.subQuestions.length > 1 && (
+                              <button 
+                                type="button" 
+                                onClick={() => removeSubQuestion(index)}
+                                className="text-slate-300 hover:text-red-500 transition-colors pt-8"
+                              >
+                                <Trash2 size={18} />
+                              </button>
+                            )}
                           </div>
+                        </motion.div>
+                      ))}
+                    </div>
+                  </form>
+                )}
 
-                          {uploadForm.subQuestions.length > 1 && (
-                            <button 
-                              type="button" 
-                              onClick={() => removeSubQuestion(index)}
-                              className="text-slate-300 hover:text-red-500 transition-colors pt-8"
-                            >
-                              <Trash2 size={18} />
-                            </button>
-                          )}
+                {/* STUDENT SAMPLE UPLOAD FORM */}
+                {uploadSelection === 'sample' && (
+                  <div className={`flex flex-col ${selectedSampleFile ? 'lg:flex-row h-full' : ''}`}>
+                    <div className={`flex-1 p-6 overflow-y-auto custom-scrollbar ${selectedSampleFile ? 'lg:w-1/3 border-r border-slate-200' : ''}`}>
+                      <form id="sample-form" onSubmit={handleSampleSubmit} className="space-y-6">
+                        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                          <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                            <GraduationCap size={16} /> Student Sample Details
+                          </h3>
+                          
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <div>
+                              <label className="label">Year</label>
+                              <select required className="input-field" value={sampleForm.year} onChange={(e) => setSampleForm({ ...sampleForm, year: e.target.value })}>
+                                {/* Generate years dynamically */}
+                                {Array.from({ length: new Date().getFullYear() - 2011 }, (_, i) => new Date().getFullYear() - i).map(y => (
+                                  <option key={y} value={y}>{y}</option>
+                                ))}
+                                <option value="Others">Others</option>
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="label">Language</label>
+                              <select required className="input-field" value={sampleForm.language} onChange={(e) => setSampleForm({...sampleForm, language: e.target.value})}>
+                                <option value="English">English</option>
+                                <option value="Chinese">Chinese</option>
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="label">Overall Grade</label>
+                              <input 
+                                type="text" required placeholder="e.g. 5*"
+                                className="input-field"
+                                value={sampleForm.overallGrade} 
+                                onChange={(e) => setSampleForm({...sampleForm, overallGrade: e.target.value})}
+                              />
+                            </div>
+
+                            <div className="col-span-full">
+                              <label className="label flex justify-between">
+                                <span>Full Student Sample Document (PDF)</span>
+                                <span className="text-red-500 font-bold text-xs">*Required</span>
+                              </label>
+                              <div className="relative">
+                                <input 
+                                  type="file" accept=".pdf" required
+                                  onChange={handleSampleFileChange}
+                                  className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+                                />
+                              </div>
+                            </div>
+                          </div>
                         </div>
-                      </motion.div>
-                    ))}
-                  </div>
 
-                </form>
+                        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                          <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                            <FileOutput size={16} /> Individual Question Scores & Page Splitting
+                          </h3>
+                          <p className="text-xs text-slate-500 mb-4">
+                            Link this sample to specific questions (e.g. "2016D Q3"). Specify the pages (e.g., "1, 3-5") to split and save only those pages.
+                          </p>
+
+                          <div className="space-y-3">
+                            <div className="grid grid-cols-12 gap-3 mb-2 px-2">
+                              <div className="col-span-5 text-xs font-bold text-slate-500 uppercase">Question Tag</div>
+                              <div className="col-span-3 text-xs font-bold text-slate-500 uppercase">Mark</div>
+                              <div className="col-span-4 text-xs font-bold text-slate-500 uppercase">Pages (e.g. 1, 3-5)</div>
+                            </div>
+
+                            {sampleForm.scores.map((score, idx) => (
+                              <div key={idx} className="grid grid-cols-12 gap-3 items-center bg-slate-50 p-2 rounded-lg border border-slate-100">
+                                <div className="col-span-5">
+                                  <input 
+                                    type="text" placeholder="e.g. 2016D Q3"
+                                    className="w-full p-2 bg-white border border-slate-200 rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                    value={score.tag}
+                                    onChange={(e) => {
+                                      const newScores = [...sampleForm.scores];
+                                      newScores[idx].tag = e.target.value;
+                                      setSampleForm({...sampleForm, scores: newScores});
+                                    }}
+                                  />
+                                </div>
+                                <div className="col-span-3">
+                                  <input 
+                                    type="number" placeholder="Mark"
+                                    className="w-full p-2 bg-white border border-slate-200 rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                    value={score.mark}
+                                    onChange={(e) => {
+                                      const newScores = [...sampleForm.scores];
+                                      newScores[idx].mark = e.target.value;
+                                      setSampleForm({...sampleForm, scores: newScores});
+                                    }}
+                                  />
+                                </div>
+                                <div className="col-span-4">
+                                  <input 
+                                    type="text" placeholder="e.g. 1, 3-5"
+                                    className="w-full p-2 bg-white border border-slate-200 rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                    value={score.pagesStr}
+                                    onChange={(e) => {
+                                      const newScores = [...sampleForm.scores];
+                                      newScores[idx].pagesStr = e.target.value;
+                                      setSampleForm({...sampleForm, scores: newScores});
+                                    }}
+                                  />
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </form>
+                    </div>
+                    {/* PDF VIEWER SECTION */}
+                    {selectedSampleFile && (
+                      <div className="lg:w-2/3 bg-slate-200 h-[50vh] lg:h-full relative border-t lg:border-t-0 lg:border-l border-slate-300">
+                        {samplePdfPreviewUrl ? (
+                          <iframe 
+                            src={`${samplePdfPreviewUrl}#view=FitH&pagemode=thumbs`} 
+                            className="w-full h-full absolute inset-0" 
+                            title="PDF Viewer"
+                          />
+                        ) : (
+                          <div className="flex items-center justify-center h-full text-slate-500 flex-col gap-2">
+                            <Loader2 className="animate-spin text-indigo-600" size={32} />
+                            <span>Loading PDF Viewer...</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Modal Footer */}
               <div className="p-5 border-t border-slate-100 bg-white rounded-b-2xl flex justify-between items-center shrink-0">
                 
-                {/* DELETE BUTTON (Only if editing) */}
+                {/* DELETE BUTTON (Only if editing question) */}
                 <div>
-                  {editingId && (
+                  {editingId && uploadSelection === 'question' && (
                     !deleteConfirm ? (
                       <button
                         type="button"
@@ -2783,7 +3175,16 @@ export default function AdvancedHistoryArchive() {
                   )}
                 </div>
 
-                <div className="flex gap-3">
+                <div className="flex gap-3 ml-auto">
+                  {uploadSelection && !editingId && (
+                    <button 
+                      type="button" 
+                      onClick={() => setUploadSelection(null)}
+                      className="px-6 py-2 rounded-lg border border-slate-200 text-slate-600 font-medium hover:bg-slate-50 transition-colors"
+                    >
+                      Back
+                    </button>
+                  )}
                   <button 
                     type="button" 
                     onClick={closeModal}
@@ -2791,14 +3192,16 @@ export default function AdvancedHistoryArchive() {
                   >
                     Cancel
                   </button>
-                  <button 
-                    type="submit" 
-                    form="upload-form"
-                    disabled={isLoading}
-                    className={`px-6 py-2 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-700 shadow-lg shadow-blue-200 transition-all ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
-                  >
-                    {isLoading ? 'Processing...' : (editingId ? 'Update Archive' : 'Save to Archive')}
-                  </button>
+                  {uploadSelection && (
+                    <button 
+                      type="submit" 
+                      form={uploadSelection === 'question' ? "upload-form" : "sample-form"}
+                      disabled={isLoading}
+                      className={`px-6 py-2 rounded-lg ${uploadSelection === 'question' ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-200' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200'} text-white font-bold shadow-lg transition-all ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      {isLoading ? 'Processing...' : (editingId ? 'Update Archive' : 'Upload Data')}
+                    </button>
+                  )}
                 </div>
               </div>
             </motion.div>

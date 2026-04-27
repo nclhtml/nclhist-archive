@@ -1454,6 +1454,21 @@ export default function Marks() {
     }
   };
 
+  // NEW: Missing function that was causing crashes or rendering issues when viewing linked marks
+  const handleViewLinkedMarks = async (docId, docTitle) => {
+    setCurrentMarksDocTitle(docTitle);
+    setShowMarksModal(true);
+    setIsLoadingMarks(true);
+    try {
+      // Logic to fetch linked marks from Firestore would go here
+      // For now, we clear the dummy state to show the empty state
+      setLinkedMarksData([]);
+    } catch (error) {
+      console.error("Error fetching linked marks:", error);
+    }
+    setIsLoadingMarks(false);
+  };
+
   // ============================================================================
   // RENDER HELPERS
   // ============================================================================
@@ -1611,6 +1626,7 @@ export default function Marks() {
                 onChange={(e) => setNewCategoryName(e.target.value)}
                 placeholder="New category..."
                 className="flex-1 border border-gray-300 rounded p-1 text-sm outline-none w-full"
+                data-gramm="false" data-gramm_editor="false"
                 autoFocus
               />
               <button type="submit" className="bg-blue-600 text-white px-2 rounded text-sm">Add</button>
@@ -1964,6 +1980,7 @@ export default function Marks() {
                   rows={6}
                   value={bulkText}
                   onChange={handleBulkPaste}
+                  data-gramm="false" data-gramm_editor="false"
                   placeholder="Paste marks here..."
                   className="w-full border border-gray-300 rounded-md p-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 resize-y whitespace-pre"
                 />
@@ -2120,6 +2137,7 @@ export default function Marks() {
                                                   type="text" 
                                                   data-row={rowIndex}
                                                   data-col={currentCol}
+                                                  data-gramm="false" data-gramm_editor="false"
                                                   value={studentView ? (isMissing ? '' : '***') : val}
                                                   onChange={(e) => { if(!studentView) handleMarkChange(s.id, e.target.value, sub.id) }}
                                                   onKeyDown={(e) => handleKeyDown(e, rowIndex, currentCol)}
@@ -2146,6 +2164,7 @@ export default function Marks() {
                                                 type="text" 
                                                 data-row={rowIndex}
                                                 data-col={currentCol}
+                                                data-gramm="false" data-gramm_editor="false"
                                                 value={studentView ? (isMissing ? '' : '***') : val}
                                                 onChange={(e) => { if(!studentView) handleMarkChange(s.id, e.target.value, sec.id) }}
                                                 onKeyDown={(e) => handleKeyDown(e, rowIndex, currentCol)}
@@ -2171,6 +2190,7 @@ export default function Marks() {
                                   type="text" 
                                   data-row={rowIndex}
                                   data-col={0}
+                                  data-gramm="false" data-gramm_editor="false"
                                   value={studentView ? (!hasMark ? '' : '***') : (studentMarks || '')}
                                   onChange={(e) => { if(!studentView) handleMarkChange(s.id, e.target.value) }}
                                   onKeyDown={(e) => handleKeyDown(e, rowIndex, 0)}
@@ -2188,6 +2208,7 @@ export default function Marks() {
                                 <input 
                                   type="number" 
                                   step="any"
+                                  data-gramm="false" data-gramm_editor="false"
                                   value={marksData[`${s.id}_deduction`] || ''}
                                   onChange={(e) => handleDeductionChange(s.id, e.target.value)}
                                   placeholder="-0"
@@ -2256,9 +2277,199 @@ export default function Marks() {
         )}
       </div>
 
+      {/* --- ADD/EDIT ASSESSMENT MODAL --- */}
+      {showAddAssessment && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-lg shrink-0">
+              <h2 className="text-lg font-bold text-gray-800 flex items-center">
+                {isEditingAssessment ? <Edit className="w-5 h-5 mr-2 text-blue-600" /> : <PlusCircle className="w-5 h-5 mr-2 text-blue-600" />}
+                {isEditingAssessment ? 'Edit Assessment' : `Add New ${selectedCategory}`}
+              </h2>
+              <button onClick={() => setShowAddAssessment(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto flex-1">
+              <form id="assessment-form" onSubmit={handleSaveAssessment} className="space-y-6">
+                {/* Basic Info */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {!isMultiSectionCategory && (
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">Assessment Name</label>
+                      <input 
+                        type="text" 
+                        value={newAssessmentName}
+                        onChange={(e) => setNewAssessmentName(e.target.value)}
+                        data-gramm="false" data-gramm_editor="false"
+                        className="w-full border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                        required={!isMultiSectionCategory}
+                      />
+                    </div>
+                  )}
+                  
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">Date</label>
+                    <input 
+                      type="date" 
+                      value={newAssessmentDate}
+                      onChange={(e) => setNewAssessmentDate(e.target.value)}
+                      className="w-full border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">Term</label>
+                    <select 
+                      value={formTerm}
+                      onChange={(e) => setFormTerm(e.target.value)}
+                      className="w-full border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    >
+                      {terms.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </div>
+
+                  {!isMultiSectionCategory && (
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">Full Mark</label>
+                      <input 
+                        type="number" 
+                        step="any"
+                        value={fullMark}
+                        onChange={(e) => setFullMark(e.target.value)}
+                        data-gramm="false" data-gramm_editor="false"
+                        className="w-full border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                        required
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Classes Selection */}
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Apply to Classes</label>
+                  <div className="flex flex-wrap gap-2">
+                    {classes.map(c => (
+                      <label key={c} className={`flex items-center px-3 py-1.5 rounded-md border cursor-pointer transition-colors ${selectedClassesForNew.includes(c) ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}`}>
+                        <input 
+                          type="checkbox"
+                          checked={selectedClassesForNew.includes(c)}
+                          onChange={() => toggleClassForNew(c)}
+                          className="mr-2 rounded text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="text-sm font-medium">{c}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Document Linking */}
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Link Archive Document (Optional)</label>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowDocLinker(true)}
+                      className="px-3 py-2 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-md text-sm font-medium hover:bg-indigo-100 flex items-center transition-colors"
+                    >
+                      <LinkIcon className="w-4 h-4 mr-2" />
+                      {linkedDocId ? 'Change Linked Document' : 'Link Document'}
+                    </button>
+                    {linkedDocId && (
+                      <div className="flex items-center text-sm text-gray-600 bg-gray-100 px-3 py-2 rounded-md border border-gray-200">
+                        <FileText className="w-4 h-4 mr-2 text-gray-400" />
+                        <span className="truncate max-w-[200px]">{archives.find(a => a.id === linkedDocId)?.title || 'Unknown Document'}</span>
+                        <button type="button" onClick={() => setLinkedDocId('')} className="ml-2 text-red-500 hover:text-red-700"><X className="w-4 h-4" /></button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Multi-Section Config */}
+                {isMultiSectionCategory && (
+                  <div className="border-t border-gray-200 pt-6 mt-6">
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-lg font-bold text-gray-800">Paper & Sections Configuration</h3>
+                      <div className="flex items-center space-x-2">
+                        <label className="text-sm font-semibold text-gray-700">Paper Full Mark:</label>
+                        <input 
+                          type="number" 
+                          value={paperFullMark}
+                          onChange={(e) => setPaperFullMark(e.target.value)}
+                          data-gramm="false" data-gramm_editor="false"
+                          className="w-20 border border-gray-300 rounded p-1.5 text-sm outline-none focus:ring-2 focus:ring-blue-500 text-center font-bold"
+                        />
+                        <button type="button" onClick={autoCalculateWeights} className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200 border border-gray-300">Auto Weights</button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4">
+                      {sectionsConfig.map((sec, index) => (
+                        <div key={sec.id} className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                          <div className="flex flex-wrap gap-3 items-end mb-3">
+                            <div className="flex-1 min-w-[150px]">
+                              <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase">Section Name</label>
+                              <input type="text" value={sec.name} onChange={(e) => updateSection(sec.id, 'name', e.target.value)} data-gramm="false" data-gramm_editor="false" className="w-full border border-gray-300 rounded p-2 text-sm" required />
+                            </div>
+                            <div className="w-24">
+                              <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase">Full Mark</label>
+                              <input type="number" step="any" value={sec.fullMark} onChange={(e) => updateSection(sec.id, 'fullMark', e.target.value)} data-gramm="false" data-gramm_editor="false" className="w-full border border-gray-300 rounded p-2 text-sm" required />
+                            </div>
+                            <div className="w-24">
+                              <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase">Weight (%)</label>
+                              <input type="number" step="any" value={sec.weight} onChange={(e) => updateSection(sec.id, 'weight', e.target.value)} data-gramm="false" data-gramm_editor="false" className="w-full border border-gray-300 rounded p-2 text-sm" required />
+                            </div>
+                            <div className="flex items-center h-[38px] space-x-2">
+                              <button type="button" onClick={() => toggleSubSections(sec.id)} className={`px-3 py-2 rounded text-sm font-medium border ${sec.hasSubSections ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>
+                                <Layers className="w-4 h-4 inline mr-1" /> Sub-sections
+                              </button>
+                              <button type="button" onClick={() => handleRemoveSection(sec.id)} disabled={sectionsConfig.length === 1} className="p-2 text-red-500 hover:bg-red-50 rounded border border-transparent hover:border-red-100 disabled:opacity-50">
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+
+                          {sec.hasSubSections && (
+                            <div className="ml-4 pl-4 border-l-2 border-indigo-200 space-y-2 mt-4">
+                              <h4 className="text-xs font-bold text-indigo-800 uppercase tracking-wider mb-2">Sub-sections</h4>
+                              {sec.subSections.map(sub => (
+                                <div key={sub.id} className="flex gap-2 items-center">
+                                  <input type="text" value={sub.name} onChange={(e) => updateSubSection(sec.id, sub.id, 'name', e.target.value)} data-gramm="false" data-gramm_editor="false" placeholder="e.g. Section A" className="flex-1 border border-gray-300 rounded p-1.5 text-sm" required />
+                                  <input type="number" step="any" value={sub.fullMark} onChange={(e) => updateSubSection(sec.id, sub.id, 'fullMark', e.target.value)} data-gramm="false" data-gramm_editor="false" placeholder="Full Mark" className="w-24 border border-gray-300 rounded p-1.5 text-sm" required />
+                                  <button type="button" onClick={() => handleRemoveSubSection(sec.id, sub.id)} className="p-1.5 text-red-400 hover:text-red-600"><X className="w-4 h-4" /></button>
+                                </div>
+                              ))}
+                              <button type="button" onClick={() => handleAddSubSection(sec.id)} className="text-sm text-indigo-600 hover:text-indigo-800 font-medium flex items-center mt-2">
+                                <Plus className="w-4 h-4 mr-1" /> Add Sub-section
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      <button type="button" onClick={handleAddSection} className="w-full py-3 border-2 border-dashed border-gray-300 rounded-lg text-gray-500 font-medium hover:bg-gray-50 hover:text-blue-600 hover:border-blue-300 transition-colors flex items-center justify-center">
+                        <PlusCircle className="w-5 h-5 mr-2" /> Add Another Paper / Section
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </form>
+            </div>
+            
+            <div className="p-4 border-t border-gray-200 bg-gray-50 rounded-b-lg flex justify-end space-x-3 shrink-0">
+              <button type="button" onClick={() => setShowAddAssessment(false)} className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-md font-medium hover:bg-gray-50">Cancel</button>
+              <button type="submit" form="assessment-form" className="px-6 py-2 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 shadow-sm flex items-center">
+                <Save className="w-4 h-4 mr-2" /> Save Assessment
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* All Classes Modal */}
       {showAllClassesModal && selectedAssessment && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[100] p-4 sm:p-6">
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4 sm:p-6">
           <div className="bg-gray-50 rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden">
             <div className="p-5 border-b border-gray-200 flex justify-between items-center bg-white rounded-t-2xl shrink-0">
               <h2 className="text-2xl font-bold text-gray-800 flex items-center">
@@ -2350,7 +2561,7 @@ export default function Marks() {
 
       {/* Amend Mark Modal */}
       {showAmendModal && selectedAssessment && isMultiSectionCategory && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[100] p-4 sm:p-6">
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4 sm:p-6">
           <div className="bg-gray-50 rounded-2xl shadow-2xl w-full max-w-7xl h-[90vh] flex flex-col overflow-hidden">
             <div className="p-5 border-b border-gray-200 flex justify-between items-center bg-white rounded-t-2xl shrink-0">
               <div>
@@ -2416,6 +2627,7 @@ export default function Marks() {
                             type="text"
                             value={row.query}
                             onChange={(e) => handleAmendQueryChange(row.id, e.target.value)}
+                            data-gramm="false" data-gramm_editor="false"
                             placeholder="e.g. 20"
                             className="w-24 border border-gray-300 rounded p-2 text-center outline-none focus:ring-2 focus:ring-orange-500 font-bold"
                           />
@@ -2530,6 +2742,7 @@ export default function Marks() {
                     type="text" 
                     value={newTermName}
                     onChange={(e) => setNewTermName(e.target.value)}
+                    data-gramm="false" data-gramm_editor="false"
                     placeholder="e.g. Term 3"
                     className="flex-1 border border-gray-300 rounded p-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                     required
@@ -2548,6 +2761,7 @@ export default function Marks() {
                           type="text" 
                           value={editTermName}
                           onChange={(e) => setEditTermName(e.target.value)}
+                          data-gramm="false" data-gramm_editor="false"
                           className="flex-1 border border-gray-300 rounded p-1 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                           autoFocus
                         />
@@ -2576,7 +2790,7 @@ export default function Marks() {
 
       {/* Mark Overview & Graph Combined Modal */}
       {showOverviewModal && selectedAssessment && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[100] p-4 sm:p-6">
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4 sm:p-6">
           <div className="bg-gray-50 rounded-2xl shadow-2xl w-full max-w-7xl max-h-[90vh] flex flex-col overflow-hidden">
             <div className="p-5 border-b border-gray-200 flex justify-between items-center bg-white rounded-t-2xl shrink-0">
               <h2 className="text-2xl font-bold text-gray-800 flex items-center">
@@ -2851,6 +3065,7 @@ export default function Marks() {
                   type="text" 
                   value={newPresetName}
                   onChange={(e) => setNewPresetName(e.target.value)}
+                  data-gramm="false" data-gramm_editor="false"
                   placeholder="Preset Name (e.g., Geography Calculation)"
                   className="w-full border border-gray-300 rounded p-2 text-sm outline-none focus:ring-2 focus:ring-purple-500 mb-3"
                   required
@@ -2865,6 +3080,7 @@ export default function Marks() {
                           placeholder="0"
                           value={newPresetWeights[cat] || ''}
                           onChange={(e) => updatePresetWeight(cat, e.target.value)}
+                          data-gramm="false" data-gramm_editor="false"
                           className="w-20 border border-gray-300 rounded p-1.5 text-sm outline-none text-center focus:ring-2 focus:ring-purple-500"
                         />
                         <Percent className="w-4 h-4 ml-1 text-gray-400" />
@@ -2903,7 +3119,7 @@ export default function Marks() {
 
       {/* Document Linker Modal */}
       {showDocLinker && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[60] p-4">
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col">
             <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-lg">
               <h2 className="text-lg font-bold text-gray-800 flex items-center">
@@ -2926,6 +3142,7 @@ export default function Marks() {
                   placeholder="Search document title..."
                   value={docSearchTerm}
                   onChange={e => setDocSearchTerm(e.target.value)}
+                  data-gramm="false" data-gramm_editor="false"
                   className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-md text-sm outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
@@ -2978,7 +3195,7 @@ export default function Marks() {
 
       {/* Preview Modal for Linked Document */}
       {previewItem && (
-        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[70] flex items-center justify-center p-2 sm:p-4">
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4">
           <div
             onClick={(e) => e.stopPropagation()}
             className="bg-white rounded-xl w-full max-w-full h-full shadow-2xl flex flex-col overflow-hidden"
@@ -3143,7 +3360,7 @@ export default function Marks() {
 
       {/* --- LINKED MARKS MODAL --- */}
       {showMarksModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[80] flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
             <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
               <div>

@@ -440,7 +440,7 @@ const CustomPDFViewer = ({ fileUrl }) => {
     <div ref={containerRef} className="absolute inset-0 bg-slate-200 flex flex-col items-center">
       <Worker workerUrl={workerUrl}>
         <div className="w-full h-full" style={{ height: '100%', width: '100%' }}>
-          <Viewer
+<Viewer
             fileUrl={fileUrl}
             plugins={[defaultLayoutPluginInstance]}
             theme="light"
@@ -1369,47 +1369,39 @@ export default function AdvancedHistoryArchive() {
       const questionTags = validScores.map(s => s.tag.trim());
       const scoresData = {};
 
-      if (loadedPdfDoc) {
-        // --- NEW PDF UPLOADED (Create or Replace) ---
-        for (const score of validScores) {
-          const pageIndices = parsePages(score.pagesStr, pdfPageCount);
-          if (pageIndices.length === 0) {
-            alert(`Invalid page selection for tag ${score.tag}. Skipping this entry.`);
-            continue;
-          }
+      for (const score of validScores) {
+        let finalFileUrl = score.fileUrl || '';
 
-          const splitPdf = await PDFDocument.create();
-          const copiedPages = await splitPdf.copyPages(loadedPdfDoc, pageIndices);
-          copiedPages.forEach(p => splitPdf.addPage(p));
-          const splitBytes = await splitPdf.save();
-
+        if (score.newFile) {
+          // Upload individual question PDF
           const splitFileName = `${safeName}_${score.tag.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.pdf`;
           const splitStoragePath = `pdfs/student_samples/${splitFileName}`;
           const splitRef = ref(storage, splitStoragePath);
+          await uploadBytes(splitRef, score.newFile, { contentType: 'application/pdf' });
+          finalFileUrl = await getDownloadURL(splitRef);
+        } else if (loadedPdfDoc && score.pagesStr) {
+          // Split from main document
+          const pageIndices = parsePages(score.pagesStr, pdfPageCount);
+          if (pageIndices.length > 0) {
+            const splitPdf = await PDFDocument.create();
+            const copiedPages = await splitPdf.copyPages(loadedPdfDoc, pageIndices);
+            copiedPages.forEach(p => splitPdf.addPage(p));
+            const splitBytes = await splitPdf.save();
 
-          await uploadBytes(splitRef, splitBytes, { contentType: 'application/pdf' });
-          const splitUrl = await getDownloadURL(splitRef);
+            const splitFileName = `${safeName}_${score.tag.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.pdf`;
+            const splitStoragePath = `pdfs/student_samples/${splitFileName}`;
+            const splitRef = ref(storage, splitStoragePath);
+            await uploadBytes(splitRef, splitBytes, { contentType: 'application/pdf' });
+            finalFileUrl = await getDownloadURL(splitRef);
+          }
+        }
 
-          scoresData[score.tag.trim()] = {
-            mark: score.mark,
-            subMarks: score.subMarks || {}, // Save sub-marks
-            fileUrl: splitUrl,
-            pagesStr: score.pagesStr
-          };
-        }
-      } else if (editingId) {
-        // --- EDITING EXISTING (No new PDF uploaded) ---
-        const existingSample = allSamples.find(s => s.id === editingId);
-        for (const score of validScores) {
-          // Preserve the old fileUrl if we aren't uploading a new PDF
-          const existingFileUrl = existingSample?.scoresData?.[score.tag.trim()]?.fileUrl || '';
-          scoresData[score.tag.trim()] = {
-            mark: score.mark,
-            subMarks: score.subMarks || {},
-            fileUrl: existingFileUrl,
-            pagesStr: score.pagesStr
-          };
-        }
+        scoresData[score.tag.trim()] = {
+          mark: score.mark,
+          subMarks: score.subMarks || {},
+          fileUrl: finalFileUrl,
+          pagesStr: score.pagesStr
+        };
       }
 
       if (Object.keys(scoresData).length === 0) {
@@ -1459,17 +1451,28 @@ export default function AdvancedHistoryArchive() {
   const handleEditSample = (sample) => {
     setEditingId(sample.id);
     setUploadSelection('sample');
-    
+
     // Transform scoresData back into the array format for the form
-    const scoresArray = Object.keys(sample.scoresData || {}).map(tag => ({
-      tag: tag,
-      mark: sample.scoresData[tag].mark || '',
-      subMarks: sample.scoresData[tag].subMarks || {},
-      pagesStr: sample.scoresData[tag].pagesStr || ''
-    }));
-    
+    // Use questionTags to preserve order and recover tags that were skipped in scoresData
+    const baseTags = sample.questionTags && sample.questionTags.length > 0
+      ? sample.questionTags
+      : Object.keys(sample.scoresData || {});
+
+    const scoresArray = baseTags.map(tag => {
+      const sData = sample.scoresData?.[tag] || {};
+      return {
+        tag: tag,
+        mark: sData.mark || '',
+        subMarks: sData.subMarks || {},
+        pagesStr: sData.pagesStr || '',
+        fileUrl: sData.fileUrl || '',
+        newFile: null,
+        newFileUrl: ''
+      };
+    });
+
     // Pad with empty rows up to 6
-    while(scoresArray.length < 6) {
+    while (scoresArray.length < 6) {
       scoresArray.push({ tag: '', mark: '', subMarks: {}, pagesStr: '' });
     }
 
@@ -1479,11 +1482,20 @@ export default function AdvancedHistoryArchive() {
       overallGrade: sample.overallGrade || '',
       scores: scoresArray
     });
-    
+
+    // --- ADDED THIS BLOCK to load the existing PDF into the viewer ---
+    const firstScoreWithFile = Object.values(sample.scoresData || {}).find(s => s.fileUrl);
+    if (firstScoreWithFile) {
+      setSamplePdfPreviewUrl(firstScoreWithFile.fileUrl);
+    } else {
+      setSamplePdfPreviewUrl('');
+    }
+    // -----------------------------------------------------------------
+
     setIsManageSamplesModalOpen(false);
     setIsUploadModalOpen(true);
   };
-  
+
   const handleDeleteSample = async (sampleId, scoresData) => {
     if (!window.confirm("Are you sure you want to delete this sample? This will also remove the attached PDFs.")) return;
     setIsLoading(true);
@@ -2783,7 +2795,7 @@ export default function AdvancedHistoryArchive() {
                         <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
                           <GraduationCap size={14} /> Student Samples
                         </h3>
-                        <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
+                        <div className="space-y-2 max-h-[36rem] overflow-y-auto custom-scrollbar pr-1">
                           {previewSamples.map(sample => {
                             const exactTag = previewItem.parent.paperType === "Paper 2 (Essay)"
                               ? `${previewItem.parent.title} Q${previewItem.child.label}`
@@ -2811,13 +2823,26 @@ export default function AdvancedHistoryArchive() {
                                     <span className="font-bold text-slate-900">[{sample.language}]</span> Overall grade: <span className="font-bold text-indigo-600">{sample.overallGrade}</span>
                                   </div>
                                 </div>
-                                <div className="flex justify-between items-center">
-                                  <div className="text-xs text-slate-600">
-                                    Mark (this question): <span className="font-bold text-slate-900">{scoreData?.mark}</span>
+                                <div className="flex justify-between items-end">
+                                  <div className="flex flex-col gap-1">
+                                    <div className="text-xs text-slate-600">
+                                      Mark (this question): <span className="font-bold text-slate-900">{scoreData?.mark}</span>
+                                    </div>
+                                    {scoreData?.subMarks && Object.keys(scoreData.subMarks).length > 0 && (
+                                      <div className="flex flex-wrap gap-1 mt-1">
+                                        {Object.entries(scoreData.subMarks)
+                                          .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+                                          .map(([subQ, sMark]) => (
+                                            <span key={subQ} className="text-[10px] bg-white border border-slate-200 px-1.5 py-0.5 rounded text-slate-500">
+                                              Q{subQ}: <span className="font-bold text-slate-700">{sMark}</span>
+                                            </span>
+                                          ))}
+                                      </div>
+                                    )}
                                   </div>
-                                  <button 
+                                  <button
                                     onClick={() => setActiveSample({ ...sample, currentFileUrl: scoreData.fileUrl })}
-                                    className={`text-xs font-bold px-3 py-1.5 rounded-md transition-colors ${activeSample?.id === sample.id ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'}`}
+                                    className={`text-xs font-bold px-3 py-1.5 rounded-md transition-colors h-fit ${activeSample?.id === sample.id ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'}`}
                                   >
                                     View Sample
                                   </button>
@@ -2865,11 +2890,10 @@ export default function AdvancedHistoryArchive() {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
               onClick={(e) => e.stopPropagation()}
-              className={`bg-white rounded-2xl w-full shadow-2xl flex flex-col overflow-hidden ${
-                uploadSelection === 'sample' && selectedSampleFile 
-                  ? 'max-w-full h-full' 
+              className={`bg-white rounded-2xl w-full shadow-2xl flex flex-col overflow-hidden ${uploadSelection === 'sample'
+                  ? 'max-w-[95vw] h-[95vh]'
                   : (uploadSelection ? 'max-w-4xl max-h-full' : 'max-w-2xl max-h-full')
-              }`}
+                }`}
             >
               {/* Modal Header */}
               <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-2xl shrink-0">
@@ -3150,8 +3174,8 @@ export default function AdvancedHistoryArchive() {
 
                 {/* STUDENT SAMPLE UPLOAD FORM */}
                 {uploadSelection === 'sample' && (
-                  <div className={`flex flex-col ${selectedSampleFile ? 'lg:flex-row h-full' : ''}`}>
-                    <div className={`flex-1 p-6 overflow-y-auto custom-scrollbar ${selectedSampleFile ? 'lg:w-1/3 border-r border-slate-200' : ''}`}>
+                  <div className="flex flex-col lg:flex-row h-full">
+                    <div className="flex-1 p-6 overflow-y-auto custom-scrollbar lg:w-1/3 border-r border-slate-200">
                       <form id="sample-form" onSubmit={handleSampleSubmit} className="space-y-6">
                         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                           <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
@@ -3344,6 +3368,52 @@ export default function AdvancedHistoryArchive() {
                                     </div>
                                   </div>
 
+                                  <div className="flex items-center justify-between bg-white p-2 rounded border border-slate-200 mt-1">
+                                    <div className="flex items-center gap-2 text-xs">
+                                      <FileText size={14} className={score.fileUrl || score.newFile ? "text-indigo-600" : "text-slate-400"} />
+                                      {score.newFile ? (
+                                        <span className="text-indigo-600 font-bold truncate max-w-[120px]">{score.newFile.name}</span>
+                                      ) : score.fileUrl ? (
+                                        <span className="text-indigo-600 font-bold">Attached PDF</span>
+                                      ) : (
+                                        <span className="text-slate-400 italic">No PDF attached</span>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      {(score.fileUrl || score.newFileUrl) && (
+                                        <button type="button" onClick={() => setSamplePdfPreviewUrl(score.newFileUrl || score.fileUrl)} className="text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded hover:bg-indigo-100 font-medium">
+                                          View
+                                        </button>
+                                      )}
+                                      <label className="text-xs bg-slate-100 text-slate-700 px-2 py-1 rounded hover:bg-slate-200 cursor-pointer font-medium">
+                                        Upload
+                                        <input type="file" accept=".pdf" className="hidden" onChange={(e) => {
+                                          if (e.target.files[0]) {
+                                            const newScores = [...sampleForm.scores];
+                                            if (newScores[idx].newFileUrl) URL.revokeObjectURL(newScores[idx].newFileUrl);
+                                            newScores[idx].newFile = e.target.files[0];
+                                            newScores[idx].newFileUrl = URL.createObjectURL(e.target.files[0]);
+                                            setSampleForm({ ...sampleForm, scores: newScores });
+                                            setSamplePdfPreviewUrl(newScores[idx].newFileUrl);
+                                          }
+                                        }} />
+                                      </label>
+                                      {(score.fileUrl || score.newFile) && (
+                                        <button type="button" onClick={() => {
+                                          const newScores = [...sampleForm.scores];
+                                          newScores[idx].fileUrl = '';
+                                          newScores[idx].newFile = null;
+                                          if (newScores[idx].newFileUrl) URL.revokeObjectURL(newScores[idx].newFileUrl);
+                                          newScores[idx].newFileUrl = '';
+                                          setSampleForm({ ...sampleForm, scores: newScores });
+                                          setSamplePdfPreviewUrl('');
+                                        }} className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded hover:bg-red-100 font-medium">
+                                          Remove
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+
                                   {/* Dynamic Sub-question Mark Inputs */}
                                   {matchedParent && matchedParent.subQuestions && matchedParent.subQuestions.length > 0 && (
                                     <div className="pl-4 border-l-2 border-indigo-200 ml-2 grid grid-cols-2 sm:grid-cols-4 gap-2 mt-1">
@@ -3379,7 +3449,7 @@ export default function AdvancedHistoryArchive() {
                       </form>
                     </div>
                     {/* PDF VIEWER SECTION */}
-                    {selectedSampleFile && (
+                    {uploadSelection === 'sample' && (
                       <div className="lg:w-2/3 bg-slate-200 h-[50vh] lg:h-full relative border-t lg:border-t-0 lg:border-l border-slate-300">
                         {samplePdfPreviewUrl ? (
                           <CustomPDFViewer fileUrl={samplePdfPreviewUrl} />

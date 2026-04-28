@@ -9,6 +9,18 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
+// --- REACT-PDF IMPORT & SETUP ---
+import { Viewer, Worker } from '@react-pdf-viewer/core';
+import { defaultLayoutPlugin } from '@react-pdf-viewer/default-layout';
+
+// Import styles
+import '@react-pdf-viewer/core/lib/styles/index.css';
+import '@react-pdf-viewer/default-layout/lib/styles/index.css';
+
+// We will use the pdfjs-dist version you installed (4.2.67) for the worker
+const pdfjsVersion = '3.4.120';
+const workerUrl = `https://unpkg.com/pdfjs-dist@${pdfjsVersion}/build/pdf.worker.min.js`;
+
 // --- PDF-LIB IMPORT ---
 // Note: Ensure 'pdf-lib' is installed in your project (npm install pdf-lib)
 import { PDFDocument } from 'pdf-lib';
@@ -386,6 +398,63 @@ const PaginationControls = ({ currentPage, totalPages, onPageChange, itemsPerPag
   );
 };
 
+// --- CUSTOM PDF VIEWER COMPONENT ---
+const CustomPDFViewer = ({ fileUrl }) => {
+  // Initialize the default layout plugin
+  const defaultLayoutPluginInstance = defaultLayoutPlugin();
+  
+  // 1. Safely extract the zoom plugin's built-in zoomIn and zoomOut methods
+  const zoomPluginInstance = defaultLayoutPluginInstance.zoomPluginInstance;
+  const zoomIn = zoomPluginInstance ? zoomPluginInstance.zoomIn : null;
+  const zoomOut = zoomPluginInstance ? zoomPluginInstance.zoomOut : null;
+
+  // 2. Create a ref to attach to our container
+  const containerRef = useRef(null);
+
+  // 3. Intercept the wheel event to apply a custom, smaller zoom step
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !zoomIn || !zoomOut) return; // Safely exit if zoom functions aren't available
+
+    const handleWheel = (e) => {
+      if (e.ctrlKey) {
+        e.preventDefault();  // Stop browser from zooming the whole page
+        e.stopPropagation(); // Stop the PDF Viewer from doing its massive default zoom
+
+        // 4. Use the library's safe zoom functions
+        if (e.deltaY < 0) {
+          // Scrolling up: Zoom In
+          if (zoomIn) zoomIn();
+        } else {
+          // Scrolling down: Zoom Out
+          if (zoomOut) zoomOut();
+        }
+      }
+    };
+
+    container.addEventListener('wheel', handleWheel, { passive: false, capture: true });
+    return () => container.removeEventListener('wheel', handleWheel, { capture: true });
+  }, [zoomIn, zoomOut]);
+
+  return (
+    <div ref={containerRef} className="absolute inset-0 bg-slate-200 flex flex-col items-center">
+      <Worker workerUrl={workerUrl}>
+        <div className="w-full h-full" style={{ height: '100%', width: '100%' }}>
+          <Viewer
+            fileUrl={fileUrl}
+            plugins={[defaultLayoutPluginInstance]}
+            theme="light"
+            characterMap={{
+              isCompressed: true,
+              url: `https://unpkg.com/pdfjs-dist@${pdfjsVersion}/cmaps/`,
+            }}
+          />
+        </div>
+      </Worker>
+    </div>
+  );
+};
+  
 export default function AdvancedHistoryArchive() {
   // --- GRAB GLOBAL AUTH STATE ---
   const { user, authLoading, loginWithGoogle, logout } = useAuth();
@@ -880,7 +949,7 @@ export default function AdvancedHistoryArchive() {
 
       if (!matchOrigin || !matchYear || !matchPaper || !matchTier) return;
 
-      parent.subQuestions.forEach(child => {
+      (parent.subQuestions || []).forEach(child => {
         // 2. Child Level Filters (OR Logic within category)
         
         const childTypes = ensureArray(child.questionType);
@@ -1215,13 +1284,19 @@ export default function AdvancedHistoryArchive() {
       }
 
       const payload = JSON.parse(JSON.stringify({
-        year: sampleForm.year, // Changed from studentName
-        language: sampleForm.language || 'English',
-        overallGrade: sampleForm.overallGrade || '',
-        questionTags,
-        scoresData,
-        addedAt: new Date().toISOString(),
-        addedBy: user.email
+        title: uploadForm.title,
+        origin: uploadForm.origin,
+        year: uploadForm.year,
+        paperType: uploadForm.paperType,
+        topic: uploadForm.topic,
+        tier: uploadForm.tier,
+        subQuestions: uploadForm.subQuestions,
+        fileUrl,
+        answerFileUrl,
+        hasFile: !!fileUrl,
+        hasAnswer: !!answerFileUrl,
+        updatedAt: new Date().toISOString(),
+        updatedBy: user.email
       }));
 
       await addDoc(collection(db, "student_samples"), payload);
@@ -2758,28 +2833,16 @@ export default function AdvancedHistoryArchive() {
 
                 <div className="flex-1 bg-slate-200 flex flex-col h-full relative">
                   {activeSample ? (
-                    <iframe 
-                      src={`${activeSample.currentFileUrl}#view=Fit&pagemode=thumbs`}
-                      className="w-full h-full"
-                      title="Student Sample Preview"
-                    />
+                    <CustomPDFViewer fileUrl={activeSample.currentFileUrl} />
                   ) : viewingAnswer ? (
                     previewItem.parent.hasAnswer ? (
-                      <iframe 
-                        src={`${previewItem.parent.answerFileUrl}#view=Fit&pagemode=thumbs&page=1&zoom=page-fit`}
-                        className="w-full h-full"
-                        title="Answer Preview"
-                      />
+                      <CustomPDFViewer fileUrl={previewItem.parent.answerFileUrl} />
                     ) : (
                       <div className="flex items-center justify-center h-full text-slate-500">No answer file available.</div>
                     )
                   ) : (
                     previewItem.parent.hasFile ? (
-                      <iframe 
-                        src={`${previewItem.parent.fileUrl}#view=Fit&pagemode=thumbs&page=1&zoom=page-fit`}
-                        className="w-full h-full"
-                        title="PDF Preview"
-                      />
+                      <CustomPDFViewer fileUrl={previewItem.parent.fileUrl} />
                     ) : (
                       <div className="flex items-center justify-center h-full text-slate-500">No question file available.</div>
                     )
@@ -3319,11 +3382,7 @@ export default function AdvancedHistoryArchive() {
                     {selectedSampleFile && (
                       <div className="lg:w-2/3 bg-slate-200 h-[50vh] lg:h-full relative border-t lg:border-t-0 lg:border-l border-slate-300">
                         {samplePdfPreviewUrl ? (
-                          <iframe 
-                            src={`${samplePdfPreviewUrl}#view=FitH&pagemode=thumbs`} 
-                            className="w-full h-full absolute inset-0" 
-                            title="PDF Viewer"
-                          />
+                          <CustomPDFViewer fileUrl={samplePdfPreviewUrl} />
                         ) : (
                           <div className="flex items-center justify-center h-full text-slate-500 flex-col gap-2">
                             <Loader2 className="animate-spin text-indigo-600" size={32} />

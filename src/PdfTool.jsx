@@ -1,13 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { PDFDocument } from 'pdf-lib';
+import { useNavigate } from 'react-router-dom'; // <-- ADD THIS
 import { 
   FileText, Trash2, UploadCloud, Loader2, Info, 
-  Download, Edit2, Check, GripHorizontal, Layers
+  Download, Edit2, Check, GripHorizontal, Layers, Link, X
 } from 'lucide-react';
 
 export default function PdfTool() {
+  const navigate = useNavigate(); // <-- ADD THIS
+  
   const [isDragging, setIsDragging] = useState(false);
   const [files, setFiles] = useState([]);
+  const [activePreviewUrl, setActivePreviewUrl] = useState(null);
   const [processing, setProcessing] = useState(false);
   const [processingMsg, setProcessingMsg] = useState("");
   
@@ -24,6 +28,15 @@ export default function PdfTool() {
       blobUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
     };
   }, []);
+
+  const handleLinkToArchive = (file) => {
+    // Send the file data in the hidden router state to the home page ('/')
+    navigate('/', { 
+      state: { 
+        linkedFile: { fileBytes: file.fileBytes, name: file.name } 
+      } 
+    });
+  };
 
   // --- UTILITY: DOWNLOAD PDF ---
   const downloadPdf = (pdfBytes, filename) => {
@@ -188,8 +201,94 @@ export default function PdfTool() {
   };
 
   // --- INDIVIDUAL FILE COMPONENT ---
-  const FileWorkspace = ({ file, setFiles }) => {
+  const FileWorkspace = ({ file, setFiles, setActivePreviewUrl }) => {
     const [isEditingName, setIsEditingName] = useState(false);
+    // 1. Extract specific pages to a new document
+    const handleExtractPages = async () => {
+      const input = prompt("Enter pages to extract (e.g., 1, 3-5):");
+      if (!input) return;
+      
+      setProcessing(true);
+      try {
+        const sourcePdf = await PDFDocument.load(file.fileBytes);
+        const newPdf = await PDFDocument.create();
+        
+        // Basic parser for "1, 3-5"
+        const pagesToExtract = new Set();
+        input.split(',').forEach(part => {
+          if (part.includes('-')) {
+            const [start, end] = part.split('-').map(Number);
+            for (let i = start; i <= end; i++) pagesToExtract.add(i - 1);
+          } else {
+            pagesToExtract.add(Number(part) - 1);
+          }
+        });
+
+        const validPages = Array.from(pagesToExtract).filter(p => p >= 0 && p < file.pages.length).sort((a,b) => a-b);
+        const copiedPages = await newPdf.copyPages(sourcePdf, validPages);
+        copiedPages.forEach(p => newPdf.addPage(p));
+        
+        const newBytes = await newPdf.save();
+        const newFileId = Math.random().toString(36).substring(2, 9);
+        
+        // Generate previews for the new file
+        const newPages = [];
+        for (let i = 0; i < validPages.length; i++) {
+          const singlePagePdf = await PDFDocument.create();
+          const [copiedPage] = await singlePagePdf.copyPages(newPdf, [i]);
+          singlePagePdf.addPage(copiedPage);
+          const blob = new Blob([await singlePagePdf.save()], { type: 'application/pdf' });
+          newPages.push({ id: `${newFileId}-page-${i}`, originalIndex: i, previewUrl: URL.createObjectURL(blob) });
+        }
+
+        setFiles(prev => [...prev, { id: newFileId, name: `Extracted_${file.name}`, fileBytes: newBytes, pages: newPages }]);
+      } catch (err) {
+        console.error(err);
+        alert("Error extracting pages.");
+      }
+      setProcessing(false);
+    };
+
+    // 2. Split pages (A3 to A4)
+    const handleSplitPages = async (direction) => {
+      setProcessing(true);
+      try {
+        const sourcePdf = await PDFDocument.load(file.fileBytes);
+        const newPdf = await PDFDocument.create();
+        
+        for (let i = 0; i < sourcePdf.getPageCount(); i++) {
+          const page = sourcePdf.getPage(i);
+          const { width, height } = page.getSize();
+          
+          // Copy the page twice (one for left/top, one for right/bottom)
+          const [page1, page2] = await newPdf.copyPages(sourcePdf, [i, i]);
+          
+          if (direction === 'vertical') {
+            // Split vertically (Left and Right halves)
+            page1.setCropBox(0, 0, width / 2, height);
+            page2.setCropBox(width / 2, 0, width / 2, height);
+          } else {
+            // Split horizontally (Top and Bottom halves)
+            page1.setCropBox(0, height / 2, width, height / 2);
+            page2.setCropBox(0, 0, width, height / 2);
+          }
+          
+          newPdf.addPage(page1);
+          newPdf.addPage(page2);
+        }
+        
+        const newBytes = await newPdf.save();
+        // Replace current file bytes and regenerate previews (similar to extract logic)
+        // For brevity, you would call your existing `processFiles` logic here on a new File object
+        const splitFile = new File([newBytes], `Split_${file.name}`, { type: 'application/pdf' });
+        processFiles([splitFile]); 
+        handleRemoveFile(file.id); // Remove original
+      } catch (err) {
+        console.error(err);
+        alert("Error splitting pages.");
+      }
+      setProcessing(false);
+    };
     const [editName, setEditName] = useState(file.name);
 
     const saveName = () => {
@@ -268,14 +367,26 @@ export default function PdfTool() {
             </span>
           </div>
 
-          <div className="flex items-center gap-2">
-            <button 
+          <div className="flex flex-wrap items-center gap-2 justify-end">
+            <button
+              onClick={() => handleLinkToArchive(file)}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+            >
+              <Link size={16} /> Link to Question Bank
+            </button>
+            <button onClick={handleExtractPages} className="px-3 py-1.5 text-sm font-medium text-indigo-600 hover:bg-indigo-50 rounded-lg">
+              Extract Pages
+            </button>
+            <button onClick={() => handleSplitPages('vertical')} className="px-3 py-1.5 text-sm font-medium text-teal-600 hover:bg-teal-50 rounded-lg">
+              Split A3 to A4
+            </button>
+            <button
               onClick={() => handleRemoveFile(file.id)}
               className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors"
             >
               <Trash2 size={16} /> Remove
             </button>
-            <button 
+            <button
               onClick={() => handleDownloadFile(file)}
               className="flex items-center gap-2 px-4 py-1.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm transition-colors"
             >
@@ -290,14 +401,15 @@ export default function PdfTool() {
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
             {file.pages.map((page, index) => (
-              <div 
-                key={page.id} 
+              <div
+                key={page.id}
                 draggable
                 onDragStart={(e) => handleDragStart(e, index)}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => handleDropPage(e, index)}
+                onClick={() => setActivePreviewUrl(page.previewUrl)}
                 style={{ aspectRatio: '1 / 1.4' }}
-                className="group relative rounded-lg border-2 border-slate-200 bg-slate-50 overflow-hidden hover:border-blue-400 transition-all cursor-move shadow-sm hover:shadow-md"
+                className="group relative rounded-lg border-2 border-slate-200 bg-slate-50 overflow-hidden hover:border-blue-400 transition-all cursor-pointer shadow-sm hover:shadow-md"
               >
                 {/* PDF Preview Iframe */}
                 <iframe 
@@ -331,8 +443,8 @@ export default function PdfTool() {
     );
   };
 
-  return (
-    <div className="animate-in fade-in duration-300 space-y-6 max-w-6xl mx-auto p-4">
+return (
+    <div className="animate-in fade-in duration-300 space-y-6 max-w-[95%] mx-auto p-4">
       
       {/* Active Status Banner */}
       <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-4 rounded-xl flex items-start gap-3">
@@ -392,7 +504,7 @@ export default function PdfTool() {
       {files.length > 0 && (
         <div className="space-y-6">
           {files.map(file => (
-            <FileWorkspace key={file.id} file={file} setFiles={setFiles} />
+            <FileWorkspace key={file.id} file={file} setFiles={setFiles} setActivePreviewUrl={setActivePreviewUrl} />
           ))}
         </div>
       )}
@@ -403,6 +515,27 @@ export default function PdfTool() {
           <Loader2 className="animate-spin text-blue-600 mb-4" size={48} />
           <h2 className="text-xl font-bold text-slate-800">Processing...</h2>
           <p className="text-slate-500 mt-2">{processingMsg}</p>
+        </div>
+      )}
+
+            {/* PDF Viewer Modal */}
+      {activePreviewUrl && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[60] flex flex-col p-4 sm:p-8">
+          <div className="flex justify-end mb-4">
+            <button 
+              onClick={() => setActivePreviewUrl(null)}
+              className="flex items-center gap-2 bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-lg transition-colors"
+            >
+              <X size={20} /> Close Preview
+            </button>
+          </div>
+          <div className="flex-1 w-full max-w-5xl mx-auto bg-slate-100 rounded-xl overflow-hidden shadow-2xl">
+            <iframe 
+              src={`${activePreviewUrl}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`} 
+              className="w-full h-full" 
+              title="PDF Preview"
+            />
+          </div>
         </div>
       )}
     </div>

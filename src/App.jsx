@@ -1,13 +1,14 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { 
-  Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight, 
-  Tag, Edit, ChevronDown, Check, LogIn, User, Lock, ShieldAlert, Loader2, 
-  Sparkles, ArrowUpDown, Eye, BookOpen, ArrowLeft, 
+import {
+  Search, Upload, FileText, Download, Trash2, X, Filter, Plus, CornerDownRight,
+  Tag, Edit, ChevronDown, Check, LogIn, User, Lock, ShieldAlert, Loader2,
+  Sparkles, ArrowUpDown, Eye, BookOpen, ArrowLeft,
   FileDigit, Settings, Hash, ChevronLeft, ChevronRight,
   Users, Shield, Layers, Save, Calendar, Clock, LayoutList, FileStack,
   BarChart2, GraduationCap, FileOutput, GripHorizontal, FolderOpen
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 // --- REACT-PDF IMPORT & SETUP ---
 import { Viewer, Worker } from '@react-pdf-viewer/core';
@@ -28,7 +29,7 @@ import { PDFDocument } from 'pdf-lib';
 // --- ACTUAL FIREBASE & AUTH IMPORTS ---
 import { db, storage } from './firebase.js';
 import { useAuth } from './main.jsx';
-import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, setDoc, getDoc, query, where } from "firebase/firestore"; 
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, setDoc, getDoc, query, where } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 // --- APP CONSTANTS ---
@@ -53,13 +54,13 @@ const MARK_OPTIONS = [
   { label: "6 Marks", value: "6" },
   { label: "7 Marks", value: "7" },
   { label: "8 Marks", value: "8" },
-  { label: "7/8 Marks", value: "7/8" }, 
+  { label: "7/8 Marks", value: "7/8" },
   { label: "9+ Marks", value: "9+" },
 ];
 
 // --- EMPTIED LISTS (Will be populated dynamically) ---
 const INITIAL_TOPICS = [];
-const INITIAL_SOURCE_TYPES = []; 
+const INITIAL_SOURCE_TYPES = [];
 const INITIAL_QUESTION_TYPES = {
   "Paper 1 (DBQ)": [],
   "Paper 2 (Essay)": []
@@ -113,13 +114,13 @@ const CheckboxGroup = ({ options, selectedValues, onChange }) => {
         const isSelected = selectedValues.includes(value);
 
         return (
-          <div 
-            key={value} 
+          <div
+            key={value}
             onClick={() => toggleValue(value)}
             className={`
               cursor-pointer px-3 py-2 rounded-lg text-sm font-medium border transition-all duration-200 flex items-center justify-center text-center h-full
-              ${isSelected 
-                ? 'bg-blue-600 border-blue-600 text-white shadow-md shadow-blue-200' 
+              ${isSelected
+                ? 'bg-blue-600 border-blue-600 text-white shadow-md shadow-blue-200'
                 : 'bg-white border-slate-200 text-slate-600 hover:border-blue-300 hover:bg-slate-50'
               }
             `}
@@ -139,7 +140,7 @@ const CheckboxGroup = ({ options, selectedValues, onChange }) => {
 const FilterAccordion = ({ title, isOpen, onToggle, count, children, disabled, helperText }) => {
   return (
     <div className={`border border-slate-200 rounded-xl bg-white overflow-hidden ${disabled ? 'opacity-60 grayscale' : 'shadow-sm'}`}>
-      <button 
+      <button
         onClick={disabled ? undefined : onToggle}
         className={`w-full flex items-center justify-between p-4 text-base font-bold text-slate-700 hover:bg-slate-50 transition-colors ${disabled ? 'cursor-not-allowed' : ''}`}
       >
@@ -174,12 +175,12 @@ const FilterAccordion = ({ title, isOpen, onToggle, count, children, disabled, h
 };
 
 // --- REUSABLE COMPONENT: MULTI-SELECT CREATABLE ---
-const CreatableSelect = ({ 
-  options = [], 
-  value, 
-  onChange, 
-  onCreate, 
-  placeholder, 
+const CreatableSelect = ({
+  options = [],
+  value,
+  onChange,
+  onCreate,
+  placeholder,
   disabled = false,
   icon: Icon,
   isMulti = false
@@ -200,15 +201,15 @@ const CreatableSelect = ({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [wrapperRef]);
 
-  const filteredOptions = options.filter(opt => 
-    opt.toLowerCase().includes(search.toLowerCase()) && 
-    !selectedValues.includes(opt) 
+  const filteredOptions = options.filter(opt =>
+    opt.toLowerCase().includes(search.toLowerCase()) &&
+    !selectedValues.includes(opt)
   );
 
   const handleSelect = (opt) => {
     if (isMulti) {
       onChange([...selectedValues, opt]);
-      setSearch(''); 
+      setSearch('');
     } else {
       onChange(opt);
       setSearch(opt);
@@ -218,7 +219,7 @@ const CreatableSelect = ({
 
   const handleCreate = () => {
     if (search.trim()) {
-      onCreate(search); 
+      onCreate(search);
       if (isMulti) {
         onChange([...selectedValues, search]);
         setSearch('');
@@ -269,7 +270,7 @@ const CreatableSelect = ({
           disabled={disabled}
           onChange={(e) => {
             setSearch(e.target.value);
-            if (!isMulti) onChange(e.target.value); 
+            if (!isMulti) onChange(e.target.value);
             setIsOpen(true);
           }}
           onFocus={() => !disabled && setIsOpen(true)}
@@ -374,11 +375,10 @@ const PaginationControls = ({ currentPage, totalPages, onPageChange, itemsPerPag
             ) : (
               <button
                 onClick={() => onPageChange(page)}
-                className={`w-8 h-8 flex items-center justify-center rounded-lg text-sm font-medium transition-colors ${
-                  currentPage === page
+                className={`w-8 h-8 flex items-center justify-center rounded-lg text-sm font-medium transition-colors ${currentPage === page
                     ? 'bg-blue-600 text-white shadow-md shadow-blue-200'
                     : 'text-slate-600 hover:bg-slate-100 border border-transparent hover:border-slate-200'
-                }`}
+                  }`}
               >
                 {page}
               </button>
@@ -402,7 +402,7 @@ const PaginationControls = ({ currentPage, totalPages, onPageChange, itemsPerPag
 const CustomPDFViewer = ({ fileUrl }) => {
   // Initialize the default layout plugin
   const defaultLayoutPluginInstance = defaultLayoutPlugin();
-  
+
   // 1. Safely extract the zoom plugin's built-in zoomIn and zoomOut methods
   const zoomPluginInstance = defaultLayoutPluginInstance.zoomPluginInstance;
   const zoomIn = zoomPluginInstance ? zoomPluginInstance.zoomIn : null;
@@ -440,7 +440,7 @@ const CustomPDFViewer = ({ fileUrl }) => {
     <div ref={containerRef} className="absolute inset-0 bg-slate-200 flex flex-col items-center">
       <Worker workerUrl={workerUrl}>
         <div className="w-full h-full" style={{ height: '100%', width: '100%' }}>
-<Viewer
+          <Viewer
             fileUrl={fileUrl}
             plugins={[defaultLayoutPluginInstance]}
             theme="light"
@@ -454,27 +454,29 @@ const CustomPDFViewer = ({ fileUrl }) => {
     </div>
   );
 };
-  
+
 export default function AdvancedHistoryArchive() {
+  const location = useLocation(); // <-- ADD THIS
+  const navigate = useNavigate(); // <-- ADD THIS
   // --- GRAB GLOBAL AUTH STATE ---
   const { user, authLoading, loginWithGoogle, logout } = useAuth();
-  
+
   // --- STATE ---
-  const [archives, setArchives] = useState([]); 
-  
+  const [archives, setArchives] = useState([]);
+
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [uploadSelection, setUploadSelection] = useState(null); // 'question' | 'sample' | null
-  const [isManageFiltersOpen, setIsManageFiltersOpen] = useState(false); 
-  const [isUserManagementOpen, setIsUserManagementOpen] = useState(false); 
+  const [isManageFiltersOpen, setIsManageFiltersOpen] = useState(false);
+  const [isUserManagementOpen, setIsUserManagementOpen] = useState(false);
   const [manageTab, setManageTab] = useState('users'); // 'users' | 'tiers'
-  const [showFilters, setShowFilters] = useState(false); 
-  const [expandedSections, setExpandedSections] = useState({}); 
+  const [showFilters, setShowFilters] = useState(false);
+  const [expandedSections, setExpandedSections] = useState({});
   const [isLoading, setIsLoading] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
-  
+
   // Preview Modal State
-  const [previewItem, setPreviewItem] = useState(null); 
-  const [viewingAnswer, setViewingAnswer] = useState(false); 
+  const [previewItem, setPreviewItem] = useState(null);
+  const [viewingAnswer, setViewingAnswer] = useState(false);
   const [previewSamples, setPreviewSamples] = useState([]);
   const [activeSample, setActiveSample] = useState(null);
 
@@ -488,23 +490,23 @@ export default function AdvancedHistoryArchive() {
   const [availableTopics, setAvailableTopics] = useState(INITIAL_TOPICS);
   const [availableSourceTypes, setAvailableSourceTypes] = useState(INITIAL_SOURCE_TYPES);
   const [availableQuestionTypes, setAvailableQuestionTypes] = useState(INITIAL_QUESTION_TYPES);
-  const [availableYears, setAvailableYears] = useState([]); 
+  const [availableYears, setAvailableYears] = useState([]);
 
   // Search & Sort & Display State
   const [searchTerm, setSearchTerm] = useState('');
   const [sortOption, setSortOption] = useState('year_desc');
   const [displayMode, setDisplayMode] = useState('subquestion'); // 'subquestion' | 'fullpaper'
-  
+
   // Pagination State
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
-  
+
   const [filters, setFilters] = useState({
-    origin: [], 
-    year: [], 
-    paperType: [], 
-    questionType: [], 
-    sourceType: [], 
+    origin: [],
+    year: [],
+    paperType: [],
+    questionType: [],
+    sourceType: [],
     marks: [],
     topic: [],
     tier: []
@@ -512,17 +514,19 @@ export default function AdvancedHistoryArchive() {
 
   // Upload/Edit Form State
   const [editingId, setEditingId] = useState(null);
+  const [pendingToolFile, setPendingToolFile] = useState(null);
+  const [showToolLinkModal, setShowToolLinkModal] = useState(false);
   const [uploadForm, setUploadForm] = useState({
-    title: '', 
-    origin: '', 
-    year: new Date().getFullYear().toString(), 
+    title: '',
+    origin: '',
+    year: new Date().getFullYear().toString(),
     paperType: '',
-    topic: [], 
-    tier: '10', 
+    topic: [],
+    tier: '10',
     subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' }]
   });
   const [selectedFile, setSelectedFile] = useState(null);
-  const [selectedAnswerFile, setSelectedAnswerFile] = useState(null); 
+  const [selectedAnswerFile, setSelectedAnswerFile] = useState(null);
 
   // Student Sample Form State
   const currentYear = new Date().getFullYear().toString();
@@ -564,6 +568,19 @@ export default function AdvancedHistoryArchive() {
     };
   }, [samplePdfPreviewUrl]);
 
+  // --- ADD THIS NEW USE-EFFECT ---
+  useEffect(() => {
+    // Check if we arrived from the PDF Tool tab with a file
+    if (location.state && location.state.linkedFile) {
+
+      // Trigger your existing modal logic
+      handleLinkFromTool(location.state.linkedFile);
+
+      // Clear the router state so it doesn't keep popping up if you refresh the page
+      navigate('/', { replace: true, state: {} });
+    }
+  }, [location, navigate]);
+
   // --- FETCH SYSTEM SETTINGS (ROLES, TIERS, ACCESS) ---
   useEffect(() => {
     const fetchSystemSettings = async () => {
@@ -575,7 +592,7 @@ export default function AdvancedHistoryArchive() {
           const data = docSnap.data();
           if (data.roles && Array.isArray(data.roles)) setSystemRoles(data.roles);
           if (data.tiers && Array.isArray(data.tiers)) setSystemTiers(data.tiers);
-          
+
           if (data.tierAccess) {
             // Migrate old string format to object format if necessary
             const formattedAccess = {};
@@ -653,57 +670,57 @@ export default function AdvancedHistoryArchive() {
 
       try {
         const querySnapshot = await getDocs(collection(db, "archives"));
-        const data = querySnapshot.docs.map(doc => ({ 
-          id: doc.id, 
-          tier: doc.data().tier || '10', 
-          ...doc.data() 
+        const data = querySnapshot.docs.map(doc => ({
+          id: doc.id,
+          tier: doc.data().tier || '10',
+          ...doc.data()
         }));
-        
+
         if (data.length > 0) {
-            setArchives(data);
-            
-            // --- EXTRACT TAGS FROM DATA ---
-            const extractedTopics = new Set();
-            const extractedSourceTypes = new Set();
-            const extractedYears = new Set();
-            const extractedTypes = {
-              "Paper 1 (DBQ)": new Set(),
-              "Paper 2 (Essay)": new Set()
-            };
+          setArchives(data);
 
-            data.forEach(item => {
-              if (item.year) extractedYears.add(String(item.year));
+          // --- EXTRACT TAGS FROM DATA ---
+          const extractedTopics = new Set();
+          const extractedSourceTypes = new Set();
+          const extractedYears = new Set();
+          const extractedTypes = {
+            "Paper 1 (DBQ)": new Set(),
+            "Paper 2 (Essay)": new Set()
+          };
 
-              // Extract Parent Topics
-              ensureArray(item.topic).forEach(t => {
-                if(t) extractedTopics.add(t);
-              });
+          data.forEach(item => {
+            if (item.year) extractedYears.add(String(item.year));
 
-              // Extract Child Topics & Types
-              item.subQuestions?.forEach(sq => {
-                ensureArray(sq.topic).forEach(t => {
-                  if(t) extractedTopics.add(t);
-                });
-                
-                ensureArray(sq.sourceType).forEach(st => {
-                  if(st) extractedSourceTypes.add(st);
-                });
-
-                ensureArray(sq.questionType).forEach(qt => {
-                  if (qt && item.paperType && extractedTypes[item.paperType]) {
-                    extractedTypes[item.paperType].add(qt);
-                  }
-                });
-              });
+            // Extract Parent Topics
+            ensureArray(item.topic).forEach(t => {
+              if (t) extractedTopics.add(t);
             });
 
-            setAvailableTopics(Array.from(extractedTopics).sort());
-            setAvailableSourceTypes(Array.from(extractedSourceTypes).sort());
-            setAvailableQuestionTypes({
-              "Paper 1 (DBQ)": Array.from(extractedTypes["Paper 1 (DBQ)"]).sort(),
-              "Paper 2 (Essay)": Array.from(extractedTypes["Paper 2 (Essay)"]).sort()
+            // Extract Child Topics & Types
+            item.subQuestions?.forEach(sq => {
+              ensureArray(sq.topic).forEach(t => {
+                if (t) extractedTopics.add(t);
+              });
+
+              ensureArray(sq.sourceType).forEach(st => {
+                if (st) extractedSourceTypes.add(st);
+              });
+
+              ensureArray(sq.questionType).forEach(qt => {
+                if (qt && item.paperType && extractedTypes[item.paperType]) {
+                  extractedTypes[item.paperType].add(qt);
+                }
+              });
             });
-            setAvailableYears(Array.from(extractedYears).sort((a,b) => b - a));
+          });
+
+          setAvailableTopics(Array.from(extractedTopics).sort());
+          setAvailableSourceTypes(Array.from(extractedSourceTypes).sort());
+          setAvailableQuestionTypes({
+            "Paper 1 (DBQ)": Array.from(extractedTypes["Paper 1 (DBQ)"]).sort(),
+            "Paper 2 (Essay)": Array.from(extractedTypes["Paper 2 (Essay)"]).sort()
+          });
+          setAvailableYears(Array.from(extractedYears).sort((a, b) => b - a));
         }
       } catch (error) {
         console.error("Error fetching archives:", error);
@@ -711,9 +728,9 @@ export default function AdvancedHistoryArchive() {
     };
 
     if (user && !authLoading) {
-        fetchArchives();
+      fetchArchives();
     } else if (!user) {
-        setArchives([]); // Clear archives on logout
+      setArchives([]); // Clear archives on logout
     }
   }, [user, authLoading]);
 
@@ -723,10 +740,10 @@ export default function AdvancedHistoryArchive() {
     setIsManagingUsers(true);
     try {
       const querySnapshot = await getDocs(collection(db, "user_roles"));
-      const usersData = querySnapshot.docs.map(doc => ({ 
-        id: doc.id, 
-        email: doc.id, 
-        ...doc.data() 
+      const usersData = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        email: doc.id,
+        ...doc.data()
       }));
       setManagedUsers(usersData);
     } catch (error) {
@@ -785,7 +802,7 @@ export default function AdvancedHistoryArchive() {
     setCurrentMarksDocTitle(docTitle);
     setShowMarksModal(true);
     setIsLoadingMarks(true);
-    
+
     try {
       // Fetch assessments linked to this doc
       const q = query(collection(db, "assessments"), where("linkedDocId", "==", docId));
@@ -816,12 +833,12 @@ export default function AdvancedHistoryArchive() {
           if (assessment.sectionsConfig && assessment.sectionsConfig.length > 0) {
             let total = 0;
             if (typeof markVal === 'object') {
-               Object.values(markVal).forEach(v => {
-                 if(v && !isNaN(parseFloat(v))) total += parseFloat(v);
-               });
-               finalMark = total;
+              Object.values(markVal).forEach(v => {
+                if (v && !isNaN(parseFloat(v))) total += parseFloat(v);
+              });
+              finalMark = total;
             } else {
-               finalMark = parseFloat(markVal);
+              finalMark = parseFloat(markVal);
             }
             const deduction = parseFloat(marks[`${studentId}_deduction`]) || 0;
             if (!isNaN(finalMark)) finalMark -= deduction;
@@ -897,7 +914,7 @@ export default function AdvancedHistoryArchive() {
 
   // --- HELPER: Auto Labelling ---
   const getNextLabel = (index, type) => {
-    if (type === "Paper 1 (DBQ)") return String.fromCharCode(97 + index); 
+    if (type === "Paper 1 (DBQ)") return String.fromCharCode(97 + index);
     if (type === "Paper 2 (Essay)") return (index + 1).toString();
     return '';
   };
@@ -938,7 +955,7 @@ export default function AdvancedHistoryArchive() {
       // --- TIER ACCESS CHECK (Cumulative) ---
       // If not admin, they can only see documents where the tier number is <= their maxUnlockedTier
       if (!user.isAdmin && parentTierNum > maxUnlockedTier) {
-        return; 
+        return;
       }
 
       // 1. Parent Level Filters (OR Logic within category)
@@ -951,13 +968,13 @@ export default function AdvancedHistoryArchive() {
 
       (parent.subQuestions || []).forEach(child => {
         // 2. Child Level Filters (OR Logic within category)
-        
+
         const childTypes = ensureArray(child.questionType);
-        const matchQuestionType = filters.questionType.length === 0 || 
+        const matchQuestionType = filters.questionType.length === 0 ||
           childTypes.some(t => filters.questionType.includes(t));
 
         const childSourceTypes = ensureArray(child.sourceType);
-        const matchSourceType = filters.sourceType.length === 0 || 
+        const matchSourceType = filters.sourceType.length === 0 ||
           childSourceTypes.some(t => filters.sourceType.includes(t));
 
         const allTopics = [...ensureArray(parent.topic), ...ensureArray(child.topic)];
@@ -978,7 +995,7 @@ export default function AdvancedHistoryArchive() {
         const childTopicsStr = ensureArray(child.topic).join(" ");
         const qTypesStr = childTypes.join(" ");
         const sTypesStr = childSourceTypes.join(" ");
-        
+
         // Construct specific tag for search (e.g. "2026E Q1" or "2025D Q1a")
         let specificTag = "";
         if (parent.paperType === "Paper 2 (Essay)") {
@@ -1057,7 +1074,7 @@ export default function AdvancedHistoryArchive() {
   };
 
   // --- HANDLERS ---
-  
+
   const toggleAccordion = (section) => {
     setExpandedSections(prev => ({
       ...prev,
@@ -1068,7 +1085,7 @@ export default function AdvancedHistoryArchive() {
   const handleParentChange = (field, value) => {
     setUploadForm(prev => {
       const newState = { ...prev, [field]: value };
-      
+
       if (field === 'paperType') {
         let newSubQuestions = prev.subQuestions.map((sq, idx) => ({
           ...sq,
@@ -1084,7 +1101,7 @@ export default function AdvancedHistoryArchive() {
         }
 
         newState.subQuestions = newSubQuestions;
-        if (value === "Paper 2 (Essay)") newState.topic = []; 
+        if (value === "Paper 2 (Essay)") newState.topic = [];
       }
       return newState;
     });
@@ -1112,20 +1129,20 @@ export default function AdvancedHistoryArchive() {
 
         if (newState.paperType) {
           if (newState.paperType === "Paper 1 (DBQ)" && prev.subQuestions.length <= 1 && !prev.subQuestions[0].content) {
-             newState.subQuestions = [
+            newState.subQuestions = [
               { id: Date.now(), label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' },
               { id: Date.now() + 1, label: 'b', questionType: [], content: '', topic: [], sourceType: [], marks: '' },
               { id: Date.now() + 2, label: 'c', questionType: [], content: '', topic: [], sourceType: [], marks: '' }
             ];
           } else {
-             newState.subQuestions = prev.subQuestions.map((sq, idx) => ({
+            newState.subQuestions = prev.subQuestions.map((sq, idx) => ({
               ...sq,
               label: getNextLabel(idx, newState.paperType)
             }));
           }
 
           if (newState.paperType === "Paper 2 (Essay)") {
-            newState.topic = []; 
+            newState.topic = [];
           }
         }
       }
@@ -1185,26 +1202,26 @@ export default function AdvancedHistoryArchive() {
   // --- ADMIN: DELETE FILTER TAGS ---
   const handleDeleteFilterTag = (type, value) => {
     if (!user?.isAdmin) return;
-    
+
     if (type === 'topic') {
       setAvailableTopics(prev => prev.filter(t => t !== value));
     } else if (type === 'sourceType') {
       setAvailableSourceTypes(prev => prev.filter(t => t !== value));
     } else if (type === 'qTypeDBQ') {
-      setAvailableQuestionTypes(prev => ({...prev, "Paper 1 (DBQ)": prev["Paper 1 (DBQ)"].filter(t => t !== value)}));
+      setAvailableQuestionTypes(prev => ({ ...prev, "Paper 1 (DBQ)": prev["Paper 1 (DBQ)"].filter(t => t !== value) }));
     } else if (type === 'qTypeEssay') {
-      setAvailableQuestionTypes(prev => ({...prev, "Paper 2 (Essay)": prev["Paper 2 (Essay)"].filter(t => t !== value)}));
+      setAvailableQuestionTypes(prev => ({ ...prev, "Paper 2 (Essay)": prev["Paper 2 (Essay)"].filter(t => t !== value) }));
     }
   };
 
   // --- MODAL HANDLERS ---
 
   const handleEditClick = (e, parentItem) => {
-    e.stopPropagation(); 
+    e.stopPropagation();
     if (!user?.isAdmin) return;
     setEditingId(parentItem.id);
     setUploadSelection('question');
-    
+
     const itemData = JSON.parse(JSON.stringify(parentItem));
     itemData.topic = ensureArray(itemData.topic);
     itemData.tier = itemData.tier || '10'; // <-- Ensure tier exists when editing
@@ -1212,11 +1229,12 @@ export default function AdvancedHistoryArchive() {
       ...sq,
       questionType: ensureArray(sq.questionType),
       topic: ensureArray(sq.topic),
-      sourceType: ensureArray(sq.sourceType) 
+      sourceType: ensureArray(sq.sourceType)
     }));
 
     setUploadForm(itemData);
-    setDeleteConfirm(false); 
+    setDeleteConfirm(false);
+
     setIsUploadModalOpen(true);
   };
 
@@ -1248,16 +1266,51 @@ export default function AdvancedHistoryArchive() {
     }
   };
 
+  const handleLinkFromTool = (toolFile) => {
+    setPendingToolFile(toolFile);
+    setShowToolLinkModal(true);
+  };
+
+  const processToolLink = (targetType, isNew) => {
+    if (isNew) {
+      // Convert the tool's fileBytes back to a File object
+      const fileObj = new File([pendingToolFile.fileBytes], pendingToolFile.name, { type: 'application/pdf' });
+
+      if (targetType === 'question') {
+        setUploadSelection('question');
+        setSelectedFile(fileObj);
+        setEditingId(null);
+      } else if (targetType === 'sample') {
+        setUploadSelection('sample');
+        handleSampleFileChange({ target: { files: [fileObj] } });
+        setEditingId(null);
+      }
+
+      setShowToolLinkModal(false);
+      setPendingToolFile(null);
+      setIsUploadModalOpen(true);
+    } else {
+      // Linking to an EXISTING item
+      setShowToolLinkModal(false);
+      // Keep pendingToolFile in state so it can be picked up when they click Edit
+      if (targetType === 'question') {
+        alert("Please find the Question Set in the list below and click 'Edit Parent' to attach the document.");
+      } else if (targetType === 'sample') {
+        openManageSamplesModal();
+      }
+    }
+  };
+
   const handleUploadSubmit = async (e) => {
     e.preventDefault();
-    if (!user?.isAdmin) return; 
+    if (!user?.isAdmin) return;
     if (!uploadForm.title) return;
     setIsLoading(true);
 
     try {
       let fileUrl = uploadForm.fileUrl || '';
       let answerFileUrl = uploadForm.answerFileUrl || '';
-      
+
       const safeTitle = uploadForm.title.replace(/[^a-zA-Z0-9\s\-_]/g, '').trim();
       const safeOrigin = (uploadForm.origin || 'Uncategorized').replace(/[^a-zA-Z0-9\s\-_]/g, '_');
 
@@ -1266,7 +1319,7 @@ export default function AdvancedHistoryArchive() {
         const newFileName = `${safeTitle}.${fileExtension}`;
         const storagePath = `pdfs/${safeOrigin}/${newFileName}`;
         const storageRef = ref(storage, storagePath);
-        
+
         const metadata = { contentType: 'application/pdf', contentDisposition: `inline; filename="${newFileName}"` };
         await uploadBytes(storageRef, selectedFile, metadata);
         fileUrl = await getDownloadURL(storageRef);
@@ -1309,7 +1362,7 @@ export default function AdvancedHistoryArchive() {
         const newEntry = { id: docRef.id, ...payload };
         setArchives([newEntry, ...archives]);
       }
-      
+
       ensureArray(payload.topic).forEach(t => handleCreateTopic(t));
       payload.subQuestions.forEach(sq => {
         ensureArray(sq.topic).forEach(t => handleCreateTopic(t));
@@ -1330,16 +1383,16 @@ export default function AdvancedHistoryArchive() {
   const handleSampleFileChange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    
+
     setSelectedSampleFile(file);
     setIsLoading(true);
-    
+
     try {
       const fileBytes = await file.arrayBuffer();
       const pdfDoc = await PDFDocument.load(fileBytes);
       setLoadedPdfDoc(pdfDoc);
       setPdfPageCount(pdfDoc.getPageCount());
-      
+
       if (samplePdfPreviewUrl) URL.revokeObjectURL(samplePdfPreviewUrl);
       setSamplePdfPreviewUrl(URL.createObjectURL(file));
     } catch (error) {
@@ -1483,14 +1536,13 @@ export default function AdvancedHistoryArchive() {
       scores: scoresArray
     });
 
-    // --- ADDED THIS BLOCK to load the existing PDF into the viewer ---
+    // --- EXISTING BLOCK to load the existing PDF into the viewer ---
     const firstScoreWithFile = Object.values(sample.scoresData || {}).find(s => s.fileUrl);
     if (firstScoreWithFile) {
       setSamplePdfPreviewUrl(firstScoreWithFile.fileUrl);
     } else {
       setSamplePdfPreviewUrl('');
     }
-    // -----------------------------------------------------------------
 
     setIsManageSamplesModalOpen(false);
     setIsUploadModalOpen(true);
@@ -1572,7 +1624,7 @@ export default function AdvancedHistoryArchive() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col relative">
-      
+
       {/* DEBUG BAR */}
       <div className="fixed bottom-0 right-0 bg-black text-white text-xs p-2 z-50 opacity-80 pointer-events-none font-mono">
         STATUS: {user ? (user.isAdmin ? "ADMIN" : (user.isAuthorized ? "VIEWER" : "UNAUTHORIZED")) : "LOGGED OUT"}
@@ -1580,7 +1632,7 @@ export default function AdvancedHistoryArchive() {
 
       {/* --- MAIN CONTENT --- */}
       <main className="flex-1 p-6 md:p-10 max-w-7xl mx-auto w-full">
-        
+
         {/* Header */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
           <div className="flex-1">
@@ -1596,12 +1648,12 @@ export default function AdvancedHistoryArchive() {
 
             <div className="flex items-center gap-4 mt-3">
               <p className="text-slate-500 text-sm">
-                {user && user.isAuthorized 
+                {user && user.isAuthorized
                   ? `Found ${filteredResults.length} ${displayMode === 'subquestion' ? 'sub-questions' : 'papers'}`
                   : 'Secure Database Access'
                 }
               </p>
-              
+
               {/* Auth Status / Logout */}
               {user && (
                 <div className="flex items-center gap-2 text-xs text-slate-400 border-l border-slate-300 pl-4">
@@ -1617,18 +1669,18 @@ export default function AdvancedHistoryArchive() {
 
           {user && user.isAuthorized && (
             <div className="flex gap-2 w-full md:w-auto mt-4 md:mt-0 flex-wrap">
-              <button 
-                onClick={() => setShowFilters(!showFilters)} 
+              <button
+                onClick={() => setShowFilters(!showFilters)}
                 className={`flex-1 md:flex-none btn-secondary ${showFilters ? 'bg-blue-50 border-blue-200 text-blue-700' : ''}`}
               >
                 <Filter size={18} /> {showFilters ? 'Hide Filters' : 'Filters'}
               </button>
-              
+
               {/* --- NEW: USER MANAGEMENT BUTTON --- */}
               {user.isAdmin && (
                 <>
-                  <button 
-                    onClick={() => setIsUserManagementOpen(true)} 
+                  <button
+                    onClick={() => setIsUserManagementOpen(true)}
                     className="btn-secondary flex-1 md:flex-none hover:bg-purple-50 hover:text-purple-700 hover:border-purple-200"
                   >
                     <Users size={18} /> Manage Access
@@ -1665,7 +1717,7 @@ export default function AdvancedHistoryArchive() {
             <ShieldAlert size={48} className="mb-4 text-red-300" />
             <h3 className="text-lg font-semibold text-red-700">Unauthorized Access</h3>
             <p className="text-sm max-w-md text-center mt-2 text-red-600">
-              Your account ({user.email}) does not have permission to view these documents. 
+              Your account ({user.email}) does not have permission to view these documents.
               Please contact the administrator to request access.
             </p>
           </div>
@@ -1690,14 +1742,14 @@ export default function AdvancedHistoryArchive() {
                       </h3>
                       <div className="flex gap-2">
                         {user.isAdmin && (
-                          <button 
+                          <button
                             onClick={() => setIsManageFiltersOpen(true)}
                             className="text-xs flex items-center gap-1 text-slate-500 hover:text-slate-800 px-2 py-1 rounded hover:bg-slate-200 transition-colors"
                           >
                             <Settings size={12} /> Manage Tags
                           </button>
                         )}
-                        <button 
+                        <button
                           onClick={() => setFilters({ origin: [], year: [], paperType: [], questionType: [], sourceType: [], marks: [], topic: [], tier: [] })}
                           className="text-xs text-red-500 hover:text-red-700 font-medium px-2 py-1 rounded hover:bg-red-50 transition-colors"
                         >
@@ -1710,66 +1762,66 @@ export default function AdvancedHistoryArchive() {
                     <div className="flex flex-col gap-2">
                       {/* Tier (Admin Only) */}
                       {user.isAdmin && (
-                        <FilterAccordion 
-                          title="Tier Level (Admin Only)" 
-                          isOpen={expandedSections['tier']} 
+                        <FilterAccordion
+                          title="Tier Level (Admin Only)"
+                          isOpen={expandedSections['tier']}
                           onToggle={() => toggleAccordion('tier')}
                           count={filters.tier.length}
                         >
-                          <CheckboxGroup 
+                          <CheckboxGroup
                             options={systemTiers.map(t => ({ label: t.name, value: t.id }))}
                             selectedValues={filters.tier}
-                            onChange={(vals) => setFilters({...filters, tier: vals})}
+                            onChange={(vals) => setFilters({ ...filters, tier: vals })}
                           />
                         </FilterAccordion>
                       )}
 
                       {/* Origin */}
-                      <FilterAccordion 
-                        title="Origin" 
-                        isOpen={expandedSections['origin']} 
+                      <FilterAccordion
+                        title="Origin"
+                        isOpen={expandedSections['origin']}
                         onToggle={() => toggleAccordion('origin')}
                         count={filters.origin.length}
                       >
-                        <CheckboxGroup 
+                        <CheckboxGroup
                           options={ORIGINS}
                           selectedValues={filters.origin}
-                          onChange={(vals) => setFilters({...filters, origin: vals})}
+                          onChange={(vals) => setFilters({ ...filters, origin: vals })}
                         />
                       </FilterAccordion>
 
                       {/* Year */}
-                      <FilterAccordion 
-                        title="Year" 
-                        isOpen={expandedSections['year']} 
+                      <FilterAccordion
+                        title="Year"
+                        isOpen={expandedSections['year']}
                         onToggle={() => toggleAccordion('year')}
                         count={filters.year.length}
                       >
-                        <CheckboxGroup 
+                        <CheckboxGroup
                           options={availableYears}
                           selectedValues={filters.year}
-                          onChange={(vals) => setFilters({...filters, year: vals})}
+                          onChange={(vals) => setFilters({ ...filters, year: vals })}
                         />
                       </FilterAccordion>
 
                       {/* Paper Type */}
-                      <FilterAccordion 
-                        title="Paper Type" 
-                        isOpen={expandedSections['paperType']} 
+                      <FilterAccordion
+                        title="Paper Type"
+                        isOpen={expandedSections['paperType']}
                         onToggle={() => toggleAccordion('paperType')}
                         count={filters.paperType.length}
                       >
-                        <CheckboxGroup 
+                        <CheckboxGroup
                           options={PAPER_TYPES}
                           selectedValues={filters.paperType}
-                          onChange={(vals) => setFilters({...filters, paperType: vals})}
+                          onChange={(vals) => setFilters({ ...filters, paperType: vals })}
                         />
                       </FilterAccordion>
 
                       {/* Question Type (Conditional) */}
-                      <FilterAccordion 
-                        title="Question Type" 
-                        isOpen={expandedSections['questionType']} 
+                      <FilterAccordion
+                        title="Question Type"
+                        isOpen={expandedSections['questionType']}
                         onToggle={() => toggleAccordion('questionType')}
                         count={filters.questionType.length}
                         disabled={filters.paperType.length === 0}
@@ -1779,67 +1831,67 @@ export default function AdvancedHistoryArchive() {
                           {filters.paperType.includes("Paper 1 (DBQ)") && (
                             <div>
                               <h4 className="text-xs font-bold text-slate-400 mb-2 uppercase">Paper 1 (DBQ)</h4>
-                              <CheckboxGroup 
-                                  options={availableQuestionTypes["Paper 1 (DBQ)"]}
-                                  selectedValues={filters.questionType}
-                                  onChange={(vals) => setFilters({...filters, questionType: vals})}
-                                />
+                              <CheckboxGroup
+                                options={availableQuestionTypes["Paper 1 (DBQ)"]}
+                                selectedValues={filters.questionType}
+                                onChange={(vals) => setFilters({ ...filters, questionType: vals })}
+                              />
                             </div>
                           )}
                           {filters.paperType.includes("Paper 2 (Essay)") && (
                             <div>
                               <h4 className="text-xs font-bold text-slate-400 mb-2 uppercase">Paper 2 (Essay)</h4>
-                              <CheckboxGroup 
-                                  options={availableQuestionTypes["Paper 2 (Essay)"]}
-                                  selectedValues={filters.questionType}
-                                  onChange={(vals) => setFilters({...filters, questionType: vals})}
-                                />
+                              <CheckboxGroup
+                                options={availableQuestionTypes["Paper 2 (Essay)"]}
+                                selectedValues={filters.questionType}
+                                onChange={(vals) => setFilters({ ...filters, questionType: vals })}
+                              />
                             </div>
                           )}
                         </div>
                       </FilterAccordion>
 
                       {/* Source Type (Conditional - DBQ Only) */}
-                      <FilterAccordion 
-                        title="Source Type" 
-                        isOpen={expandedSections['sourceType']} 
+                      <FilterAccordion
+                        title="Source Type"
+                        isOpen={expandedSections['sourceType']}
                         onToggle={() => toggleAccordion('sourceType')}
                         count={filters.sourceType.length}
                         disabled={!filters.paperType.includes("Paper 1 (DBQ)")}
                         helperText={!filters.paperType.includes("Paper 1 (DBQ)") ? "Only available for Paper 1" : null}
                       >
-                        <CheckboxGroup 
+                        <CheckboxGroup
                           options={availableSourceTypes}
                           selectedValues={filters.sourceType}
-                          onChange={(vals) => setFilters({...filters, sourceType: vals})}
+                          onChange={(vals) => setFilters({ ...filters, sourceType: vals })}
                         />
                       </FilterAccordion>
 
                       {/* Topics */}
-                      <FilterAccordion 
-                        title="Topics" 
-                        isOpen={expandedSections['topic']} 
+                      <FilterAccordion
+                        title="Topics"
+                        isOpen={expandedSections['topic']}
                         onToggle={() => toggleAccordion('topic')}
                         count={filters.topic.length}
                       >
-                        <CheckboxGroup 
+                        <CheckboxGroup
                           options={availableTopics}
                           selectedValues={filters.topic}
-                          onChange={(vals) => setFilters({...filters, topic: vals})}
+                          onChange={(vals) => setFilters({ ...filters, topic: vals })}
                         />
                       </FilterAccordion>
 
                       {/* Marks */}
-                      <FilterAccordion 
-                        title="Marks" 
-                        isOpen={expandedSections['marks']} 
+                      <FilterAccordion
+                        title="Marks"
+                        isOpen={expandedSections['marks']}
                         onToggle={() => toggleAccordion('marks')}
                         count={filters.marks.length}
                       >
-                        <CheckboxGroup 
+                        <CheckboxGroup
                           options={MARK_OPTIONS}
                           selectedValues={filters.marks}
-                          onChange={(vals) => setFilters({...filters, marks: vals})}
+                          onChange={(vals) => setFilters({ ...filters, marks: vals })}
                         />
                       </FilterAccordion>
                     </div>
@@ -1860,15 +1912,15 @@ export default function AdvancedHistoryArchive() {
                   className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500 outline-none"
                 />
               </div>
-              
+
               <div className="flex bg-white border border-slate-200 rounded-xl shadow-sm p-1">
-                <button 
+                <button
                   onClick={() => setDisplayMode('subquestion')}
                   className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${displayMode === 'subquestion' ? 'bg-blue-100 text-blue-700' : 'text-slate-500 hover:bg-slate-50'}`}
                 >
                   <LayoutList size={16} /> Sub-Questions
                 </button>
-                <button 
+                <button
                   onClick={() => setDisplayMode('fullpaper')}
                   className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${displayMode === 'fullpaper' ? 'bg-blue-100 text-blue-700' : 'text-slate-500 hover:bg-slate-50'}`}
                 >
@@ -1897,7 +1949,7 @@ export default function AdvancedHistoryArchive() {
 
             {/* TOP PAGINATION CONTROLS */}
             {filteredResults.length > 0 && (
-              <PaginationControls 
+              <PaginationControls
                 currentPage={currentPage}
                 totalPages={totalPages}
                 onPageChange={handlePageChange}
@@ -1912,7 +1964,7 @@ export default function AdvancedHistoryArchive() {
               <AnimatePresence>
                 {paginatedResults.map((item) => {
                   const { uniqueId, parent, child, isFullPaper, matchedChildrenCount } = item;
-                  
+
                   if (isFullPaper) {
                     // --- FULL PAPER RENDER ---
                     return (
@@ -1922,7 +1974,7 @@ export default function AdvancedHistoryArchive() {
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, scale: 0.95 }}
-                        onClick={() => setPreviewItem(item)} 
+                        onClick={() => setPreviewItem(item)}
                         className="bg-white rounded-xl border border-slate-200 p-0 shadow-sm hover:shadow-lg hover:border-blue-300 cursor-pointer transition-all overflow-hidden group"
                       >
                         <div className="flex flex-col md:flex-row relative">
@@ -1940,7 +1992,7 @@ export default function AdvancedHistoryArchive() {
                                 </span>
                               )}
                             </div>
-                            
+
                             <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2 group-hover:text-blue-600 transition-colors">
                               {parent.title}
                             </h3>
@@ -1967,7 +2019,7 @@ export default function AdvancedHistoryArchive() {
                             </div>
                             {parent.hasFile ? (
                               <div className="text-center text-slate-500 text-xs flex items-center gap-1">
-                                 <FileText size={12} /> PDF Attached
+                                <FileText size={12} /> PDF Attached
                               </div>
                             ) : (
                               <div className="text-center text-slate-400 text-sm italic px-4">
@@ -1976,17 +2028,17 @@ export default function AdvancedHistoryArchive() {
                             )}
                             {parent.hasAnswer && (
                               <div className="text-center text-green-600 text-xs flex items-center gap-1 font-medium mt-1">
-                                 <BookOpen size={12} /> Answer Key Available
+                                <BookOpen size={12} /> Answer Key Available
                               </div>
                             )}
-                            <button 
+                            <button
                               onClick={(e) => { e.stopPropagation(); handleViewLinkedMarks(parent.id, parent.title); }}
                               className="w-full flex items-center justify-center gap-2 bg-teal-100 hover:bg-teal-200 text-teal-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
                             >
                               <BarChart2 size={16} /> View Marks
                             </button>
                             {user.isAdmin && (
-                              <button 
+                              <button
                                 onClick={(e) => handleEditClick(e, parent)}
                                 className="w-full flex items-center justify-center gap-2 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                               >
@@ -2006,7 +2058,7 @@ export default function AdvancedHistoryArchive() {
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, scale: 0.95 }}
-                        onClick={() => setPreviewItem(item)} 
+                        onClick={() => setPreviewItem(item)}
                         className="bg-white rounded-xl border border-slate-200 p-0 shadow-sm hover:shadow-lg hover:border-blue-300 cursor-pointer transition-all overflow-hidden group"
                       >
                         <div className="flex flex-col md:flex-row relative">
@@ -2024,9 +2076,9 @@ export default function AdvancedHistoryArchive() {
                                 </span>
                               )}
                             </div>
-                            
+
                             <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 group-hover:text-blue-600 transition-colors">
-                              {parent.title} 
+                              {parent.title}
                               <span className="bg-slate-800 text-white text-sm px-2 py-0.5 rounded-md">
                                 Q{child.label}
                               </span>
@@ -2074,7 +2126,7 @@ export default function AdvancedHistoryArchive() {
                             </div>
                             {parent.hasFile ? (
                               <div className="text-center text-slate-500 text-xs flex items-center gap-1">
-                                 <FileText size={12} /> PDF Attached
+                                <FileText size={12} /> PDF Attached
                               </div>
                             ) : (
                               <div className="text-center text-slate-400 text-sm italic px-4">
@@ -2083,17 +2135,17 @@ export default function AdvancedHistoryArchive() {
                             )}
                             {parent.hasAnswer && (
                               <div className="text-center text-green-600 text-xs flex items-center gap-1 font-medium mt-1">
-                                 <BookOpen size={12} /> Answer Key Available
+                                <BookOpen size={12} /> Answer Key Available
                               </div>
                             )}
-                            <button 
+                            <button
                               onClick={(e) => { e.stopPropagation(); handleViewLinkedMarks(parent.id, parent.title); }}
                               className="w-full flex items-center justify-center gap-2 bg-teal-100 hover:bg-teal-200 text-teal-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
                             >
                               <BarChart2 size={16} /> View Marks
                             </button>
                             {user.isAdmin && (
-                              <button 
+                              <button
                                 onClick={(e) => handleEditClick(e, parent)}
                                 className="w-full flex items-center justify-center gap-2 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                               >
@@ -2116,7 +2168,7 @@ export default function AdvancedHistoryArchive() {
 
               {/* BOTTOM PAGINATION CONTROLS */}
               {filteredResults.length > 0 && (
-                <PaginationControls 
+                <PaginationControls
                   currentPage={currentPage}
                   totalPages={totalPages}
                   onPageChange={handlePageChange}
@@ -2185,10 +2237,10 @@ export default function AdvancedHistoryArchive() {
       <AnimatePresence>
         {isUserManagementOpen && user?.isAdmin && (
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }} 
-              animate={{ opacity: 1, scale: 1 }} 
-              exit={{ opacity: 0, scale: 0.95 }} 
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
               className="bg-white rounded-xl w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden"
             >
               <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
@@ -2205,13 +2257,13 @@ export default function AdvancedHistoryArchive() {
 
               {/* TABS */}
               <div className="flex border-b border-slate-200 bg-white px-6">
-                <button 
+                <button
                   onClick={() => setManageTab('users')}
                   className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${manageTab === 'users' ? 'border-purple-600 text-purple-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
                 >
                   <Users size={16} className="inline mr-2" /> Users & Roles
                 </button>
-                <button 
+                <button
                   onClick={() => setManageTab('tiers')}
                   className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${manageTab === 'tiers' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
                 >
@@ -2220,7 +2272,7 @@ export default function AdvancedHistoryArchive() {
               </div>
 
               <div className="flex-1 overflow-y-auto p-6 bg-slate-50/50">
-                
+
                 {/* TAB 1: USERS & ROLES */}
                 {manageTab === 'users' && (
                   <div className="flex flex-col lg:flex-row gap-6">
@@ -2230,20 +2282,20 @@ export default function AdvancedHistoryArchive() {
                       <form onSubmit={handleAddUser} className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row gap-4 items-end">
                         <div className="flex-1 w-full">
                           <label className="text-xs font-bold text-slate-500 mb-1 block">Google Email Address</label>
-                          <input 
-                            type="email" 
-                            required 
-                            placeholder="teacher@school.edu.hk" 
-                            value={newUserEmail} 
-                            onChange={(e) => setNewUserEmail(e.target.value)} 
-                            className="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 outline-none" 
+                          <input
+                            type="email"
+                            required
+                            placeholder="teacher@school.edu.hk"
+                            value={newUserEmail}
+                            onChange={(e) => setNewUserEmail(e.target.value)}
+                            className="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 outline-none"
                           />
                         </div>
                         <div className="w-full sm:w-48">
                           <label className="text-xs font-bold text-slate-500 mb-1 block">Role</label>
-                          <select 
-                            value={newUserRole} 
-                            onChange={(e) => setNewUserRole(e.target.value)} 
+                          <select
+                            value={newUserRole}
+                            onChange={(e) => setNewUserRole(e.target.value)}
                             className="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 outline-none"
                           >
                             {systemRoles.map(role => (
@@ -2251,12 +2303,12 @@ export default function AdvancedHistoryArchive() {
                             ))}
                           </select>
                         </div>
-                        <button 
-                          type="submit" 
-                          disabled={isManagingUsers} 
+                        <button
+                          type="submit"
+                          disabled={isManagingUsers}
                           className="w-full sm:w-auto px-6 py-2 bg-purple-600 text-white font-bold rounded-lg text-sm hover:bg-purple-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
                         >
-                          {isManagingUsers ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />} 
+                          {isManagingUsers ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
                           Add User
                         </button>
                       </form>
@@ -2284,9 +2336,9 @@ export default function AdvancedHistoryArchive() {
                                     </span>
                                   </td>
                                   <td className="px-6 py-4 text-right">
-                                    <button 
-                                      onClick={() => handleRemoveUser(u.id)} 
-                                      disabled={isManagingUsers || u.email === user.email} 
+                                    <button
+                                      onClick={() => handleRemoveUser(u.id)}
+                                      disabled={isManagingUsers || u.email === user.email}
                                       className="text-red-500 hover:text-red-700 disabled:opacity-30 disabled:cursor-not-allowed p-2 hover:bg-red-50 rounded-lg transition-colors"
                                     >
                                       <Trash2 size={16} />
@@ -2302,7 +2354,7 @@ export default function AdvancedHistoryArchive() {
 
                     {/* RIGHT COLUMN: ROLES & TIERS */}
                     <div className="w-full lg:w-72 flex flex-col gap-6">
-                      
+
                       {/* Manage Roles */}
                       <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
                         <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2 mb-3">
@@ -2313,7 +2365,7 @@ export default function AdvancedHistoryArchive() {
                             <div key={role} className="flex items-center justify-between bg-slate-50 border border-slate-100 px-3 py-2 rounded-lg text-sm">
                               <span className="font-medium text-slate-700">{role}</span>
                               {role !== 'admin' && role !== 'viewer' && (
-                                <button 
+                                <button
                                   onClick={() => setSystemRoles(prev => prev.filter(r => r !== role))}
                                   className="text-slate-400 hover:text-red-500"
                                 >
@@ -2324,14 +2376,14 @@ export default function AdvancedHistoryArchive() {
                           ))}
                         </div>
                         <div className="flex gap-2">
-                          <input 
-                            type="text" 
-                            placeholder="New role name..." 
+                          <input
+                            type="text"
+                            placeholder="New role name..."
                             value={newRoleInput}
                             onChange={(e) => setNewRoleInput(e.target.value)}
                             className="flex-1 p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                           />
-                          <button 
+                          <button
                             onClick={() => {
                               const val = newRoleInput.trim().toLowerCase();
                               if (val && !systemRoles.includes(val)) {
@@ -2352,13 +2404,13 @@ export default function AdvancedHistoryArchive() {
                           <Layers size={16} className="text-indigo-500" /> Rename Tiers
                         </h3>
                         <p className="text-xs text-slate-400 mb-4">You can rename tiers here. Ordered 10 (Highest) to 1.</p>
-                        
+
                         <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-2 max-h-64">
                           {systemTiers.map(tier => (
                             <div key={tier.id} className="flex items-center gap-3">
                               <span className="text-xs font-bold text-slate-400 w-5 text-right">{tier.id}</span>
-                              <input 
-                                type="text" 
+                              <input
+                                type="text"
                                 value={tier.name}
                                 onChange={(e) => setSystemTiers(prev => prev.map(t => t.id === tier.id ? { ...t, name: e.target.value } : t))}
                                 className="flex-1 p-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
@@ -2380,9 +2432,9 @@ export default function AdvancedHistoryArchive() {
                         <Calendar size={20} className="text-indigo-600" /> Automated Tier Unlocking
                       </h3>
                       <p className="text-sm text-slate-500">
-                        Select a user role below, then configure the specific date when each tier becomes visible to them. 
+                        Select a user role below, then configure the specific date when each tier becomes visible to them.
                         You can also check "Immediate Access" to grant access right away.
-                        <br/><span className="font-bold text-indigo-600">Note: Access is cumulative!</span> Unlocking a higher tier (e.g., Tier 5) automatically grants access to all lower tiers (1-4).
+                        <br /><span className="font-bold text-indigo-600">Note: Access is cumulative!</span> Unlocking a higher tier (e.g., Tier 5) automatically grants access to all lower tiers (1-4).
                       </p>
                     </div>
 
@@ -2409,7 +2461,7 @@ export default function AdvancedHistoryArchive() {
                           <h4 className="text-sm font-bold text-slate-700 mb-4 uppercase tracking-wider flex items-center justify-between">
                             <span>Unlock Dates for: <span className="text-indigo-600">{selectedRoleForAccess}</span></span>
                           </h4>
-                          
+
                           <div className="space-y-3">
                             {systemTiers.map(tier => {
                               const currentRule = tierAccessConfig[selectedRoleForAccess]?.[tier.id] || { date: '', immediate: false };
@@ -2429,8 +2481,8 @@ export default function AdvancedHistoryArchive() {
                                   <div className="flex items-center gap-4 sm:ml-auto">
                                     {/* Immediate Access Checkbox */}
                                     <label className="flex items-center gap-2 cursor-pointer">
-                                      <input 
-                                        type="checkbox" 
+                                      <input
+                                        type="checkbox"
                                         checked={isChecked}
                                         onChange={(e) => handleTierAccessChange(selectedRoleForAccess, tier.id, 'immediate', e.target.checked)}
                                         className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
@@ -2441,14 +2493,14 @@ export default function AdvancedHistoryArchive() {
                                     {/* Date Picker */}
                                     <div className="flex items-center gap-2">
                                       <Calendar size={16} className="text-slate-400" />
-                                      <input 
-                                        type="date" 
+                                      <input
+                                        type="date"
                                         value={currentRule.date || ''}
                                         onChange={(e) => handleTierAccessChange(selectedRoleForAccess, tier.id, 'date', e.target.value)}
                                         className="p-2 border border-slate-200 rounded-md text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-slate-700"
                                       />
                                       {currentRule.date && (
-                                        <button 
+                                        <button
                                           onClick={() => handleTierAccessChange(selectedRoleForAccess, tier.id, 'date', '')}
                                           className="text-slate-400 hover:text-red-500 ml-1"
                                           title="Clear Date"
@@ -2489,11 +2541,11 @@ export default function AdvancedHistoryArchive() {
       <AnimatePresence>
         {isManageFiltersOpen && user?.isAdmin && (
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <motion.div 
-               initial={{ opacity: 0, scale: 0.95 }}
-               animate={{ opacity: 1, scale: 1 }}
-               exit={{ opacity: 0, scale: 0.95 }}
-               className="bg-white rounded-xl w-full max-w-2xl max-h-full flex flex-col shadow-2xl"
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-xl w-full max-w-2xl max-h-full flex flex-col shadow-2xl"
             >
               <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-xl">
                 <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
@@ -2554,8 +2606,8 @@ export default function AdvancedHistoryArchive() {
                   </div>
                 </div>
 
-                 {/* Question Types (Essay) */}
-                 <div>
+                {/* Question Types (Essay) */}
+                <div>
                   <h3 className="text-sm font-bold text-slate-700 mb-2">Question Types (Essay)</h3>
                   <div className="flex flex-wrap gap-2">
                     {availableQuestionTypes["Paper 2 (Essay)"].map(t => (
@@ -2571,7 +2623,7 @@ export default function AdvancedHistoryArchive() {
               </div>
 
               <div className="p-5 border-t border-slate-100 bg-slate-50 rounded-b-xl text-right">
-                <button 
+                <button
                   onClick={() => setIsManageFiltersOpen(false)}
                   className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
                 >
@@ -2599,7 +2651,7 @@ export default function AdvancedHistoryArchive() {
                 <div className="flex items-center gap-4">
                   <div className="flex flex-col">
                     <div className="flex items-center gap-2">
-                       <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                      <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                         {previewItem.parent.year} • {previewItem.parent.origin}
                       </span>
                       <span className={`text-xs px-2 py-0.5 rounded font-medium ${previewItem.parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
@@ -2636,7 +2688,7 @@ export default function AdvancedHistoryArchive() {
 
                 <div className="flex items-center gap-3">
                   {!viewingAnswer && previewItem.parent.hasAnswer && (
-                    <button 
+                    <button
                       onClick={() => { setViewingAnswer(true); setActiveSample(null); }}
                       className="hidden sm:flex px-4 py-2 rounded-lg bg-green-600 text-white text-sm font-bold hover:bg-green-700 transition-all items-center gap-2"
                     >
@@ -2645,7 +2697,7 @@ export default function AdvancedHistoryArchive() {
                   )}
 
                   {(viewingAnswer || activeSample) && (
-                    <button 
+                    <button
                       onClick={() => { setViewingAnswer(false); setActiveSample(null); }}
                       className="hidden sm:flex px-4 py-2 rounded-lg bg-slate-600 text-white text-sm font-bold hover:bg-slate-700 transition-all items-center gap-2"
                     >
@@ -2653,7 +2705,7 @@ export default function AdvancedHistoryArchive() {
                     </button>
                   )}
 
-                  <button 
+                  <button
                     onClick={() => handleViewLinkedMarks(previewItem.parent.id, previewItem.parent.title)}
                     className="hidden sm:flex px-4 py-2 rounded-lg bg-teal-600 text-white text-sm font-bold hover:bg-teal-700 transition-all items-center gap-2"
                   >
@@ -2670,9 +2722,9 @@ export default function AdvancedHistoryArchive() {
                       <Download size={16} /> {activeSample ? "Download Sample" : (viewingAnswer ? "Download Answer" : "Download PDF")}
                     </a>
                   )}
-                  
-                  <button 
-                    onClick={closePreview} 
+
+                  <button
+                    onClick={closePreview}
                     className="text-slate-400 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 p-2 rounded-full transition-colors"
                   >
                     <X size={20} />
@@ -2682,9 +2734,9 @@ export default function AdvancedHistoryArchive() {
 
               {/* Preview Body */}
               <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
-                
+
                 {!viewingAnswer && (
-                  <div className={`${previewItem.parent.hasFile || previewSamples.length > 0 ? 'md:w-1/3 lg:w-1/4 border-r border-slate-200' : 'w-full'} flex flex-col bg-slate-50`}>
+                  <div className={`${(activeSample || previewItem.parent.hasFile) ? 'md:w-1/3 lg:w-1/4 border-r border-slate-200' : 'w-full'} flex flex-col bg-slate-50`}>
                     <div className="flex-1 p-6 overflow-y-auto custom-scrollbar">
                       {/* FULL PAPER LEFT PANEL */}
                       {previewItem.isFullPaper ? (
@@ -2760,7 +2812,7 @@ export default function AdvancedHistoryArchive() {
                                 ))}
                               </div>
                             </div>
-                            
+
                             <div>
                               <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Question Types</h4>
                               <div className="flex flex-wrap gap-2">
@@ -2856,23 +2908,21 @@ export default function AdvancedHistoryArchive() {
                   </div>
                 )}
 
-                <div className="flex-1 bg-slate-200 flex flex-col h-full relative">
-                  {activeSample ? (
-                    <CustomPDFViewer fileUrl={activeSample.currentFileUrl} />
-                  ) : viewingAnswer ? (
-                    previewItem.parent.hasAnswer ? (
-                      <CustomPDFViewer fileUrl={previewItem.parent.answerFileUrl} />
+                {(activeSample || viewingAnswer || previewItem.parent.hasFile) && (
+                  <div className="flex-1 bg-slate-200 flex flex-col h-full relative">
+                    {activeSample ? (
+                      <CustomPDFViewer fileUrl={activeSample.currentFileUrl} />
+                    ) : viewingAnswer ? (
+                      previewItem.parent.hasAnswer ? (
+                        <CustomPDFViewer fileUrl={previewItem.parent.answerFileUrl} />
+                      ) : (
+                        <div className="flex items-center justify-center h-full text-slate-500">No answer file available.</div>
+                      )
                     ) : (
-                      <div className="flex items-center justify-center h-full text-slate-500">No answer file available.</div>
-                    )
-                  ) : (
-                    previewItem.parent.hasFile ? (
                       <CustomPDFViewer fileUrl={previewItem.parent.fileUrl} />
-                    ) : (
-                      <div className="flex items-center justify-center h-full text-slate-500">No question file available.</div>
-                    )
-                  )}
-                </div>
+                    )}
+                  </div>
+                )}
               </div>
             </motion.div>
           </div>
@@ -2882,17 +2932,17 @@ export default function AdvancedHistoryArchive() {
       {/* --- UPLOAD / EDIT MODAL --- */}
       <AnimatePresence>
         {isUploadModalOpen && user?.isAdmin && (
-          <div 
+          <div
             className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 sm:p-6"
           >
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
               onClick={(e) => e.stopPropagation()}
               className={`bg-white rounded-2xl w-full shadow-2xl flex flex-col overflow-hidden ${uploadSelection === 'sample'
-                  ? 'max-w-[95vw] h-[95vh]'
-                  : (uploadSelection ? 'max-w-4xl max-h-full' : 'max-w-2xl max-h-full')
+                ? 'max-w-[95vw] h-[95vh]'
+                : (uploadSelection ? 'max-w-4xl max-h-full' : 'max-w-2xl max-h-full')
                 }`}
             >
               {/* Modal Header */}
@@ -2905,21 +2955,21 @@ export default function AdvancedHistoryArchive() {
                     {!uploadSelection ? 'Choose what kind of document you want to add to the archive.' : (uploadSelection === 'question' ? 'Add or modify a parent document and its sub-questions.' : 'Upload a student sample PDF and assign marks.')}
                   </p>
                 </div>
-                <button 
-                  onClick={closeModal} 
+                <button
+                  onClick={closeModal}
                   className="text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors p-2 rounded-full"
                 >
                   <X size={24} />
                 </button>
               </div>
-              
+
               {/* Modal Body */}
               <div className={`flex-1 overflow-y-auto bg-slate-50/50 ${uploadSelection === 'sample' && selectedSampleFile ? 'p-0' : 'p-6'}`}>
-                
+
                 {/* SELECTION SCREEN */}
                 {!uploadSelection && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 p-4">
-                    <button 
+                    <button
                       onClick={() => setUploadSelection('question')}
                       className="flex flex-col items-center justify-center p-8 bg-white border-2 border-slate-200 rounded-2xl hover:border-blue-500 hover:bg-blue-50 transition-all group"
                     >
@@ -2930,7 +2980,7 @@ export default function AdvancedHistoryArchive() {
                       <p className="text-sm text-slate-500 text-center">Upload exam papers, mock tests, and their sub-questions.</p>
                     </button>
 
-                    <button 
+                    <button
                       onClick={() => setUploadSelection('sample')}
                       className="flex flex-col items-center justify-center p-8 bg-white border-2 border-slate-200 rounded-2xl hover:border-indigo-500 hover:bg-indigo-50 transition-all group"
                     >
@@ -2951,7 +3001,7 @@ export default function AdvancedHistoryArchive() {
                       <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
                         <FileText size={16} /> Parent Document Details
                       </h3>
-                      
+
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className="col-span-full">
                           <label className="label flex justify-between items-center">
@@ -2960,10 +3010,10 @@ export default function AdvancedHistoryArchive() {
                               <Sparkles size={10} /> Auto-detects "2012D" or "2013E"
                             </span>
                           </label>
-                          <input 
+                          <input
                             type="text" required placeholder="e.g. 2021E (Type '2012D' to auto-select DBQ)"
                             className="input-field"
-                            value={uploadForm.title} 
+                            value={uploadForm.title}
                             onChange={handleTitleChange}
                           />
                         </div>
@@ -2991,7 +3041,7 @@ export default function AdvancedHistoryArchive() {
                           <label className={`label flex items-center gap-2 ${uploadForm.paperType === "Paper 2 (Essay)" ? 'text-slate-300' : ''}`}>
                             <Tag size={14} /> Main Topic(s) (Paper 1 Only)
                           </label>
-                          <CreatableSelect 
+                          <CreatableSelect
                             options={availableTopics}
                             value={uploadForm.topic}
                             onChange={(val) => handleParentChange('topic', val)}
@@ -2999,7 +3049,7 @@ export default function AdvancedHistoryArchive() {
                             placeholder={uploadForm.paperType === "Paper 2 (Essay)" ? "Not applicable" : "Select or type new topic..."}
                             disabled={uploadForm.paperType === "Paper 2 (Essay)"}
                             icon={Tag}
-                            isMulti={true} 
+                            isMulti={true}
                           />
                         </div>
 
@@ -3022,11 +3072,17 @@ export default function AdvancedHistoryArchive() {
                             <span className="text-slate-400 font-normal italic">Optional</span>
                           </label>
                           <div className="relative">
-                            <input 
+                            <input
                               type="file" accept=".pdf"
                               onChange={(e) => setSelectedFile(e.target.files[0])}
                               className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
                             />
+                            {selectedFile && <div className="text-xs text-blue-600 mt-2 font-bold">Selected: {selectedFile.name}</div>}
+                            {pendingToolFile && (
+                              <button type="button" onClick={() => setSelectedFile(new File([pendingToolFile.fileBytes], pendingToolFile.name, { type: 'application/pdf' }))} className="mt-2 text-xs bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg hover:bg-blue-200 font-bold flex items-center gap-1">
+                                <Upload size={14} /> Attach Pending: {pendingToolFile.name}
+                              </button>
+                            )}
                           </div>
                         </div>
 
@@ -3036,7 +3092,7 @@ export default function AdvancedHistoryArchive() {
                             <span className="text-slate-400 font-normal italic">Optional</span>
                           </label>
                           <div className="relative">
-                            <input 
+                            <input
                               type="file" accept=".pdf"
                               onChange={(e) => setSelectedAnswerFile(e.target.files[0])}
                               className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-green-50 file:text-green-700 hover:file:bg-green-100"
@@ -3059,19 +3115,19 @@ export default function AdvancedHistoryArchive() {
                       </div>
 
                       {uploadForm.subQuestions.map((sub, index) => (
-                        <motion.div 
+                        <motion.div
                           key={sub.id}
                           initial={{ opacity: 0, x: -10 }}
                           animate={{ opacity: 1, x: 0 }}
                           className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm relative group"
                         >
                           <div className="absolute -left-3 top-6 w-3 h-px bg-slate-300"></div>
-                          
+
                           <div className="flex gap-4 items-start">
                             <div className="w-16 flex-shrink-0">
                               <label className="text-xs font-bold text-slate-500 mb-1 block">Label</label>
-                              <input 
-                                type="text" 
+                              <input
+                                type="text"
                                 className="w-full p-2 bg-white border border-slate-200 rounded text-center font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
                                 value={sub.label}
                                 onChange={(e) => updateSubQuestion(index, 'label', e.target.value)}
@@ -3082,14 +3138,14 @@ export default function AdvancedHistoryArchive() {
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
                                   <label className="text-xs font-bold text-slate-500 mb-1 block">Question Type(s)</label>
-                                  <CreatableSelect 
+                                  <CreatableSelect
                                     options={uploadForm.paperType ? availableQuestionTypes[uploadForm.paperType] : []}
                                     value={sub.questionType}
                                     onChange={(val) => updateSubQuestion(index, 'questionType', val)}
                                     onCreate={(val) => handleCreateQuestionType(val, uploadForm.paperType)}
                                     placeholder="Select or add type..."
                                     disabled={!uploadForm.paperType}
-                                    isMulti={true} 
+                                    isMulti={true}
                                   />
                                 </div>
 
@@ -3098,8 +3154,8 @@ export default function AdvancedHistoryArchive() {
                                     <label className="text-xs font-bold text-slate-500 mb-1 block flex items-center gap-1">
                                       <Hash size={10} /> Marks
                                     </label>
-                                    <input 
-                                      type="number" 
+                                    <input
+                                      type="number"
                                       placeholder="e.g. 4"
                                       className="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                                       value={sub.marks || ''}
@@ -3113,14 +3169,14 @@ export default function AdvancedHistoryArchive() {
                                     <label className="text-xs font-bold text-slate-500 mb-1 block flex items-center gap-1">
                                       <FileDigit size={10} /> Source Type
                                     </label>
-                                    <CreatableSelect 
+                                    <CreatableSelect
                                       options={availableSourceTypes}
                                       value={sub.sourceType}
                                       onChange={(val) => updateSubQuestion(index, 'sourceType', val)}
                                       onCreate={handleCreateSourceType}
                                       placeholder="e.g. Cartoon, Table..."
                                       icon={FileDigit}
-                                      isMulti={true} 
+                                      isMulti={true}
                                     />
                                   </div>
                                 )}
@@ -3130,14 +3186,14 @@ export default function AdvancedHistoryArchive() {
                                     <label className="text-xs font-bold text-blue-600 mb-1 block flex items-center gap-1">
                                       <Tag size={10} /> Essay Topic(s)
                                     </label>
-                                    <CreatableSelect 
+                                    <CreatableSelect
                                       options={availableTopics}
                                       value={sub.topic}
                                       onChange={(val) => updateSubQuestion(index, 'topic', val)}
                                       onCreate={handleCreateTopic}
                                       placeholder="Select or type topic..."
                                       icon={Tag}
-                                      isMulti={true} 
+                                      isMulti={true}
                                     />
                                   </div>
                                 )}
@@ -3146,7 +3202,7 @@ export default function AdvancedHistoryArchive() {
                               {/* Content */}
                               <div>
                                 <label className="text-xs font-bold text-slate-500 mb-1 block">Question Content / Text</label>
-                                <textarea 
+                                <textarea
                                   placeholder="Type the full question text or essay prompt here..."
                                   rows={4}
                                   className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
@@ -3157,8 +3213,8 @@ export default function AdvancedHistoryArchive() {
                             </div>
 
                             {uploadForm.subQuestions.length > 1 && (
-                              <button 
-                                type="button" 
+                              <button
+                                type="button"
                                 onClick={() => removeSubQuestion(index)}
                                 className="text-slate-300 hover:text-red-500 transition-colors pt-8"
                               >
@@ -3181,7 +3237,7 @@ export default function AdvancedHistoryArchive() {
                           <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
                             <GraduationCap size={16} /> Student Sample Details
                           </h3>
-                          
+
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                             <div>
                               <label className="label">Year</label>
@@ -3207,7 +3263,7 @@ export default function AdvancedHistoryArchive() {
 
                             <div>
                               <label className="label">Language</label>
-                              <select required className="input-field" value={sampleForm.language} onChange={(e) => setSampleForm({...sampleForm, language: e.target.value})}>
+                              <select required className="input-field" value={sampleForm.language} onChange={(e) => setSampleForm({ ...sampleForm, language: e.target.value })}>
                                 <option value="English">English</option>
                                 <option value="Chinese">Chinese</option>
                               </select>
@@ -3215,11 +3271,11 @@ export default function AdvancedHistoryArchive() {
 
                             <div>
                               <label className="label">Overall Grade</label>
-                              <input 
+                              <input
                                 type="text" required placeholder="e.g. 5*"
                                 className="input-field"
-                                value={sampleForm.overallGrade} 
-                                onChange={(e) => setSampleForm({...sampleForm, overallGrade: e.target.value})}
+                                value={sampleForm.overallGrade}
+                                onChange={(e) => setSampleForm({ ...sampleForm, overallGrade: e.target.value })}
                               />
                             </div>
 
@@ -3232,10 +3288,16 @@ export default function AdvancedHistoryArchive() {
                               </label>
                               <div className="relative">
                                 <input
-                                  type="file" accept=".pdf" required={!editingId}
+                                  type="file" accept=".pdf" required={!editingId && !selectedSampleFile}
                                   onChange={handleSampleFileChange}
                                   className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
                                 />
+                                {selectedSampleFile && <div className="text-xs text-indigo-600 mt-2 font-bold">Selected: {selectedSampleFile.name}</div>}
+                                {pendingToolFile && (
+                                  <button type="button" onClick={() => handleSampleFileChange({ target: { files: [new File([pendingToolFile.fileBytes], pendingToolFile.name, { type: 'application/pdf' })] } })} className="mt-2 text-xs bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-lg hover:bg-indigo-200 font-bold flex items-center gap-1">
+                                    <Upload size={14} /> Attach Pending: {pendingToolFile.name}
+                                  </button>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -3272,7 +3334,7 @@ export default function AdvancedHistoryArchive() {
                                 <div key={idx} className="flex flex-col bg-slate-50 p-3 rounded-lg border border-slate-100 gap-3">
                                   <div className="grid grid-cols-12 gap-3 items-center">
                                     <div className="col-span-5">
-                                      <input 
+                                      <input
                                         type="text" placeholder="e.g. 2016D Q1"
                                         className="w-full p-2 bg-white border border-slate-200 rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
                                         value={score.tag}
@@ -3355,14 +3417,14 @@ export default function AdvancedHistoryArchive() {
                                       />
                                     </div>
                                     <div className="col-span-4">
-                                      <input 
+                                      <input
                                         type="text" placeholder="e.g. 1, 3-5"
                                         className="w-full p-2 bg-white border border-slate-200 rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
                                         value={score.pagesStr}
                                         onChange={(e) => {
                                           const newScores = [...sampleForm.scores];
                                           newScores[idx].pagesStr = e.target.value;
-                                          setSampleForm({...sampleForm, scores: newScores});
+                                          setSampleForm({ ...sampleForm, scores: newScores });
                                         }}
                                       />
                                     </div>
@@ -3381,9 +3443,14 @@ export default function AdvancedHistoryArchive() {
                                     </div>
                                     <div className="flex items-center gap-2">
                                       {(score.fileUrl || score.newFileUrl) && (
-                                        <button type="button" onClick={() => setSamplePdfPreviewUrl(score.newFileUrl || score.fileUrl)} className="text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded hover:bg-indigo-100 font-medium">
-                                          View
-                                        </button>
+                                        <>
+                                          <button type="button" onClick={() => setSamplePdfPreviewUrl(score.newFileUrl || score.fileUrl)} className="text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded hover:bg-indigo-100 font-medium">
+                                            View
+                                          </button>
+                                          <a href={score.newFileUrl || score.fileUrl} target="_blank" rel="noreferrer" download className="text-xs bg-green-50 text-green-700 px-2 py-1 rounded hover:bg-green-100 font-medium">
+                                            Download
+                                          </a>
+                                        </>
                                       )}
                                       <label className="text-xs bg-slate-100 text-slate-700 px-2 py-1 rounded hover:bg-slate-200 cursor-pointer font-medium">
                                         Upload
@@ -3398,6 +3465,19 @@ export default function AdvancedHistoryArchive() {
                                           }
                                         }} />
                                       </label>
+                                      {pendingToolFile && (
+                                        <button type="button" onClick={() => {
+                                          const fileObj = new File([pendingToolFile.fileBytes], pendingToolFile.name, { type: 'application/pdf' });
+                                          const newScores = [...sampleForm.scores];
+                                          if (newScores[idx].newFileUrl) URL.revokeObjectURL(newScores[idx].newFileUrl);
+                                          newScores[idx].newFile = fileObj;
+                                          newScores[idx].newFileUrl = URL.createObjectURL(fileObj);
+                                          setSampleForm({ ...sampleForm, scores: newScores });
+                                          setSamplePdfPreviewUrl(newScores[idx].newFileUrl);
+                                        }} className="text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded hover:bg-indigo-200 font-medium">
+                                          Use Pending
+                                        </button>
+                                      )}
                                       {(score.fileUrl || score.newFile) && (
                                         <button type="button" onClick={() => {
                                           const newScores = [...sampleForm.scores];
@@ -3467,7 +3547,7 @@ export default function AdvancedHistoryArchive() {
 
               {/* Modal Footer */}
               <div className="p-5 border-t border-slate-100 bg-white rounded-b-2xl flex justify-between items-center shrink-0">
-                
+
                 {/* DELETE BUTTON (Only if editing question) */}
                 <div>
                   {editingId && uploadSelection === 'question' && (
@@ -3482,13 +3562,13 @@ export default function AdvancedHistoryArchive() {
                     ) : (
                       <div className="flex items-center gap-2 animate-in fade-in slide-in-from-left-2 duration-200">
                         <span className="text-xs font-bold text-red-600 uppercase">Are you sure?</span>
-                        <button 
+                        <button
                           onClick={handleDelete}
                           className="bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors"
                         >
                           Yes, Delete
                         </button>
-                        <button 
+                        <button
                           onClick={() => setDeleteConfirm(false)}
                           className="text-slate-400 hover:text-slate-600 px-2 py-1 text-xs"
                         >
@@ -3501,24 +3581,24 @@ export default function AdvancedHistoryArchive() {
 
                 <div className="flex gap-3 ml-auto">
                   {uploadSelection && !editingId && (
-                    <button 
-                      type="button" 
+                    <button
+                      type="button"
                       onClick={() => setUploadSelection(null)}
                       className="px-6 py-2 rounded-lg border border-slate-200 text-slate-600 font-medium hover:bg-slate-50 transition-colors"
                     >
                       Back
                     </button>
                   )}
-                  <button 
-                    type="button" 
+                  <button
+                    type="button"
                     onClick={closeModal}
                     className="px-6 py-2 rounded-lg border border-slate-200 text-slate-600 font-medium hover:bg-slate-50 transition-colors"
                   >
                     Cancel
                   </button>
                   {uploadSelection && (
-                    <button 
-                      type="submit" 
+                    <button
+                      type="submit"
                       form={uploadSelection === 'question' ? "upload-form" : "sample-form"}
                       disabled={isLoading}
                       className={`px-6 py-2 rounded-lg ${uploadSelection === 'question' ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-200' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200'} text-white font-bold shadow-lg transition-all ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
@@ -3584,6 +3664,37 @@ export default function AdvancedHistoryArchive() {
                   </div>
                 )}
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+      {/* --- TOOL LINK ROUTING MODAL --- */}
+      <AnimatePresence>
+        {showToolLinkModal && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-xl p-6 max-w-md w-full shadow-2xl">
+              <h2 className="text-lg font-bold text-slate-800 mb-4">Link Document to Archive</h2>
+              <p className="text-sm text-slate-600 mb-6">Where would you like to add <strong>{pendingToolFile?.name}</strong>?</p>
+
+              <div className="space-y-4">
+                <div className="border border-slate-200 p-4 rounded-lg">
+                  <h3 className="font-bold text-sm mb-2 text-blue-600">Add to Question Bank</h3>
+                  <div className="flex gap-2">
+                    <button onClick={() => processToolLink('question', true)} className="flex-1 bg-blue-50 hover:bg-blue-100 text-blue-700 py-2 rounded text-sm font-medium">New Document</button>
+                    <button onClick={() => processToolLink('question', false)} className="flex-1 bg-slate-50 hover:bg-slate-100 text-slate-700 py-2 rounded text-sm font-medium">Current Document</button>
+                  </div>
+                </div>
+
+                <div className="border border-slate-200 p-4 rounded-lg">
+                  <h3 className="font-bold text-sm mb-2 text-indigo-600">Add to Student Samples</h3>
+                  <div className="flex gap-2">
+                    <button onClick={() => processToolLink('sample', true)} className="flex-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 py-2 rounded text-sm font-medium">New Sample</button>
+                    <button onClick={() => processToolLink('sample', false)} className="flex-1 bg-slate-50 hover:bg-slate-100 text-slate-700 py-2 rounded text-sm font-medium">Current Sample</button>
+                  </div>
+                </div>
+              </div>
+
+              <button onClick={() => { setShowToolLinkModal(false); setPendingToolFile(null); }} className="mt-6 w-full py-2 text-slate-500 hover:bg-slate-50 rounded-lg text-sm font-medium">Cancel</button>
             </motion.div>
           </div>
         )}

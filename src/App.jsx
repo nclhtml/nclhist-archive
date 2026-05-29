@@ -241,8 +241,9 @@ const CreatableSelect = ({
 
   return (
     <div className="relative" ref={wrapperRef}>
-      {isMulti && selectedValues.length > 0 && (
-        <div className="flex flex-wrap gap-2 mb-2">
+      {/* Always render the container for multi-select to reserve space and prevent layout shift */}
+      {isMulti && (
+        <div className="flex flex-wrap gap-2 mb-2 min-h-8">
           {selectedValues.map((val, idx) => (
             <span key={idx} className="bg-blue-100 text-blue-700 text-xs font-medium px-2 py-1 rounded flex items-center gap-1">
               {val}
@@ -376,8 +377,8 @@ const PaginationControls = ({ currentPage, totalPages, onPageChange, itemsPerPag
               <button
                 onClick={() => onPageChange(page)}
                 className={`w-8 h-8 flex items-center justify-center rounded-lg text-sm font-medium transition-colors ${currentPage === page
-                    ? 'bg-blue-600 text-white shadow-md shadow-blue-200'
-                    : 'text-slate-600 hover:bg-slate-100 border border-transparent hover:border-slate-200'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-200'
+                  : 'text-slate-600 hover:bg-slate-100 border border-transparent hover:border-slate-200'
                   }`}
               >
                 {page}
@@ -479,6 +480,8 @@ export default function AdvancedHistoryArchive() {
   const [viewingAnswer, setViewingAnswer] = useState(false);
   const [previewSamples, setPreviewSamples] = useState([]);
   const [activeSample, setActiveSample] = useState(null);
+  const [showStudentSamples, setShowStudentSamples] = useState(false);
+  const [sampleSortOption, setSampleSortOption] = useState('mark_desc'); // 'mark_desc', 'lang_en_ch', 'both'
 
   // Linked Marks Modal State
   const [showMarksModal, setShowMarksModal] = useState(false);
@@ -527,6 +530,24 @@ export default function AdvancedHistoryArchive() {
   });
   const [selectedFile, setSelectedFile] = useState(null);
   const [selectedAnswerFile, setSelectedAnswerFile] = useState(null);
+
+  // Batch Exam Form State
+  const [batchForm, setBatchForm] = useState({
+    title: '', origin: '', year: new Date().getFullYear().toString(), tier: '10',
+    questions: [
+      {
+        id: Date.now(), paperType: 'Paper 1 (DBQ)', topic: [], pagesStr: '', ansPagesStr: '', ansSource: 'answer',
+        subQuestions: [{ id: Date.now() + 1, label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' }]
+      }
+    ]
+  });
+  const [batchPdfFile, setBatchPdfFile] = useState(null);
+  const [batchAnsPdfFile, setBatchAnsPdfFile] = useState(null);
+  const [batchLoadedPdf, setBatchLoadedPdf] = useState(null);
+  const [batchLoadedAnsPdf, setBatchLoadedAnsPdf] = useState(null);
+  const [batchPdfPreviewUrl, setBatchPdfPreviewUrl] = useState('');
+  const [batchAnsPdfPreviewUrl, setBatchAnsPdfPreviewUrl] = useState('');
+  const [batchPreviewMode, setBatchPreviewMode] = useState('question'); // 'question' | 'answer'
 
   // Student Sample Form State
   const currentYear = new Date().getFullYear().toString();
@@ -932,7 +953,9 @@ export default function AdvancedHistoryArchive() {
 
     // --- CUMULATIVE TIER LOGIC ---
     let maxUnlockedTier = 0;
-    if (!user.isAdmin) {
+    const isDseOnly = currentUserRole === 'dse_only';
+
+    if (!user.isAdmin && !isDseOnly) {
       const roleAccess = tierAccessConfig[currentUserRole] || {};
       // Find the highest tier (numerically) that this user has unlocked
       for (let i = 1; i <= 10; i++) {
@@ -952,10 +975,15 @@ export default function AdvancedHistoryArchive() {
       const parentTierStr = parent.tier || '10';
       const parentTierNum = parseInt(parentTierStr, 10) || 10;
 
-      // --- TIER ACCESS CHECK (Cumulative) ---
-      // If not admin, they can only see documents where the tier number is <= their maxUnlockedTier
-      if (!user.isAdmin && parentTierNum > maxUnlockedTier) {
-        return;
+      // --- TIER ACCESS CHECK (Cumulative & DSE Only) ---
+      if (!user.isAdmin) {
+        if (isDseOnly) {
+          // DSE Only role bypasses tiers but can ONLY see DSE Pastpapers
+          if (parent.origin !== "DSE Pastpaper") return;
+        } else if (parentTierNum > maxUnlockedTier) {
+          // Normal progressive roles
+          return;
+        }
       }
 
       // 1. Parent Level Filters (OR Logic within category)
@@ -1379,6 +1407,117 @@ export default function AdvancedHistoryArchive() {
     }
   };
 
+  // --- HANDLE BATCH EXAM SUBMIT & SPLITTING ---
+  const handleBatchSubmit = async (e) => {
+    e.preventDefault();
+    if (!user?.isAdmin) return;
+    if (!batchForm.title || !batchLoadedPdf) return alert("Please provide a title and main PDF.");
+    setIsLoading(true);
+
+    try {
+      const safeTitle = batchForm.title.replace(/[^a-zA-Z0-9\s\-_]/g, '').trim();
+      const safeOrigin = (batchForm.origin || 'Uncategorized').replace(/[^a-zA-Z0-9\s\-_]/g, '_');
+      const pdfPageCount = batchLoadedPdf.getPageCount();
+      const ansPageCount = batchLoadedAnsPdf ? batchLoadedAnsPdf.getPageCount() : pdfPageCount;
+
+      for (let i = 0; i < batchForm.questions.length; i++) {
+        const q = batchForm.questions[i];
+        let qFileUrl = '';
+        let qAnsFileUrl = '';
+
+        // Split Main PDF for Question
+        const qPages = parsePages(q.pagesStr, pdfPageCount);
+        if (qPages.length > 0) {
+          const splitPdf = await PDFDocument.create();
+          const copiedPages = await splitPdf.copyPages(batchLoadedPdf, qPages);
+          copiedPages.forEach(p => splitPdf.addPage(p));
+          const splitBytes = await splitPdf.save();
+          const splitRef = ref(storage, `pdfs/${safeOrigin}/${safeTitle}_Q${i + 1}_${Date.now()}.pdf`);
+          await uploadBytes(splitRef, splitBytes, { contentType: 'application/pdf' });
+          qFileUrl = await getDownloadURL(splitRef);
+        }
+
+        // Split Answer PDF (from separate ans file or main file)
+        const ansPages = parsePages(q.ansPagesStr, ansPageCount);
+        if (ansPages.length > 0) {
+          const sourceAnsPdf = (q.ansSource === 'main') ? batchLoadedPdf : (batchLoadedAnsPdf || batchLoadedPdf);
+          const splitAnsPdf = await PDFDocument.create();
+          const copiedAnsPages = await splitAnsPdf.copyPages(sourceAnsPdf, ansPages);
+          copiedAnsPages.forEach(p => splitAnsPdf.addPage(p));
+          const splitAnsBytes = await splitAnsPdf.save();
+          const splitAnsRef = ref(storage, `pdfs/${safeOrigin}/answer/${safeTitle}_Q${i + 1}_ans_${Date.now()}.pdf`);
+          await uploadBytes(splitAnsRef, splitAnsBytes, { contentType: 'application/pdf' });
+          qAnsFileUrl = await getDownloadURL(splitAnsRef);
+        }
+
+        const payload = {
+          title: q.paperType === 'Paper 1 (DBQ)'
+            ? `${batchForm.title}D Q${i + 1}`
+            : q.paperType === 'Paper 2 (Essay)'
+              ? `${batchForm.title}E`
+              : `${batchForm.title} - Q${i + 1}`,
+          origin: batchForm.origin,
+          year: batchForm.year,
+          paperType: q.paperType,
+          topic: q.topic,
+          tier: batchForm.tier,
+          subQuestions: q.subQuestions,
+          fileUrl: qFileUrl,
+          answerFileUrl: qAnsFileUrl,
+          hasFile: !!qFileUrl,
+          hasAnswer: !!qAnsFileUrl,
+          updatedAt: new Date().toISOString(),
+          updatedBy: user.email
+        };
+
+        const docRef = await addDoc(collection(db, "archives"), payload);
+        setArchives(prev => [{ id: docRef.id, ...payload }, ...prev]);
+
+        ensureArray(payload.topic).forEach(t => handleCreateTopic(t));
+        payload.subQuestions.forEach(sq => {
+          ensureArray(sq.topic).forEach(t => handleCreateTopic(t));
+          ensureArray(sq.sourceType).forEach(st => handleCreateSourceType(st));
+          ensureArray(sq.questionType).forEach(qt => handleCreateQuestionType(qt, payload.paperType));
+        });
+      }
+      closeModal();
+      alert("Batch upload successful!");
+    } catch (error) {
+      console.error("Error in batch upload:", error);
+      alert("Failed to process batch upload.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleBatchPdfChange = async (e, isAnswer = false) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setIsLoading(true);
+    try {
+      const fileBytes = await file.arrayBuffer();
+      const pdfDoc = await PDFDocument.load(fileBytes);
+      if (isAnswer) {
+        setBatchAnsPdfFile(file);
+        setBatchLoadedAnsPdf(pdfDoc);
+        if (batchAnsPdfPreviewUrl) URL.revokeObjectURL(batchAnsPdfPreviewUrl);
+        setBatchAnsPdfPreviewUrl(URL.createObjectURL(file));
+        setBatchPreviewMode('answer');
+      } else {
+        setBatchPdfFile(file);
+        setBatchLoadedPdf(pdfDoc);
+        if (batchPdfPreviewUrl) URL.revokeObjectURL(batchPdfPreviewUrl);
+        setBatchPdfPreviewUrl(URL.createObjectURL(file));
+        setBatchPreviewMode('question');
+      }
+    } catch (error) {
+      console.error("Error loading PDF:", error);
+      alert("Failed to load PDF.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // --- HANDLE STUDENT SAMPLE FILE SELECTION (Generate Previews) ---
   const handleSampleFileChange = async (e) => {
     const file = e.target.files[0];
@@ -1596,6 +1735,21 @@ export default function AdvancedHistoryArchive() {
       setPdfPageCount(0);
       if (samplePdfPreviewUrl) URL.revokeObjectURL(samplePdfPreviewUrl);
       setSamplePdfPreviewUrl('');
+
+      // Add these new resets:
+      setBatchForm({
+        title: '', origin: '', year: new Date().getFullYear().toString(), tier: '10',
+        questions: [{ id: Date.now(), paperType: 'Paper 1 (DBQ)', topic: [], pagesStr: '', ansPagesStr: '', ansSource: 'answer', subQuestions: [{ id: Date.now() + 1, label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' }] }]
+      });
+      setBatchPdfFile(null);
+      setBatchAnsPdfFile(null);
+      setBatchLoadedPdf(null);
+      setBatchLoadedAnsPdf(null);
+      if (batchPdfPreviewUrl) URL.revokeObjectURL(batchPdfPreviewUrl);
+      setBatchPdfPreviewUrl('');
+      if (batchAnsPdfPreviewUrl) URL.revokeObjectURL(batchAnsPdfPreviewUrl);
+      setBatchAnsPdfPreviewUrl('');
+      setBatchPreviewMode('question');
     }, 300);
   };
 
@@ -2031,12 +2185,14 @@ export default function AdvancedHistoryArchive() {
                                 <BookOpen size={12} /> Answer Key Available
                               </div>
                             )}
-                            <button
-                              onClick={(e) => { e.stopPropagation(); handleViewLinkedMarks(parent.id, parent.title); }}
-                              className="w-full flex items-center justify-center gap-2 bg-teal-100 hover:bg-teal-200 text-teal-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
-                            >
-                              <BarChart2 size={16} /> View Marks
-                            </button>
+                            {(user?.isAdmin || (currentUserRole !== 'viewer' && currentUserRole !== 'dse_only')) && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleViewLinkedMarks(parent.id, parent.title); }}
+                                className="w-full flex items-center justify-center gap-2 bg-teal-100 hover:bg-teal-200 text-teal-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
+                              >
+                                <BarChart2 size={16} /> View Marks
+                              </button>
+                            )}
                             {user.isAdmin && (
                               <button
                                 onClick={(e) => handleEditClick(e, parent)}
@@ -2138,12 +2294,14 @@ export default function AdvancedHistoryArchive() {
                                 <BookOpen size={12} /> Answer Key Available
                               </div>
                             )}
-                            <button
-                              onClick={(e) => { e.stopPropagation(); handleViewLinkedMarks(parent.id, parent.title); }}
-                              className="w-full flex items-center justify-center gap-2 bg-teal-100 hover:bg-teal-200 text-teal-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
-                            >
-                              <BarChart2 size={16} /> View Marks
-                            </button>
+                            {(user?.isAdmin || (currentUserRole !== 'viewer' && currentUserRole !== 'dse_only')) && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleViewLinkedMarks(parent.id, parent.title); }}
+                                className="w-full flex items-center justify-center gap-2 bg-teal-100 hover:bg-teal-200 text-teal-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
+                              >
+                                <BarChart2 size={16} /> View Marks
+                              </button>
+                            )}
                             {user.isAdmin && (
                               <button
                                 onClick={(e) => handleEditClick(e, parent)}
@@ -2705,12 +2863,14 @@ export default function AdvancedHistoryArchive() {
                     </button>
                   )}
 
-                  <button
-                    onClick={() => handleViewLinkedMarks(previewItem.parent.id, previewItem.parent.title)}
-                    className="hidden sm:flex px-4 py-2 rounded-lg bg-teal-600 text-white text-sm font-bold hover:bg-teal-700 transition-all items-center gap-2"
-                  >
-                    <BarChart2 size={16} /> View Marks
-                  </button>
+                  {(user?.isAdmin || (currentUserRole !== 'viewer' && currentUserRole !== 'dse_only')) && (
+                    <button
+                      onClick={() => handleViewLinkedMarks(previewItem.parent.id, previewItem.parent.title)}
+                      className="hidden sm:flex px-4 py-2 rounded-lg bg-teal-600 text-white text-sm font-bold hover:bg-teal-700 transition-all items-center gap-2"
+                    >
+                      <BarChart2 size={16} /> View Marks
+                    </button>
+                  )}
 
                   {((!viewingAnswer && !activeSample && previewItem.parent.hasFile) || (viewingAnswer && previewItem.parent.hasAnswer) || activeSample) && (
                     <a
@@ -2843,66 +3003,121 @@ export default function AdvancedHistoryArchive() {
 
                     {/* STUDENT SAMPLES SECTION (Bottom Left) */}
                     {!previewItem.isFullPaper && previewSamples.length > 0 && (
-                      <div className="p-4 border-t border-slate-200 bg-white shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-10">
-                        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
-                          <GraduationCap size={14} /> Student Samples
-                        </h3>
-                        <div className="space-y-2 max-h-[36rem] overflow-y-auto custom-scrollbar pr-1">
-                          {previewSamples.map(sample => {
-                            const exactTag = previewItem.parent.paperType === "Paper 2 (Essay)"
-                              ? `${previewItem.parent.title} Q${previewItem.child.label}`
-                              : `${previewItem.parent.title} Q1${previewItem.child.label}`;
-                            const parentTag = previewItem.parent.paperType === "Paper 2 (Essay)"
-                              ? `${previewItem.parent.title} Q${previewItem.child.label.replace(/[a-z]/gi, '')}`
-                              : `${previewItem.parent.title} Q1`;
+                      <div className="p-4 border-t border-slate-200 bg-white shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-10 flex flex-col">
+                        <div className="flex justify-between items-center mb-3">
+                          <button
+                            onClick={() => setShowStudentSamples(!showStudentSamples)}
+                            className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2 hover:text-indigo-600 transition-colors"
+                          >
+                            <GraduationCap size={14} /> Student Samples ({previewSamples.length})
+                            <ChevronDown size={14} className={`transition-transform ${showStudentSamples ? 'rotate-180' : ''}`} />
+                          </button>
 
-                            const titleTag = previewItem.parent.title;
-                            const titleWithChildTag = `${previewItem.parent.title}${previewItem.child.label}`;
-
-                            // Check all possible tag combinations
-                            const scoreData = sample.scoresData[exactTag] ||
-                              sample.scoresData[parentTag] ||
-                              sample.scoresData[titleTag] ||
-                              sample.scoresData[titleWithChildTag];
-
-                            // If we still don't have scoreData, skip rendering this sample
-                            if (!scoreData) return null;
-
-                            return (
-                              <div key={sample.id} className={`p-3 border rounded-lg transition-colors ${activeSample?.id === sample.id ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-slate-200 hover:border-indigo-300'}`}>
-                                <div className="flex justify-between items-start mb-2">
-                                  <div className="text-xs font-medium text-slate-700">
-                                    <span className="font-bold text-slate-900">[{sample.language}]</span> Overall grade: <span className="font-bold text-indigo-600">{sample.overallGrade}</span>
-                                  </div>
-                                </div>
-                                <div className="flex justify-between items-end">
-                                  <div className="flex flex-col gap-1">
-                                    <div className="text-xs text-slate-600">
-                                      Mark (this question): <span className="font-bold text-slate-900">{scoreData?.mark}</span>
-                                    </div>
-                                    {scoreData?.subMarks && Object.keys(scoreData.subMarks).length > 0 && (
-                                      <div className="flex flex-wrap gap-1 mt-1">
-                                        {Object.entries(scoreData.subMarks)
-                                          .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
-                                          .map(([subQ, sMark]) => (
-                                            <span key={subQ} className="text-[10px] bg-white border border-slate-200 px-1.5 py-0.5 rounded text-slate-500">
-                                              Q{subQ}: <span className="font-bold text-slate-700">{sMark}</span>
-                                            </span>
-                                          ))}
-                                      </div>
-                                    )}
-                                  </div>
-                                  <button
-                                    onClick={() => setActiveSample({ ...sample, currentFileUrl: scoreData.fileUrl })}
-                                    className={`text-xs font-bold px-3 py-1.5 rounded-md transition-colors h-fit ${activeSample?.id === sample.id ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'}`}
-                                  >
-                                    View Sample
-                                  </button>
-                                </div>
-                              </div>
-                            );
-                          })}
+                          {showStudentSamples && (
+                            <select
+                              value={sampleSortOption}
+                              onChange={(e) => setSampleSortOption(e.target.value)}
+                              className="text-xs border border-slate-200 rounded p-1 outline-none focus:border-indigo-500"
+                            >
+                              <option value="mark_desc">Mark (High to Low)</option>
+                              <option value="lang_en_ch">Language (EN to CH)</option>
+                              <option value="both">Both (Lang then Mark)</option>
+                            </select>
+                          )}
                         </div>
+
+                        <AnimatePresence>
+                          {showStudentSamples && (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: 'auto', opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              className="space-y-2 max-h-[36rem] overflow-y-auto custom-scrollbar pr-1"
+                            >
+                              {previewSamples.sort((a, b) => {
+                                // Helper to get marks for sorting
+                                const getMark = (sample) => {
+                                  const tags = [
+                                    previewItem.parent.paperType === "Paper 2 (Essay)" ? `${previewItem.parent.title} Q${previewItem.child.label}` : `${previewItem.parent.title} Q1${previewItem.child.label}`,
+                                    previewItem.parent.paperType === "Paper 2 (Essay)" ? `${previewItem.parent.title} Q${previewItem.child.label.replace(/[a-z]/gi, '')}` : `${previewItem.parent.title} Q1`,
+                                    previewItem.parent.title,
+                                    `${previewItem.parent.title}${previewItem.child.label}`
+                                  ];
+                                  for (let t of tags) {
+                                    if (sample.scoresData[t]?.mark) return parseFloat(sample.scoresData[t].mark) || 0;
+                                  }
+                                  return 0;
+                                };
+
+                                const markA = getMark(a);
+                                const markB = getMark(b);
+                                const langA = a.language || '';
+                                const langB = b.language || '';
+
+                                if (sampleSortOption === 'mark_desc') return markB - markA;
+                                if (sampleSortOption === 'lang_en_ch') return langA.localeCompare(langB);
+                                if (sampleSortOption === 'both') {
+                                  if (langA !== langB) return langA.localeCompare(langB);
+                                  return markB - markA;
+                                }
+                                return 0;
+                              }).map(sample => {
+                                const exactTag = previewItem.parent.paperType === "Paper 2 (Essay)"
+                                  ? `${previewItem.parent.title} Q${previewItem.child.label}`
+                                  : `${previewItem.parent.title} Q1${previewItem.child.label}`;
+                                const parentTag = previewItem.parent.paperType === "Paper 2 (Essay)"
+                                  ? `${previewItem.parent.title} Q${previewItem.child.label.replace(/[a-z]/gi, '')}`
+                                  : `${previewItem.parent.title} Q1`;
+
+                                const titleTag = previewItem.parent.title;
+                                const titleWithChildTag = `${previewItem.parent.title}${previewItem.child.label}`;
+
+                                // Check all possible tag combinations
+                                const scoreData = sample.scoresData[exactTag] ||
+                                  sample.scoresData[parentTag] ||
+                                  sample.scoresData[titleTag] ||
+                                  sample.scoresData[titleWithChildTag];
+
+                                // If we still don't have scoreData, skip rendering this sample
+                                if (!scoreData) return null;
+
+                                return (
+                                  <div key={sample.id} className={`p-3 border rounded-lg transition-colors ${activeSample?.id === sample.id ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-slate-200 hover:border-indigo-300'}`}>
+                                    <div className="flex justify-between items-start mb-2">
+                                      <div className="text-xs font-medium text-slate-700">
+                                        <span className="font-bold text-slate-900">[{sample.language}]</span> Overall grade: <span className="font-bold text-indigo-600">{sample.overallGrade}</span>
+                                      </div>
+                                    </div>
+                                    <div className="flex justify-between items-end">
+                                      <div className="flex flex-col gap-1">
+                                        <div className="text-xs text-slate-600">
+                                          Mark (this question): <span className="font-bold text-slate-900">{scoreData?.mark}</span>
+                                        </div>
+                                        {scoreData?.subMarks && Object.keys(scoreData.subMarks).length > 0 && (
+                                          <div className="flex flex-wrap gap-1 mt-1">
+                                            {Object.entries(scoreData.subMarks)
+                                              .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+                                              .map(([subQ, sMark]) => (
+                                                <span key={subQ} className="text-[10px] bg-white border border-slate-200 px-1.5 py-0.5 rounded text-slate-500">
+                                                  Q{subQ}: <span className="font-bold text-slate-700">{sMark}</span>
+                                                </span>
+                                              ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                      <button
+                                        onClick={() => setActiveSample({ ...sample, currentFileUrl: scoreData.fileUrl })}
+                                        className={`text-xs font-bold px-3 py-1.5 rounded-md transition-colors h-fit ${activeSample?.id === sample.id ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'}`}
+                                      >
+                                        View Sample
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
                       </div>
                     )}
                   </div>
@@ -2940,19 +3155,19 @@ export default function AdvancedHistoryArchive() {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
               onClick={(e) => e.stopPropagation()}
-              className={`bg-white rounded-2xl w-full shadow-2xl flex flex-col overflow-hidden ${uploadSelection === 'sample'
+              className={`bg-white rounded-2xl w-full shadow-2xl flex flex-col overflow-hidden ${(uploadSelection === 'sample' || uploadSelection === 'batch')
                 ? 'max-w-[95vw] h-[95vh]'
-                : (uploadSelection ? 'max-w-4xl max-h-full' : 'max-w-2xl max-h-full')
+                : 'max-w-4xl max-h-full'
                 }`}
             >
               {/* Modal Header */}
               <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-2xl shrink-0">
                 <div>
                   <h2 className="text-xl font-bold text-slate-800">
-                    {!uploadSelection ? 'Select Upload Type' : (uploadSelection === 'question' ? (editingId ? 'Edit Question Set' : 'Upload New Question Set') : 'Upload Student Sample')}
+                    {!uploadSelection ? 'Select Upload Type' : (uploadSelection === 'question' ? (editingId ? 'Edit Question Set' : 'Upload New Question Set') : (uploadSelection === 'batch' ? 'Batch Exam Paper Upload' : 'Upload Student Sample'))}
                   </h2>
                   <p className="text-sm text-slate-500">
-                    {!uploadSelection ? 'Choose what kind of document you want to add to the archive.' : (uploadSelection === 'question' ? 'Add or modify a parent document and its sub-questions.' : 'Upload a student sample PDF and assign marks.')}
+                    {!uploadSelection ? 'Choose what kind of document you want to add to the archive.' : (uploadSelection === 'question' ? 'Add or modify a parent document and its sub-questions.' : (uploadSelection === 'batch' ? 'Upload a full exam PDF and split it into multiple questions.' : 'Upload a student sample PDF and assign marks.'))}
                   </p>
                 </div>
                 <button
@@ -2964,11 +3179,11 @@ export default function AdvancedHistoryArchive() {
               </div>
 
               {/* Modal Body */}
-              <div className={`flex-1 overflow-y-auto bg-slate-50/50 ${uploadSelection === 'sample' && selectedSampleFile ? 'p-0' : 'p-6'}`}>
+              <div className={`flex-1 overflow-y-auto bg-slate-50/50 ${((uploadSelection === 'sample' && selectedSampleFile) || (uploadSelection === 'batch' && batchPdfFile)) ? 'p-0' : 'p-6'}`}>
 
                 {/* SELECTION SCREEN */}
                 {!uploadSelection && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 p-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 p-4">
                     <button
                       onClick={() => setUploadSelection('question')}
                       className="flex flex-col items-center justify-center p-8 bg-white border-2 border-slate-200 rounded-2xl hover:border-blue-500 hover:bg-blue-50 transition-all group"
@@ -2978,6 +3193,17 @@ export default function AdvancedHistoryArchive() {
                       </div>
                       <h3 className="text-lg font-bold text-slate-800 mb-2">Question Set</h3>
                       <p className="text-sm text-slate-500 text-center">Upload exam papers, mock tests, and their sub-questions.</p>
+                    </button>
+
+                    <button
+                      onClick={() => setUploadSelection('batch')}
+                      className="flex flex-col items-center justify-center p-8 bg-white border-2 border-slate-200 rounded-2xl hover:border-teal-500 hover:bg-teal-50 transition-all group"
+                    >
+                      <div className="w-16 h-16 bg-teal-100 text-teal-600 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                        <FileStack size={32} />
+                      </div>
+                      <h3 className="text-lg font-bold text-slate-800 mb-2">Batch Exam Paper</h3>
+                      <p className="text-sm text-slate-500 text-center">Upload a full exam PDF, split pages, and categorize multiple DBQ/Essays at once.</p>
                     </button>
 
                     <button
@@ -3018,9 +3244,9 @@ export default function AdvancedHistoryArchive() {
                           />
                         </div>
 
-                        <div>
+                        <div className="flex flex-col">
                           <label className="label">Paper Type</label>
-                          <select required className="input-field" value={uploadForm.paperType} onChange={(e) => handleParentChange('paperType', e.target.value)}>
+                          <select required className="input-field mt-auto" value={uploadForm.paperType} onChange={(e) => handleParentChange('paperType', e.target.value)}>
                             <option value="">Select Paper</option>
                             {PAPER_TYPES.map(p => <option key={p} value={p}>{p}</option>)}
                           </select>
@@ -3126,6 +3352,7 @@ export default function AdvancedHistoryArchive() {
                           <div className="flex gap-4 items-start">
                             <div className="w-16 flex-shrink-0">
                               <label className="text-xs font-bold text-slate-500 mb-1 block">Label</label>
+                              <div className="min-h-8 mb-2"></div> {/* Spacer to align with tags */}
                               <input
                                 type="text"
                                 className="w-full p-2 bg-white border border-slate-200 rounded text-center font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
@@ -3150,14 +3377,14 @@ export default function AdvancedHistoryArchive() {
                                 </div>
 
                                 {uploadForm.paperType === "Paper 1 (DBQ)" && (
-                                  <div>
+                                  <div className="flex flex-col">
                                     <label className="text-xs font-bold text-slate-500 mb-1 block flex items-center gap-1">
                                       <Hash size={10} /> Marks
                                     </label>
                                     <input
                                       type="number"
                                       placeholder="e.g. 4"
-                                      className="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                      className="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none mt-auto"
                                       value={sub.marks || ''}
                                       onChange={(e) => updateSubQuestion(index, 'marks', e.target.value)}
                                     />
@@ -3227,6 +3454,147 @@ export default function AdvancedHistoryArchive() {
                     </div>
                   </form>
                 )}
+
+                {/* BATCH EXAM UPLOAD FORM */}
+                {uploadSelection === 'batch' && (
+                  <div className="flex flex-col lg:flex-row h-full">
+                    <div className="flex-1 p-6 overflow-y-auto custom-scrollbar lg:w-1/2 border-r border-slate-200">
+                      <form id="batch-form" onSubmit={handleBatchSubmit} className="space-y-6">
+                        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                          <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                            <FileStack size={16} /> Exam Paper Details
+                          </h3>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="col-span-full">
+                              <label className="label">Exam Title (e.g., 2024 Midterm)</label>
+                              <input type="text" required className="input-field" value={batchForm.title} onChange={(e) => setBatchForm({ ...batchForm, title: e.target.value })} />
+                            </div>
+                            <div>
+                              <label className="label">Origin</label>
+                              <select required className="input-field" value={batchForm.origin} onChange={(e) => setBatchForm({ ...batchForm, origin: e.target.value })}>
+                                <option value="">Select Origin</option>
+                                {ORIGINS.map(o => <option key={o} value={o}>{o}</option>)}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="label">Year</label>
+                              <input type="number" required className="input-field" value={batchForm.year} onChange={(e) => setBatchForm({ ...batchForm, year: e.target.value })} />
+                            </div>
+                            <div className="col-span-full">
+                              <label className="label">Main Exam PDF (Required)</label>
+                              <input type="file" accept=".pdf" required onChange={(e) => handleBatchPdfChange(e, false)} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-teal-50 file:text-teal-700" />
+                            </div>
+                            <div className="col-span-full">
+                              <label className="label">Separate Answer Key PDF (Optional - if not in main PDF)</label>
+                              <input type="file" accept=".pdf" onChange={(e) => handleBatchPdfChange(e, true)} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-green-50 file:text-green-700" />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="space-y-6">
+                          <div className="flex justify-between items-center">
+                            <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Questions</h3>
+                            <button type="button" onClick={() => setBatchForm(prev => ({ ...prev, questions: [...prev.questions, { id: Date.now(), paperType: 'Paper 1 (DBQ)', topic: [], pagesStr: '', ansPagesStr: '', ansSource: 'answer', subQuestions: [{ id: Date.now() + 1, label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' }] }] }))} className="text-sm font-bold text-teal-600 flex items-center gap-1"><Plus size={16} /> Add Question</button>
+                          </div>
+
+                          {batchForm.questions.map((q, qIdx) => (
+                            <div key={q.id} className="bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm space-y-4">
+                              <div className="flex justify-between items-center">
+                                <h4 className="font-bold text-slate-700">Question {qIdx + 1}</h4>
+                                {batchForm.questions.length > 1 && <button type="button" onClick={() => setBatchForm(prev => ({ ...prev, questions: prev.questions.filter((_, i) => i !== qIdx) }))} className="text-red-500"><Trash2 size={16} /></button>}
+                              </div>
+                              <div className="grid grid-cols-2 gap-4">
+                                <div className="flex flex-col">
+                                  <label className="text-xs font-bold text-slate-500 mb-1">Paper Type</label>
+                                  <select className="w-full p-2 border rounded mt-auto" value={q.paperType} onChange={(e) => {
+                                    const newQ = [...batchForm.questions];
+                                    const newType = e.target.value;
+                                    newQ[qIdx].paperType = newType;
+                                    newQ[qIdx].subQuestions = newQ[qIdx].subQuestions.map((sq, i) => ({
+                                      ...sq,
+                                      label: getNextLabel(i, newType)
+                                    }));
+                                    if (newType === "Paper 2 (Essay)") newQ[qIdx].topic = [];
+                                    setBatchForm({ ...batchForm, questions: newQ });
+                                  }}>
+                                    {PAPER_TYPES.map(p => <option key={p} value={p}>{p}</option>)}
+                                  </select>
+                                </div>
+                                <div className="flex flex-col">
+                                  <label className={`text-xs font-bold mb-1 ${q.paperType === "Paper 2 (Essay)" ? 'text-slate-300' : 'text-slate-500'}`}>Topic</label>
+                                  <div className="mt-auto">
+                                    <CreatableSelect options={availableTopics} value={q.topic} onChange={(val) => { const newQ = [...batchForm.questions]; newQ[qIdx].topic = val; setBatchForm({ ...batchForm, questions: newQ }); }} onCreate={handleCreateTopic} isMulti={true} disabled={q.paperType === "Paper 2 (Essay)"} placeholder={q.paperType === "Paper 2 (Essay)" ? "N/A for Essay" : "Select..."} />
+                                  </div>
+                                </div>
+                                <div className="flex flex-col">
+                                  <label className="text-xs font-bold text-slate-500 mb-1">Question Pages (e.g. 1-3)</label>
+                                  <input type="text" className="w-full p-2 border rounded mt-auto" value={q.pagesStr} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].pagesStr = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }} />
+                                </div>
+                                <div className="flex flex-col">
+                                  <label className="text-xs font-bold text-slate-500 mb-1">Answer Pages (e.g. 10-11)</label>
+                                  <div className="flex gap-2 mt-auto">
+                                    <select className="w-1/3 p-2 border rounded text-xs bg-white" value={q.ansSource || 'answer'} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].ansSource = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }}>
+                                      <option value="answer">From Ans PDF</option>
+                                      <option value="main">From Main PDF</option>
+                                    </select>
+                                    <input type="text" className="w-2/3 p-2 border rounded" value={q.ansPagesStr} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].ansPagesStr = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }} />
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* SUBQUESTIONS */}
+                              <div className="pl-4 border-l-2 border-teal-200 space-y-3">
+                                <div className="flex justify-between items-center">
+                                  <span className="text-xs font-bold text-slate-500">Sub-Questions</span>
+                                  <button type="button" onClick={() => {
+                                    const newQ = [...batchForm.questions];
+                                    newQ[qIdx].subQuestions.push({ id: Date.now(), label: getNextLabel(newQ[qIdx].subQuestions.length, q.paperType), questionType: [], content: '', topic: [], sourceType: [], marks: '' });
+                                    setBatchForm({ ...batchForm, questions: newQ });
+                                  }} className="text-xs text-teal-600 font-bold"><Plus size={12} className="inline" /> Add Sub</button>
+                                </div>
+                                {q.subQuestions.map((sq, sqIdx) => (
+                                  <div key={sq.id} className="bg-white p-3 rounded border border-slate-200 space-y-2 relative">
+                                    {q.subQuestions.length > 1 && <button type="button" onClick={() => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions = newQ[qIdx].subQuestions.filter((_, i) => i !== sqIdx); setBatchForm({ ...batchForm, questions: newQ }); }} className="absolute top-2 right-2 text-red-400"><X size={14} /></button>}
+                                    <div className="flex gap-2 items-start">
+                                      <input type="text" className="w-12 flex-shrink-0 p-2 border rounded text-center text-sm font-bold" value={sq.label} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].label = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }} />
+                                      <div className="flex-1">
+                                        <CreatableSelect options={availableQuestionTypes[q.paperType] || []} value={sq.questionType} onChange={(val) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].questionType = val; setBatchForm({ ...batchForm, questions: newQ }); }} onCreate={(val) => handleCreateQuestionType(val, q.paperType)} placeholder="Q-Type..." isMulti={true} />
+                                      </div>
+                                    </div>
+                                    <textarea placeholder="Question content..." rows={2} className="w-full p-2 border rounded text-sm" value={sq.content} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].content = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }} />
+                                    <div className="grid grid-cols-2 gap-2 items-end">
+                                      {q.paperType === "Paper 1 (DBQ)" && <input type="number" placeholder="Marks" className="p-2 border rounded text-sm w-full" value={sq.marks} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].marks = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }} />}
+                                      {q.paperType === "Paper 1 (DBQ)" && <div className="w-full"><CreatableSelect options={availableSourceTypes} value={sq.sourceType} onChange={(val) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].sourceType = val; setBatchForm({ ...batchForm, questions: newQ }); }} onCreate={handleCreateSourceType} placeholder="Source Type" isMulti={true} /></div>}
+                                      {q.paperType === "Paper 2 (Essay)" && (
+                                        <div className="col-span-2">
+                                          <CreatableSelect options={availableTopics} value={sq.topic} onChange={(val) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].topic = val; setBatchForm({ ...batchForm, questions: newQ }); }} onCreate={handleCreateTopic} placeholder="Essay Topic(s)" isMulti={true} />
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </form>
+                    </div>
+                    <div className="lg:w-1/2 bg-slate-200 h-[50vh] lg:h-full relative border-t lg:border-t-0 lg:border-l border-slate-300 flex flex-col">
+                      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex bg-white rounded-lg shadow-md p-1 border border-slate-200">
+                        <button type="button" onClick={() => setBatchPreviewMode('question')} className={`px-4 py-1.5 text-sm font-bold rounded-md transition-colors ${batchPreviewMode === 'question' ? 'bg-teal-100 text-teal-700' : 'text-slate-500 hover:bg-slate-50'}`}>Main PDF</button>
+                        <button type="button" onClick={() => setBatchPreviewMode('answer')} className={`px-4 py-1.5 text-sm font-bold rounded-md transition-colors ${batchPreviewMode === 'answer' ? 'bg-green-100 text-green-700' : 'text-slate-500 hover:bg-slate-50'}`}>Answer PDF</button>
+                      </div>
+                      <div className="flex-1 relative">
+                        {batchPreviewMode === 'question' ? (
+                          batchPdfPreviewUrl ? <CustomPDFViewer fileUrl={batchPdfPreviewUrl} /> : <div className="flex items-center justify-center h-full text-slate-500">Upload Main PDF to preview</div>
+                        ) : (
+                          batchAnsPdfPreviewUrl ? <CustomPDFViewer fileUrl={batchAnsPdfPreviewUrl} /> : <div className="flex items-center justify-center h-full text-slate-500">Upload Answer PDF to preview</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
 
                 {/* STUDENT SAMPLE UPLOAD FORM */}
                 {uploadSelection === 'sample' && (
@@ -3599,21 +3967,22 @@ export default function AdvancedHistoryArchive() {
                   {uploadSelection && (
                     <button
                       type="submit"
-                      form={uploadSelection === 'question' ? "upload-form" : "sample-form"}
+                      form={uploadSelection === 'question' ? "upload-form" : uploadSelection === 'batch' ? "batch-form" : "sample-form"}
                       disabled={isLoading}
-                      className={`px-6 py-2 rounded-lg ${uploadSelection === 'question' ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-200' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200'} text-white font-bold shadow-lg transition-all ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      className={`px-6 py-2 rounded-lg ${uploadSelection === 'question' ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-200' : uploadSelection === 'batch' ? 'bg-teal-600 hover:bg-teal-700 shadow-teal-200' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200'} text-white font-bold shadow-lg transition-all ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                       {isLoading ? 'Processing...' : (editingId ? 'Update Archive' : 'Upload Data')}
                     </button>
                   )}
                 </div>
               </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+            </motion.div >
+          </div >
+        )
+        }
+      </AnimatePresence >
       {/* --- LINKED MARKS MODAL --- */}
-      <AnimatePresence>
+      < AnimatePresence >
         {showMarksModal && (
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
             <motion.div
@@ -3667,9 +4036,9 @@ export default function AdvancedHistoryArchive() {
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+      </AnimatePresence >
       {/* --- TOOL LINK ROUTING MODAL --- */}
-      <AnimatePresence>
+      < AnimatePresence >
         {showToolLinkModal && (
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-xl p-6 max-w-md w-full shadow-2xl">
@@ -3698,7 +4067,7 @@ export default function AdvancedHistoryArchive() {
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+      </AnimatePresence >
       <style>{`
         .custom-scrollbar::-webkit-scrollbar {
           width: 4px;
@@ -3777,6 +4146,6 @@ export default function AdvancedHistoryArchive() {
           border-width: 1px;
         }
       `}</style>
-    </div>
+    </div >
   );
 }

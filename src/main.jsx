@@ -9,7 +9,7 @@ import { Loader2, ShieldAlert } from 'lucide-react';
 import App from './App.jsx';
 import DseTrend from './DseTrend.jsx';
 import PdfTool from './PdfTool.jsx';
-import Record from './Record.jsx'; 
+import Record from './Record.jsx';
 import Marks from './Marks.jsx'; // <-- IMPORT THE NEW MARKS COMPONENT
 import { auth, db, googleProvider } from './firebase.js';
 import './index.css';
@@ -30,18 +30,25 @@ export const AuthProvider = ({ children }) => {
       if (currentUser) {
         const email = currentUser.email;
         let isAdmin = false;
-        let isViewer = false;
+        let isAuthorized = false;
+        let userRole = null;
 
-        if (email === SUPER_ADMIN) isAdmin = true;
+        if (email === SUPER_ADMIN) {
+          isAdmin = true;
+          isAuthorized = true;
+          userRole = 'admin';
+        }
 
         try {
           const userRoleRef = doc(db, "user_roles", email);
           const userRoleSnap = await getDoc(userRoleRef);
-          
+
           if (userRoleSnap.exists()) {
             const roleData = userRoleSnap.data();
+            userRole = roleData.role;
+            isAuthorized = true; // Any user in the database gets basic access
+
             if (roleData.role === 'admin') isAdmin = true;
-            if (roleData.role === 'viewer') isViewer = true;
           }
         } catch (error) {
           console.error("Error fetching user role:", error);
@@ -52,8 +59,8 @@ export const AuthProvider = ({ children }) => {
           email: email,
           displayName: currentUser.displayName,
           isAdmin: isAdmin,
-          isViewer: isViewer,
-          isAuthorized: isAdmin || isViewer 
+          role: userRole,
+          isAuthorized: isAuthorized
         });
       } else {
         setUser(null);
@@ -116,11 +123,11 @@ const ProtectedAdminRoute = ({ children }) => {
 const Layout = ({ children }) => {
   const location = useLocation();
   const { user, loginWithGoogle, logout } = useAuth();
-  
+
   const isSearch = location.pathname === '/';
   const isTrend = location.pathname === '/trend';
   const isPdf = location.pathname === '/pdf';
-  const isRecord = location.pathname === '/record'; 
+  const isRecord = location.pathname === '/record';
   const isMarks = location.pathname === '/marks';
 
   return (
@@ -129,14 +136,14 @@ const Layout = ({ children }) => {
         <div className="max-w-7xl mx-auto">
           <div className="flex justify-between items-center mb-4">
             <h1 className="font-bold text-xl text-slate-800 tracking-tight">NCL HISTORY ARCHIVE</h1>
-            
+
             {/* User Profile / Login */}
             <div>
               {user ? (
                 <div className="flex items-center gap-3">
                   <div className="text-right hidden sm:block">
                     <div className="text-sm font-bold text-slate-700">{user.displayName || user.email.split('@')[0]}</div>
-                    <div className="text-xs text-slate-500">{user.isAdmin ? 'Administrator' : (user.isViewer ? 'Viewer' : 'Unauthorized')}</div>
+                    <div className="text-xs text-slate-500 capitalize">{user.role ? user.role.replace('_', ' ') : 'Unauthorized'}</div>
                   </div>
                   <button onClick={logout} className="text-sm text-slate-500 hover:text-red-600 font-medium transition-colors">
                     Sign Out
@@ -157,7 +164,7 @@ const Layout = ({ children }) => {
             <Link to="/trend" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isTrend ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
               DSE Trend Analysis
             </Link>
-            
+
             {/* ONLY SHOW TABS IF ADMIN */}
             {user?.isAdmin && (
               <>
@@ -175,7 +182,7 @@ const Layout = ({ children }) => {
           </div>
         </div>
       </div>
-      
+
       <div className="flex-1">
         {children}
       </div>

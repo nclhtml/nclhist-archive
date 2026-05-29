@@ -106,8 +106,8 @@ const CheckboxGroup = ({ options, selectedValues, onChange }) => {
     }
   };
 
-  return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+return (
+    <div className="flex flex-wrap gap-2">
       {options.map((opt) => {
         const label = typeof opt === 'object' ? opt.label : opt;
         const value = typeof opt === 'object' ? opt.value : opt;
@@ -118,7 +118,7 @@ const CheckboxGroup = ({ options, selectedValues, onChange }) => {
             key={value}
             onClick={() => toggleValue(value)}
             className={`
-              cursor-pointer px-3 py-2 rounded-lg text-sm font-medium border transition-all duration-200 flex items-center justify-center text-center h-full
+              cursor-pointer px-3 py-1.5 rounded-lg text-xs leading-tight font-medium border transition-all duration-200 flex items-center justify-center text-center flex-1 min-w-[80px] break-words
               ${isSelected
                 ? 'bg-blue-600 border-blue-600 text-white shadow-md shadow-blue-200'
                 : 'bg-white border-slate-200 text-slate-600 hover:border-blue-300 hover:bg-slate-50'
@@ -1785,7 +1785,7 @@ export default function AdvancedHistoryArchive() {
       </div>
 
       {/* --- MAIN CONTENT --- */}
-      <main className="flex-1 p-6 md:p-10 max-w-7xl mx-auto w-full">
+      <main className="flex-1 p-6 md:p-10 max-w-[1600px] mx-auto w-full">
 
         {/* Header */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
@@ -1823,13 +1823,6 @@ export default function AdvancedHistoryArchive() {
 
           {user && user.isAuthorized && (
             <div className="flex gap-2 w-full md:w-auto mt-4 md:mt-0 flex-wrap">
-              <button
-                onClick={() => setShowFilters(!showFilters)}
-                className={`flex-1 md:flex-none btn-secondary ${showFilters ? 'bg-blue-50 border-blue-200 text-blue-700' : ''}`}
-              >
-                <Filter size={18} /> {showFilters ? 'Hide Filters' : 'Filters'}
-              </button>
-
               {/* --- NEW: USER MANAGEMENT BUTTON --- */}
               {user.isAdmin && (
                 <>
@@ -1879,452 +1872,222 @@ export default function AdvancedHistoryArchive() {
 
         {/* --- ARCHIVE CONTENT RENDERER --- */}
         {user && user.isAuthorized && (
-          <div className="animate-in fade-in duration-300">
-            {/* --- TOP FILTER PANEL --- */}
-            <AnimatePresence>
-              {showFilters && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  className="overflow-hidden mb-6"
-                >
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 shadow-inner">
-                    <div className="flex justify-between items-center mb-4">
-                      <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
-                        <Filter size={14} /> Active Filters
-                      </h3>
-                      <div className="flex gap-2">
-                        {user.isAdmin && (
-                          <button
-                            onClick={() => setIsManageFiltersOpen(true)}
-                            className="text-xs flex items-center gap-1 text-slate-500 hover:text-slate-800 px-2 py-1 rounded hover:bg-slate-200 transition-colors"
-                          >
-                            <Settings size={12} /> Manage Tags
-                          </button>
-                        )}
-                        <button
-                          onClick={() => setFilters({ origin: [], year: [], paperType: [], questionType: [], sourceType: [], marks: [], topic: [], tier: [] })}
-                          className="text-xs text-red-500 hover:text-red-700 font-medium px-2 py-1 rounded hover:bg-red-50 transition-colors"
-                        >
-                          Reset All
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* VERTICAL STACK OF ACCORDIONS */}
-                    <div className="flex flex-col gap-2">
-                      {/* Tier (Admin Only) */}
-                      {user.isAdmin && (
-                        <FilterAccordion
-                          title="Tier Level (Admin Only)"
-                          isOpen={expandedSections['tier']}
-                          onToggle={() => toggleAccordion('tier')}
-                          count={filters.tier.length}
-                        >
-                          <CheckboxGroup
-                            options={systemTiers.map(t => ({ label: t.name, value: t.id }))}
-                            selectedValues={filters.tier}
-                            onChange={(vals) => setFilters({ ...filters, tier: vals })}
-                          />
-                        </FilterAccordion>
-                      )}
-
-                      {/* Origin */}
-                      <FilterAccordion
-                        title="Origin"
-                        isOpen={expandedSections['origin']}
-                        onToggle={() => toggleAccordion('origin')}
-                        count={filters.origin.length}
+          <div className="animate-in fade-in duration-300 flex flex-col md:flex-row gap-6 items-start">
+            {/* --- LEFT FILTER PANEL --- */}
+            <div className="w-full md:w-72 lg:w-80 shrink-0 mb-6 md:mb-0 sticky top-6 max-h-[calc(100vh-3rem)] overflow-y-auto custom-scrollbar">
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 shadow-inner w-full md:w-72 lg:w-80">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                    <Filter size={14} /> Active Filters
+                  </h3>
+                  <div className="flex gap-2">
+                    {user.isAdmin && (
+                      <button
+                        onClick={() => setIsManageFiltersOpen(true)}
+                        className="text-xs flex items-center gap-1 text-slate-500 hover:text-slate-800 px-2 py-1 rounded hover:bg-slate-200 transition-colors"
                       >
-                        <CheckboxGroup
-                          options={ORIGINS}
-                          selectedValues={filters.origin}
-                          onChange={(vals) => setFilters({ ...filters, origin: vals })}
-                        />
-                      </FilterAccordion>
-
-                      {/* Year */}
-                      <FilterAccordion
-                        title="Year"
-                        isOpen={expandedSections['year']}
-                        onToggle={() => toggleAccordion('year')}
-                        count={filters.year.length}
-                      >
-                        <CheckboxGroup
-                          options={availableYears}
-                          selectedValues={filters.year}
-                          onChange={(vals) => setFilters({ ...filters, year: vals })}
-                        />
-                      </FilterAccordion>
-
-                      {/* Paper Type */}
-                      <FilterAccordion
-                        title="Paper Type"
-                        isOpen={expandedSections['paperType']}
-                        onToggle={() => toggleAccordion('paperType')}
-                        count={filters.paperType.length}
-                      >
-                        <CheckboxGroup
-                          options={PAPER_TYPES}
-                          selectedValues={filters.paperType}
-                          onChange={(vals) => setFilters({ ...filters, paperType: vals })}
-                        />
-                      </FilterAccordion>
-
-                      {/* Question Type (Conditional) */}
-                      <FilterAccordion
-                        title="Question Type"
-                        isOpen={expandedSections['questionType']}
-                        onToggle={() => toggleAccordion('questionType')}
-                        count={filters.questionType.length}
-                        disabled={filters.paperType.length === 0}
-                        helperText={filters.paperType.length === 0 ? "Select Paper Type first" : null}
-                      >
-                        <div className="space-y-4">
-                          {filters.paperType.includes("Paper 1 (DBQ)") && (
-                            <div>
-                              <h4 className="text-xs font-bold text-slate-400 mb-2 uppercase">Paper 1 (DBQ)</h4>
-                              <CheckboxGroup
-                                options={availableQuestionTypes["Paper 1 (DBQ)"]}
-                                selectedValues={filters.questionType}
-                                onChange={(vals) => setFilters({ ...filters, questionType: vals })}
-                              />
-                            </div>
-                          )}
-                          {filters.paperType.includes("Paper 2 (Essay)") && (
-                            <div>
-                              <h4 className="text-xs font-bold text-slate-400 mb-2 uppercase">Paper 2 (Essay)</h4>
-                              <CheckboxGroup
-                                options={availableQuestionTypes["Paper 2 (Essay)"]}
-                                selectedValues={filters.questionType}
-                                onChange={(vals) => setFilters({ ...filters, questionType: vals })}
-                              />
-                            </div>
-                          )}
-                        </div>
-                      </FilterAccordion>
-
-                      {/* Source Type (Conditional - DBQ Only) */}
-                      <FilterAccordion
-                        title="Source Type"
-                        isOpen={expandedSections['sourceType']}
-                        onToggle={() => toggleAccordion('sourceType')}
-                        count={filters.sourceType.length}
-                        disabled={!filters.paperType.includes("Paper 1 (DBQ)")}
-                        helperText={!filters.paperType.includes("Paper 1 (DBQ)") ? "Only available for Paper 1" : null}
-                      >
-                        <CheckboxGroup
-                          options={availableSourceTypes}
-                          selectedValues={filters.sourceType}
-                          onChange={(vals) => setFilters({ ...filters, sourceType: vals })}
-                        />
-                      </FilterAccordion>
-
-                      {/* Topics */}
-                      <FilterAccordion
-                        title="Topics"
-                        isOpen={expandedSections['topic']}
-                        onToggle={() => toggleAccordion('topic')}
-                        count={filters.topic.length}
-                      >
-                        <CheckboxGroup
-                          options={availableTopics}
-                          selectedValues={filters.topic}
-                          onChange={(vals) => setFilters({ ...filters, topic: vals })}
-                        />
-                      </FilterAccordion>
-
-                      {/* Marks */}
-                      <FilterAccordion
-                        title="Marks"
-                        isOpen={expandedSections['marks']}
-                        onToggle={() => toggleAccordion('marks')}
-                        count={filters.marks.length}
-                      >
-                        <CheckboxGroup
-                          options={MARK_OPTIONS}
-                          selectedValues={filters.marks}
-                          onChange={(vals) => setFilters({ ...filters, marks: vals })}
-                        />
-                      </FilterAccordion>
-                    </div>
+                        <Settings size={12} /> Manage Tags
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setFilters({ origin: [], year: [], paperType: [], questionType: [], sourceType: [], marks: [], topic: [], tier: [] })}
+                      className="text-xs text-red-500 hover:text-red-700 font-medium px-2 py-1 rounded hover:bg-red-50 transition-colors"
+                    >
+                      Reset All
+                    </button>
                   </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* Search Bar, Display Mode & Sort */}
-            <div className="flex flex-col md:flex-row gap-4 mb-6">
-              <div className="relative flex-1">
-                <Search className="absolute left-4 top-3.5 text-slate-400" size={20} />
-                <input
-                  type="text"
-                  placeholder="Search for topics, question types, or titles (e.g., 2026E Q1, 2025D Q1a)..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                />
-              </div>
-
-              <div className="flex bg-white border border-slate-200 rounded-xl shadow-sm p-1">
-                <button
-                  onClick={() => setDisplayMode('subquestion')}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${displayMode === 'subquestion' ? 'bg-blue-100 text-blue-700' : 'text-slate-500 hover:bg-slate-50'}`}
-                >
-                  <LayoutList size={16} /> Sub-Questions
-                </button>
-                <button
-                  onClick={() => setDisplayMode('fullpaper')}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${displayMode === 'fullpaper' ? 'bg-blue-100 text-blue-700' : 'text-slate-500 hover:bg-slate-50'}`}
-                >
-                  <FileStack size={16} /> Full Paper
-                </button>
-              </div>
-
-              <div className="relative w-full md:w-56">
-                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
-                  <ArrowUpDown size={16} />
                 </div>
-                <select
-                  value={sortOption}
-                  onChange={(e) => setSortOption(e.target.value)}
-                  className="w-full pl-10 pr-8 py-3 bg-white border border-slate-200 rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500 outline-none appearance-none cursor-pointer text-sm font-medium text-slate-700"
-                >
-                  {SORT_OPTIONS.map(opt => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                  ))}
-                </select>
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
-                  <ChevronDown size={14} />
+
+                {/* VERTICAL STACK OF ACCORDIONS */}
+                <div className="flex flex-col gap-2">
+                  {/* Tier (Admin Only) */}
+                  {user.isAdmin && (
+                    <FilterAccordion
+                      title="Tier Level (Admin Only)"
+                      isOpen={expandedSections['tier']}
+                      onToggle={() => toggleAccordion('tier')}
+                      count={filters.tier.length}
+                    >
+                      <CheckboxGroup
+                        options={systemTiers.map(t => ({ label: t.name, value: t.id }))}
+                        selectedValues={filters.tier}
+                        onChange={(vals) => setFilters({ ...filters, tier: vals })}
+                      />
+                    </FilterAccordion>
+                  )}
+
+                  {/* Origin */}
+                  <FilterAccordion
+                    title="Origin"
+                    isOpen={expandedSections['origin']}
+                    onToggle={() => toggleAccordion('origin')}
+                    count={filters.origin.length}
+                  >
+                    <CheckboxGroup
+                      options={ORIGINS}
+                      selectedValues={filters.origin}
+                      onChange={(vals) => setFilters({ ...filters, origin: vals })}
+                    />
+                  </FilterAccordion>
+
+                  {/* Year */}
+                  <FilterAccordion
+                    title="Year"
+                    isOpen={expandedSections['year']}
+                    onToggle={() => toggleAccordion('year')}
+                    count={filters.year.length}
+                  >
+                    <CheckboxGroup
+                      options={availableYears}
+                      selectedValues={filters.year}
+                      onChange={(vals) => setFilters({ ...filters, year: vals })}
+                    />
+                  </FilterAccordion>
+
+                  {/* Paper Type */}
+                  <FilterAccordion
+                    title="Paper Type"
+                    isOpen={expandedSections['paperType']}
+                    onToggle={() => toggleAccordion('paperType')}
+                    count={filters.paperType.length}
+                  >
+                    <CheckboxGroup
+                      options={PAPER_TYPES}
+                      selectedValues={filters.paperType}
+                      onChange={(vals) => setFilters({ ...filters, paperType: vals })}
+                    />
+                  </FilterAccordion>
+
+                  {/* Question Type (Conditional) */}
+                  <FilterAccordion
+                    title="Question Type"
+                    isOpen={expandedSections['questionType']}
+                    onToggle={() => toggleAccordion('questionType')}
+                    count={filters.questionType.length}
+                    disabled={filters.paperType.length === 0}
+                    helperText={filters.paperType.length === 0 ? "Select Paper Type first" : null}
+                  >
+                    <div className="space-y-4">
+                      {filters.paperType.includes("Paper 1 (DBQ)") && (
+                        <div>
+                          <h4 className="text-xs font-bold text-slate-400 mb-2 uppercase">Paper 1 (DBQ)</h4>
+                          <CheckboxGroup
+                            options={availableQuestionTypes["Paper 1 (DBQ)"]}
+                            selectedValues={filters.questionType}
+                            onChange={(vals) => setFilters({ ...filters, questionType: vals })}
+                          />
+                        </div>
+                      )}
+                      {filters.paperType.includes("Paper 2 (Essay)") && (
+                        <div>
+                          <h4 className="text-xs font-bold text-slate-400 mb-2 uppercase">Paper 2 (Essay)</h4>
+                          <CheckboxGroup
+                            options={availableQuestionTypes["Paper 2 (Essay)"]}
+                            selectedValues={filters.questionType}
+                            onChange={(vals) => setFilters({ ...filters, questionType: vals })}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </FilterAccordion>
+
+                  {/* Source Type (Conditional - DBQ Only) */}
+                  <FilterAccordion
+                    title="Source Type"
+                    isOpen={expandedSections['sourceType']}
+                    onToggle={() => toggleAccordion('sourceType')}
+                    count={filters.sourceType.length}
+                    disabled={!filters.paperType.includes("Paper 1 (DBQ)")}
+                    helperText={!filters.paperType.includes("Paper 1 (DBQ)") ? "Only available for Paper 1" : null}
+                  >
+                    <CheckboxGroup
+                      options={availableSourceTypes}
+                      selectedValues={filters.sourceType}
+                      onChange={(vals) => setFilters({ ...filters, sourceType: vals })}
+                    />
+                  </FilterAccordion>
+
+                  {/* Topics */}
+                  <FilterAccordion
+                    title="Topics"
+                    isOpen={expandedSections['topic']}
+                    onToggle={() => toggleAccordion('topic')}
+                    count={filters.topic.length}
+                  >
+                    <CheckboxGroup
+                      options={availableTopics}
+                      selectedValues={filters.topic}
+                      onChange={(vals) => setFilters({ ...filters, topic: vals })}
+                    />
+                  </FilterAccordion>
+
+                  {/* Marks */}
+                  <FilterAccordion
+                    title="Marks"
+                    isOpen={expandedSections['marks']}
+                    onToggle={() => toggleAccordion('marks')}
+                    count={filters.marks.length}
+                  >
+                    <CheckboxGroup
+                      options={MARK_OPTIONS}
+                      selectedValues={filters.marks}
+                      onChange={(vals) => setFilters({ ...filters, marks: vals })}
+                    />
+                  </FilterAccordion>
                 </div>
               </div>
             </div>
 
-            {/* TOP PAGINATION CONTROLS */}
-            {filteredResults.length > 0 && (
-              <PaginationControls
-                currentPage={currentPage}
-                totalPages={totalPages}
-                onPageChange={handlePageChange}
-                itemsPerPage={itemsPerPage}
-                setItemsPerPage={setItemsPerPage}
-                className="mb-6"
-              />
-            )}
-
-            {/* Results List */}
-            <div className="space-y-4">
-              <AnimatePresence>
-                {paginatedResults.map((item) => {
-                  const { uniqueId, parent, child, isFullPaper, matchedChildrenCount } = item;
-
-                  if (isFullPaper) {
-                    // --- FULL PAPER RENDER ---
-                    return (
-                      <motion.div
-                        key={uniqueId}
-                        layout
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.95 }}
-                        onClick={() => setPreviewItem(item)}
-                        className="bg-white rounded-xl border border-slate-200 p-0 shadow-sm hover:shadow-lg hover:border-blue-300 cursor-pointer transition-all overflow-hidden group"
-                      >
-                        <div className="flex flex-col md:flex-row relative">
-                          <div className="flex-1 p-5 border-b md:border-b-0 md:border-r border-slate-100 relative">
-                            <div className="flex items-center gap-2 mb-2">
-                              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                                {parent.year} • {parent.origin}
-                              </span>
-                              <span className={`text-xs px-2 py-0.5 rounded font-medium ${parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
-                                {parent.paperType}
-                              </span>
-                              {user.isAdmin && (
-                                <span className="text-xs px-2 py-0.5 rounded font-medium bg-indigo-100 text-indigo-700 flex items-center gap-1">
-                                  <Layers size={10} /> {systemTiers.find(t => t.id === (parent.tier || '10'))?.name || `Tier ${parent.tier || '10'}`}
-                                </span>
-                              )}
-                            </div>
-
-                            <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2 group-hover:text-blue-600 transition-colors">
-                              {parent.title}
-                            </h3>
-
-                            <div className="mt-3 text-slate-600 text-sm">
-                              Contains <span className="font-bold">{parent.subQuestions.length}</span> sub-questions ({matchedChildrenCount} matched your search).
-                            </div>
-
-                            <div className="mt-4 flex flex-wrap gap-2">
-                              {ensureArray(parent.topic).map((t, i) => (
-                                <div key={`pt-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
-                                  <Tag size={12} /> {t}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-
-                          <div className="p-5 bg-slate-50 md:w-64 flex flex-col justify-center items-center gap-3 relative">
-                            <div className="absolute top-2 right-2 text-xs text-slate-300 font-mono select-none">
-                              ID: {parent.id}
-                            </div>
-                            <div className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-md opacity-0 group-hover:opacity-100 transition-all transform translate-y-2 group-hover:translate-y-0">
-                              <Eye size={16} /> View Full Paper
-                            </div>
-                            {parent.hasFile ? (
-                              <div className="text-center text-slate-500 text-xs flex items-center gap-1">
-                                <FileText size={12} /> PDF Attached
-                              </div>
-                            ) : (
-                              <div className="text-center text-slate-400 text-sm italic px-4">
-                                No PDF attached
-                              </div>
-                            )}
-                            {parent.hasAnswer && (
-                              <div className="text-center text-green-600 text-xs flex items-center gap-1 font-medium mt-1">
-                                <BookOpen size={12} /> Answer Key Available
-                              </div>
-                            )}
-                            {(user?.isAdmin || (currentUserRole !== 'viewer' && currentUserRole !== 'dse_only')) && (
-                              <button
-                                onClick={(e) => { e.stopPropagation(); handleViewLinkedMarks(parent.id, parent.title); }}
-                                className="w-full flex items-center justify-center gap-2 bg-teal-100 hover:bg-teal-200 text-teal-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
-                              >
-                                <BarChart2 size={16} /> View Marks
-                              </button>
-                            )}
-                            {user.isAdmin && (
-                              <button
-                                onClick={(e) => handleEditClick(e, parent)}
-                                className="w-full flex items-center justify-center gap-2 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-                              >
-                                <Edit size={16} /> Edit Parent
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </motion.div>
-                    );
-                  } else {
-                    // --- SUB-QUESTION RENDER (Existing) ---
-                    return (
-                      <motion.div
-                        key={uniqueId}
-                        layout
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.95 }}
-                        onClick={() => setPreviewItem(item)}
-                        className="bg-white rounded-xl border border-slate-200 p-0 shadow-sm hover:shadow-lg hover:border-blue-300 cursor-pointer transition-all overflow-hidden group"
-                      >
-                        <div className="flex flex-col md:flex-row relative">
-                          <div className="flex-1 p-5 border-b md:border-b-0 md:border-r border-slate-100 relative">
-                            <div className="flex items-center gap-2 mb-2">
-                              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                                {parent.year} • {parent.origin}
-                              </span>
-                              <span className={`text-xs px-2 py-0.5 rounded font-medium ${parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
-                                {parent.paperType}
-                              </span>
-                              {user.isAdmin && (
-                                <span className="text-xs px-2 py-0.5 rounded font-medium bg-indigo-100 text-indigo-700 flex items-center gap-1">
-                                  <Layers size={10} /> {systemTiers.find(t => t.id === (parent.tier || '10'))?.name || `Tier ${parent.tier || '10'}`}
-                                </span>
-                              )}
-                            </div>
-
-                            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 group-hover:text-blue-600 transition-colors">
-                              {parent.title}
-                              <span className="bg-slate-800 text-white text-sm px-2 py-0.5 rounded-md">
-                                Q{child.label}
-                              </span>
-                              {child.marks && (
-                                <span className="text-xs text-slate-400 font-normal border border-slate-200 px-1.5 py-0.5 rounded">
-                                  {child.marks} Marks
-                                </span>
-                              )}
-                            </h3>
-
-                            <div className="mt-3 text-slate-600 text-sm line-clamp-3 bg-slate-50 p-3 rounded-lg border border-slate-100 italic">
-                              {child.content || "No text content provided."}
-                            </div>
-
-                            <div className="mt-4 flex flex-wrap gap-2">
-                              {ensureArray(parent.topic).map((t, i) => (
-                                <div key={`pt-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
-                                  <Tag size={12} /> {t}
-                                </div>
-                              ))}
-                              {ensureArray(child.topic).map((t, i) => (
-                                <div key={`ct-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
-                                  <Tag size={12} /> {t}
-                                </div>
-                              ))}
-                              {ensureArray(child.questionType).map((qt, i) => (
-                                <div key={`qt-${i}`} className="badge bg-green-50 text-green-700 border-green-100">
-                                  {qt}
-                                </div>
-                              ))}
-                              {ensureArray(child.sourceType).map((st, i) => (
-                                <div key={`st-${i}`} className="badge bg-slate-100 text-slate-600 border-slate-200 flex items-center gap-1">
-                                  <FileDigit size={12} /> {st}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-
-                          <div className="p-5 bg-slate-50 md:w-64 flex flex-col justify-center items-center gap-3 relative">
-                            <div className="absolute top-2 right-2 text-xs text-slate-300 font-mono select-none">
-                              ID: {parent.id}
-                            </div>
-                            <div className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-md opacity-0 group-hover:opacity-100 transition-all transform translate-y-2 group-hover:translate-y-0">
-                              <Eye size={16} /> View Details
-                            </div>
-                            {parent.hasFile ? (
-                              <div className="text-center text-slate-500 text-xs flex items-center gap-1">
-                                <FileText size={12} /> PDF Attached
-                              </div>
-                            ) : (
-                              <div className="text-center text-slate-400 text-sm italic px-4">
-                                No PDF attached
-                              </div>
-                            )}
-                            {parent.hasAnswer && (
-                              <div className="text-center text-green-600 text-xs flex items-center gap-1 font-medium mt-1">
-                                <BookOpen size={12} /> Answer Key Available
-                              </div>
-                            )}
-                            {(user?.isAdmin || (currentUserRole !== 'viewer' && currentUserRole !== 'dse_only')) && (
-                              <button
-                                onClick={(e) => { e.stopPropagation(); handleViewLinkedMarks(parent.id, parent.title); }}
-                                className="w-full flex items-center justify-center gap-2 bg-teal-100 hover:bg-teal-200 text-teal-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
-                              >
-                                <BarChart2 size={16} /> View Marks
-                              </button>
-                            )}
-                            {user.isAdmin && (
-                              <button
-                                onClick={(e) => handleEditClick(e, parent)}
-                                className="w-full flex items-center justify-center gap-2 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-                              >
-                                <Edit size={16} /> Edit Parent
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </motion.div>
-                    );
-                  }
-                })}
-              </AnimatePresence>
-
-              {filteredResults.length === 0 && (
-                <div className="text-center py-20 text-slate-500">
-                  No questions found matching your criteria.
+            {/* --- MAIN CONTENT AREA (Search & Results) --- */}
+            <div className="flex-1 min-w-0 w-full">
+              {/* Search Bar, Display Mode & Sort */}
+              <div className="flex flex-col md:flex-row gap-4 mb-6">
+                <div className="relative flex-1">
+                  <Search className="absolute left-4 top-3.5 text-slate-400" size={20} />
+                  <input
+                    type="text"
+                    placeholder="Search for topics, question types, or titles (e.g., 2026E Q1, 2025D Q1a)..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
                 </div>
-              )}
 
-              {/* BOTTOM PAGINATION CONTROLS */}
+                <div className="flex bg-white border border-slate-200 rounded-xl shadow-sm p-1">
+                  <button
+                    onClick={() => setDisplayMode('subquestion')}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${displayMode === 'subquestion' ? 'bg-blue-100 text-blue-700' : 'text-slate-500 hover:bg-slate-50'}`}
+                  >
+                    <LayoutList size={16} /> Sub-Questions
+                  </button>
+                  <button
+                    onClick={() => setDisplayMode('fullpaper')}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${displayMode === 'fullpaper' ? 'bg-blue-100 text-blue-700' : 'text-slate-500 hover:bg-slate-50'}`}
+                  >
+                    <FileStack size={16} /> Full Paper
+                  </button>
+                </div>
+
+                <div className="relative w-full md:w-56">
+                  <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
+                    <ArrowUpDown size={16} />
+                  </div>
+                  <select
+                    value={sortOption}
+                    onChange={(e) => setSortOption(e.target.value)}
+                    className="w-full pl-10 pr-8 py-3 bg-white border border-slate-200 rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500 outline-none appearance-none cursor-pointer text-sm font-medium text-slate-700"
+                  >
+                    {SORT_OPTIONS.map(opt => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
+                    <ChevronDown size={14} />
+                  </div>
+                </div>
+              </div>
+
+              {/* TOP PAGINATION CONTROLS */}
               {filteredResults.length > 0 && (
                 <PaginationControls
                   currentPage={currentPage}
@@ -2332,10 +2095,234 @@ export default function AdvancedHistoryArchive() {
                   onPageChange={handlePageChange}
                   itemsPerPage={itemsPerPage}
                   setItemsPerPage={setItemsPerPage}
-                  className="mt-6"
+                  className="mb-6"
                 />
               )}
-            </div>
+
+              {/* Results List */}
+              <div className="space-y-4">
+                <AnimatePresence>
+                  {paginatedResults.map((item) => {
+                    const { uniqueId, parent, child, isFullPaper, matchedChildrenCount } = item;
+
+                    if (isFullPaper) {
+                      // --- FULL PAPER RENDER ---
+                      return (
+                        <motion.div
+                          key={uniqueId}
+                          layout
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, scale: 0.95 }}
+                          onClick={() => setPreviewItem(item)}
+                          className="bg-white rounded-xl border border-slate-200 p-0 shadow-sm hover:shadow-lg hover:border-blue-300 cursor-pointer transition-all overflow-hidden group"
+                        >
+                          <div className="flex flex-col md:flex-row relative">
+                            <div className="flex-1 p-5 border-b md:border-b-0 md:border-r border-slate-100 relative">
+                              <div className="flex items-center gap-2 mb-2">
+                                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                                  {parent.year} • {parent.origin}
+                                </span>
+                                <span className={`text-xs px-2 py-0.5 rounded font-medium ${parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
+                                  {parent.paperType}
+                                </span>
+                                {user.isAdmin && (
+                                  <span className="text-xs px-2 py-0.5 rounded font-medium bg-indigo-100 text-indigo-700 flex items-center gap-1">
+                                    <Layers size={10} /> {systemTiers.find(t => t.id === (parent.tier || '10'))?.name || `Tier ${parent.tier || '10'}`}
+                                  </span>
+                                )}
+                              </div>
+
+                              <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2 group-hover:text-blue-600 transition-colors">
+                                {parent.title}
+                              </h3>
+
+                              <div className="mt-3 text-slate-600 text-sm">
+                                Contains <span className="font-bold">{parent.subQuestions.length}</span> sub-questions ({matchedChildrenCount} matched your search).
+                              </div>
+
+                              <div className="mt-4 flex flex-wrap gap-2">
+                                {ensureArray(parent.topic).map((t, i) => (
+                                  <div key={`pt-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
+                                    <Tag size={12} /> {t}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            <div className="p-5 bg-slate-50 md:w-64 flex flex-col justify-center items-center gap-3 relative">
+                              <div className="absolute top-2 right-2 text-xs text-slate-300 font-mono select-none">
+                                ID: {parent.id}
+                              </div>
+                              <div className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-md opacity-0 group-hover:opacity-100 transition-all transform translate-y-2 group-hover:translate-y-0">
+                                <Eye size={16} /> View Full Paper
+                              </div>
+                              {parent.hasFile ? (
+                                <div className="text-center text-slate-500 text-xs flex items-center gap-1">
+                                  <FileText size={12} /> PDF Attached
+                                </div>
+                              ) : (
+                                <div className="text-center text-slate-400 text-sm italic px-4">
+                                  No PDF attached
+                                </div>
+                              )}
+                              {parent.hasAnswer && (
+                                <div className="text-center text-green-600 text-xs flex items-center gap-1 font-medium mt-1">
+                                  <BookOpen size={12} /> Answer Key Available
+                                </div>
+                              )}
+                              {(user?.isAdmin || (currentUserRole !== 'viewer' && currentUserRole !== 'dse_only')) && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); handleViewLinkedMarks(parent.id, parent.title); }}
+                                  className="w-full flex items-center justify-center gap-2 bg-teal-100 hover:bg-teal-200 text-teal-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
+                                >
+                                  <BarChart2 size={16} /> View Marks
+                                </button>
+                              )}
+                              {user.isAdmin && (
+                                <button
+                                  onClick={(e) => handleEditClick(e, parent)}
+                                  className="w-full flex items-center justify-center gap-2 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                                >
+                                  <Edit size={16} /> Edit Parent
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </motion.div>
+                      );
+                    } else {
+                      // --- SUB-QUESTION RENDER (Existing) ---
+                      return (
+                        <motion.div
+                          key={uniqueId}
+                          layout
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, scale: 0.95 }}
+                          onClick={() => setPreviewItem(item)}
+                          className="bg-white rounded-xl border border-slate-200 p-0 shadow-sm hover:shadow-lg hover:border-blue-300 cursor-pointer transition-all overflow-hidden group"
+                        >
+                          <div className="flex flex-col md:flex-row relative">
+                            <div className="flex-1 p-5 border-b md:border-b-0 md:border-r border-slate-100 relative">
+                              <div className="flex items-center gap-2 mb-2">
+                                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                                  {parent.year} • {parent.origin}
+                                </span>
+                                <span className={`text-xs px-2 py-0.5 rounded font-medium ${parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
+                                  {parent.paperType}
+                                </span>
+                                {user.isAdmin && (
+                                  <span className="text-xs px-2 py-0.5 rounded font-medium bg-indigo-100 text-indigo-700 flex items-center gap-1">
+                                    <Layers size={10} /> {systemTiers.find(t => t.id === (parent.tier || '10'))?.name || `Tier ${parent.tier || '10'}`}
+                                  </span>
+                                )}
+                              </div>
+
+                              <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 group-hover:text-blue-600 transition-colors">
+                                {parent.title}
+                                <span className="bg-slate-800 text-white text-sm px-2 py-0.5 rounded-md">
+                                  Q{child.label}
+                                </span>
+                                {child.marks && (
+                                  <span className="text-xs text-slate-400 font-normal border border-slate-200 px-1.5 py-0.5 rounded">
+                                    {child.marks} Marks
+                                  </span>
+                                )}
+                              </h3>
+
+                              <div className="mt-3 text-slate-600 text-sm line-clamp-3 bg-slate-50 p-3 rounded-lg border border-slate-100 italic">
+                                {child.content || "No text content provided."}
+                              </div>
+
+                              <div className="mt-4 flex flex-wrap gap-2">
+                                {ensureArray(parent.topic).map((t, i) => (
+                                  <div key={`pt-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
+                                    <Tag size={12} /> {t}
+                                  </div>
+                                ))}
+                                {ensureArray(child.topic).map((t, i) => (
+                                  <div key={`ct-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
+                                    <Tag size={12} /> {t}
+                                  </div>
+                                ))}
+                                {ensureArray(child.questionType).map((qt, i) => (
+                                  <div key={`qt-${i}`} className="badge bg-green-50 text-green-700 border-green-100">
+                                    {qt}
+                                  </div>
+                                ))}
+                                {ensureArray(child.sourceType).map((st, i) => (
+                                  <div key={`st-${i}`} className="badge bg-slate-100 text-slate-600 border-slate-200 flex items-center gap-1">
+                                    <FileDigit size={12} /> {st}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            <div className="p-5 bg-slate-50 md:w-64 flex flex-col justify-center items-center gap-3 relative">
+                              <div className="absolute top-2 right-2 text-xs text-slate-300 font-mono select-none">
+                                ID: {parent.id}
+                              </div>
+                              <div className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-md opacity-0 group-hover:opacity-100 transition-all transform translate-y-2 group-hover:translate-y-0">
+                                <Eye size={16} /> View Details
+                              </div>
+                              {parent.hasFile ? (
+                                <div className="text-center text-slate-500 text-xs flex items-center gap-1">
+                                  <FileText size={12} /> PDF Attached
+                                </div>
+                              ) : (
+                                <div className="text-center text-slate-400 text-sm italic px-4">
+                                  No PDF attached
+                                </div>
+                              )}
+                              {parent.hasAnswer && (
+                                <div className="text-center text-green-600 text-xs flex items-center gap-1 font-medium mt-1">
+                                  <BookOpen size={12} /> Answer Key Available
+                                </div>
+                              )}
+                              {(user?.isAdmin || (currentUserRole !== 'viewer' && currentUserRole !== 'dse_only')) && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); handleViewLinkedMarks(parent.id, parent.title); }}
+                                  className="w-full flex items-center justify-center gap-2 bg-teal-100 hover:bg-teal-200 text-teal-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
+                                >
+                                  <BarChart2 size={16} /> View Marks
+                                </button>
+                              )}
+                              {user.isAdmin && (
+                                <button
+                                  onClick={(e) => handleEditClick(e, parent)}
+                                  className="w-full flex items-center justify-center gap-2 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                                >
+                                  <Edit size={16} /> Edit Parent
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </motion.div>
+                      );
+                    }
+                  })}
+                </AnimatePresence>
+
+                {filteredResults.length === 0 && (
+                  <div className="text-center py-20 text-slate-500">
+                    No questions found matching your criteria.
+                  </div>
+                )}
+
+                {/* BOTTOM PAGINATION CONTROLS */}
+                {filteredResults.length > 0 && (
+                  <PaginationControls
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    onPageChange={handlePageChange}
+                    itemsPerPage={itemsPerPage}
+                    setItemsPerPage={setItemsPerPage}
+                    className="mt-6"
+                  />
+                )}
+              </div>
+            </div> {/* <-- Closes the Main Content Area wrapper */}
           </div>
         )}
         <AnimatePresence>
@@ -3479,6 +3466,14 @@ export default function AdvancedHistoryArchive() {
                             <div>
                               <label className="label">Year</label>
                               <input type="number" required className="input-field" value={batchForm.year} onChange={(e) => setBatchForm({ ...batchForm, year: e.target.value })} />
+                            </div>
+                            <div>
+                              <label className="label flex items-center gap-2">
+                                <Layers size={14} /> Document Tier Level
+                              </label>
+                              <select required className="input-field" value={batchForm.tier} onChange={(e) => setBatchForm({ ...batchForm, tier: e.target.value })}>
+                                {systemTiers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                              </select>
                             </div>
                             <div className="col-span-full">
                               <label className="label">Main Exam PDF (Required)</label>

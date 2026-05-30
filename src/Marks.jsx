@@ -130,9 +130,11 @@ export default function Marks() {
 
   // Document Linker State
   const [showDocLinker, setShowDocLinker] = useState(false);
+  const [docLinkerTarget, setDocLinkerTarget] = useState(null); // 'main' or section id
   const [docFilterOrigin, setDocFilterOrigin] = useState('');
   const [docFilterYear, setDocFilterYear] = useState('');
   const [docSearchTerm, setDocSearchTerm] = useState('');
+  const [docFilterMode, setDocFilterMode] = useState('full'); // NEW STATE
 
   // Preview Modal State
   const [previewItem, setPreviewItem] = useState(null);
@@ -1461,22 +1463,48 @@ export default function Marks() {
   // ============================================================================
   // DOCUMENT LINKING LOGIC
   // ============================================================================
+  const linkableDocs = useMemo(() => {
+    let items = [];
+    archives.forEach(a => {
+      // Add the full paper option
+      items.push({ ...a, linkMode: 'full' });
+      // Add the sub-question options
+      a.subQuestions?.forEach(sq => {
+        items.push({ ...a, id: `${a.id}_${sq.id}`, title: `${a.title} Q${sq.label}`, linkMode: 'sub' });
+      });
+    });
+    return items;
+  }, [archives]);
+
   const filteredArchives = useMemo(() => {
-    return archives.filter(a => {
+    return linkableDocs.filter(a => {
       const matchOrigin = !docFilterOrigin || a.origin === docFilterOrigin;
       const matchYear = !docFilterYear || String(a.year) === docFilterYear;
       const matchSearch = !docSearchTerm || a.title.toLowerCase().includes(docSearchTerm.toLowerCase());
-      return matchOrigin && matchYear && matchSearch;
+      const matchMode = a.linkMode === docFilterMode;
+      return matchOrigin && matchYear && matchSearch && matchMode;
     });
-  }, [archives, docFilterOrigin, docFilterYear, docSearchTerm]);
+  }, [linkableDocs, docFilterOrigin, docFilterYear, docSearchTerm, docFilterMode]);
 
-  const uniqueOrigins = useMemo(() => [...new Set(archives.map(a => a.origin).filter(Boolean))], [archives]);
-  const uniqueYears = useMemo(() => [...new Set(archives.map(a => String(a.year)).filter(Boolean))].sort().reverse(), [archives]);
+  const uniqueOrigins = useMemo(() => [...new Set(linkableDocs.map(a => a.origin).filter(Boolean))], [linkableDocs]);
+  const uniqueYears = useMemo(() => [...new Set(linkableDocs.map(a => String(a.year)).filter(Boolean))].sort().reverse(), [linkableDocs]);
 
   const handleOpenPreview = (docId) => {
-    const parentDoc = archives.find(a => a.id === docId);
-    if (parentDoc) {
-      setPreviewItem({ parent: parentDoc, isFullPaper: true });
+    const linkedDoc = linkableDocs.find(a => a.id === docId);
+    if (linkedDoc) {
+      if (linkedDoc.id.includes('_')) {
+        const [parentId, childId] = linkedDoc.id.split('_');
+        const parentDoc = archives.find(a => a.id === parentId);
+        const childDoc = parentDoc?.subQuestions?.find(sq => sq.id.toString() === childId);
+        if (parentDoc && childDoc) {
+          setPreviewItem({ parent: parentDoc, child: childDoc, isFullPaper: false });
+        }
+      } else {
+        const parentDoc = archives.find(a => a.id === docId);
+        if (parentDoc) {
+          setPreviewItem({ parent: parentDoc, isFullPaper: true });
+        }
+      }
     }
   };
 
@@ -2390,7 +2418,7 @@ export default function Marks() {
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => setShowDocLinker(true)}
+                      onClick={() => { setDocLinkerTarget('main'); setShowDocLinker(true); }}
                       className="px-3 py-2 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-md text-sm font-medium hover:bg-indigo-100 flex items-center transition-colors"
                     >
                       <LinkIcon className="w-4 h-4 mr-2" />
@@ -2399,7 +2427,7 @@ export default function Marks() {
                     {linkedDocId && (
                       <div className="flex items-center text-sm text-gray-600 bg-gray-100 px-3 py-2 rounded-md border border-gray-200">
                         <FileText className="w-4 h-4 mr-2 text-gray-400" />
-                        <span className="truncate max-w-[200px]">{archives.find(a => a.id === linkedDocId)?.title || 'Unknown Document'}</span>
+                        <span className="truncate max-w-[200px]">{linkableDocs.find(a => a.id === linkedDocId)?.title || 'Unknown Document'}</span>
                         <button type="button" onClick={() => setLinkedDocId('')} className="ml-2 text-red-500 hover:text-red-700"><X className="w-4 h-4" /></button>
                       </div>
                     )}
@@ -2441,6 +2469,9 @@ export default function Marks() {
                               <input type="number" step="any" value={sec.weight} onChange={(e) => updateSection(sec.id, 'weight', e.target.value)} data-gramm="false" data-gramm_editor="false" className="w-full border border-gray-300 rounded p-2 text-sm" required />
                             </div>
                             <div className="flex items-center h-[38px] space-x-2">
+                              <button type="button" onClick={() => { setDocLinkerTarget(sec.id); setShowDocLinker(true); }} className={`px-3 py-2 rounded text-sm font-medium border ${sec.linkedDocId ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`} title={sec.linkedDocId ? "Change Linked Doc" : "Link Doc"}>
+                                <LinkIcon className="w-4 h-4 inline" />
+                              </button>
                               <button type="button" onClick={() => toggleSubSections(sec.id)} className={`px-3 py-2 rounded text-sm font-medium border ${sec.hasSubSections ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>
                                 <Layers className="w-4 h-4 inline mr-1" /> Sub-sections
                               </button>
@@ -3180,6 +3211,14 @@ export default function Marks() {
                 <option value="">All Years</option>
                 {uniqueYears.map(y => <option key={y} value={y}>{y}</option>)}
               </select>
+              <select
+                value={docFilterMode}
+                onChange={e => setDocFilterMode(e.target.value)}
+                className="border border-gray-300 rounded-md px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="full">Full Papers</option>
+                <option value="sub">Sub-Questions</option>
+              </select>
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 bg-gray-50">
@@ -3191,10 +3230,14 @@ export default function Marks() {
                     <div
                       key={doc.id}
                       onClick={() => {
-                        setLinkedDocId(doc.id);
+                        if (docLinkerTarget === 'main') {
+                          setLinkedDocId(doc.id);
+                        } else {
+                          updateSection(docLinkerTarget, 'linkedDocId', doc.id);
+                        }
                         setShowDocLinker(false);
                       }}
-                      className={`p-3 rounded-lg border cursor-pointer transition-all ${linkedDocId === doc.id ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500' : 'border-gray-200 bg-white hover:border-blue-300 hover:bg-gray-50'}`}
+                      className={`p-3 rounded-lg border cursor-pointer transition-all ${(docLinkerTarget === 'main' ? linkedDocId : sectionsConfig.find(s => s.id === docLinkerTarget)?.linkedDocId) === doc.id ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500' : 'border-gray-200 bg-white hover:border-blue-300 hover:bg-gray-50'}`}
                     >
                       <div className="font-bold text-gray-800 text-sm mb-1 truncate" title={doc.title}>{doc.title}</div>
                       <div className="flex items-center gap-2 text-xs text-gray-500">

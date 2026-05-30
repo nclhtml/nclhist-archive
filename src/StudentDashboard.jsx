@@ -4,10 +4,32 @@ import { db } from './firebase';
 import { useAuth } from './main.jsx';
 import { BookOpen, Edit, Trash2, Plus, Save, X, ExternalLink, Loader2, FileText, GripHorizontal } from 'lucide-react';
 
+// Paste it right here, outside the component:
+const getTermWeight = (term) => {
+    if (!term) return 0;
+    const t = term.toLowerCase();
+    let weight = 0;
+    if (t.includes('s6')) weight += 600;
+    else if (t.includes('s5')) weight += 500;
+    else if (t.includes('s4')) weight += 400;
+    else if (t.includes('s3')) weight += 300;
+    else if (t.includes('s2')) weight += 200;
+    else if (t.includes('s1')) weight += 100;
+
+    if (t.includes('term 3')) weight += 30;
+    else if (t.includes('term 2')) weight += 20;
+    else if (t.includes('term 1')) weight += 10;
+    else if (t.includes('mock')) weight += 25;
+
+    if (weight === 0) weight = 999;
+    return weight;
+};
+
 export default function StudentDashboard() {
     const { user } = useAuth();
     const [items, setItems] = useState([]);
     const [archives, setArchives] = useState([]);
+    const [linkableDocs, setLinkableDocs] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     // New States for Roles/Classes
     const [allItems, setAllItems] = useState([]);
@@ -33,7 +55,19 @@ export default function StudentDashboard() {
         try {
             // 1. Fetch Archives for linking
             const archSnap = await getDocs(collection(db, "archives"));
-            setArchives(archSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+            const fetchedArchives = archSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+            setArchives(fetchedArchives);
+
+            let lDocs = [];
+            fetchedArchives.forEach(a => {
+                // Add the full paper option
+                lDocs.push({ ...a, linkMode: 'full' });
+                // Add the sub-question options
+                a.subQuestions?.forEach(sq => {
+                    lDocs.push({ ...a, id: `${a.id}_${sq.id}`, title: `${a.title} Q${sq.label}`, linkMode: 'sub' });
+                });
+            });
+            setLinkableDocs(lDocs);
 
             // 2. Find the Student's Class based on their Email
             let loadedClasses = [];
@@ -81,34 +115,15 @@ export default function StudentDashboard() {
 
             let fetchedItems = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-            // Helper to weight terms for default sorting (Newest/Highest first)
-            const getTermWeight = (term) => {
-                if (!term) return 0;
-                const t = term.toLowerCase();
-                let weight = 0;
-                if (t.includes('s6')) weight += 600;
-                else if (t.includes('s5')) weight += 500;
-                else if (t.includes('s4')) weight += 400;
-                else if (t.includes('s3')) weight += 300;
-                else if (t.includes('s2')) weight += 200;
-                else if (t.includes('s1')) weight += 100;
-
-                if (t.includes('term 3')) weight += 30;
-                else if (t.includes('term 2')) weight += 20;
-                else if (t.includes('term 1')) weight += 10;
-                else if (t.includes('mock')) weight += 25;
-
-                // If no specific keywords, use a high default so new custom terms appear on top
-                if (weight === 0) weight = 999;
-
-                return weight;
-            };
-
             fetchedItems.sort((a, b) => {
-                // 1. Use manual drag-and-drop order if it exists
-                if (a.order !== undefined && b.order !== undefined) {
-                    return a.order - b.order;
+                // 1. Supreme Order: Use manual drag-and-drop order if it exists
+                const orderA = a.order !== undefined ? a.order : 999999;
+                const orderB = b.order !== undefined ? b.order : 999999;
+
+                if (orderA !== orderB) {
+                    return orderA - orderB;
                 }
+
                 // 2. Fallback to Term weight (descending)
                 const weightA = getTermWeight(a.term);
                 const weightB = getTermWeight(b.term);
@@ -192,7 +207,17 @@ export default function StudentDashboard() {
                     const matchIdx = newAll.findIndex(a => a.id === item.id);
                     if (matchIdx !== -1) newAll[matchIdx].order = idx;
                 });
-                return newAll.sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
+                return newAll.sort((a, b) => {
+                    const orderA = a.order !== undefined ? a.order : 999999;
+                    const orderB = b.order !== undefined ? b.order : 999999;
+                    if (orderA !== orderB) return orderA - orderB;
+
+                    // Keep fallback logic consistent in state
+                    const weightA = getTermWeight(a.term);
+                    const weightB = getTermWeight(b.term);
+                    if (weightA !== weightB) return weightB - weightA;
+                    return new Date(b.date) - new Date(a.date);
+                });
             });
         } catch (error) {
             console.error("Error saving order:", error);
@@ -339,7 +364,7 @@ export default function StudentDashboard() {
                                     }
                                 }
 
-                                const linkedDoc = archives.find(a => a.id === item.linkedDocId);
+                                const linkedDoc = linkableDocs.find(a => a.id === item.linkedDocId);
 
                                 // Calculate rowSpan for the Term column
                                 let showTerm = false;
@@ -382,8 +407,19 @@ export default function StudentDashboard() {
                                             {React.isValidElement(studentMark) ? studentMark : (studentMark !== '-' ? `${studentMark} / ${item.fullMark || 100}` : '-')}
                                         </td>
                                         <td className="p-4 text-center">
-                                            {linkedDoc ? (
-                                                <a href={linkedDoc.fileUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-2 py-1 rounded-md">
+                                            {item.sectionsConfig && item.sectionsConfig.some(sec => sec.linkedDocId) ? (
+                                                <div className="flex flex-col gap-2 items-center">
+                                                    {item.sectionsConfig.filter(sec => sec.linkedDocId).map(sec => {
+                                                        const lDoc = linkableDocs.find(a => a.id === sec.linkedDocId);
+                                                        return lDoc ? (
+                                                            <a key={sec.id} href={`/?search=${encodeURIComponent(lDoc.title)}&viewId=${lDoc.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-2 py-1 rounded-md border border-blue-100 shadow-sm">
+                                                                <FileText size={12} /> {sec.name}
+                                                            </a>
+                                                        ) : null;
+                                                    })}
+                                                </div>
+                                            ) : linkedDoc ? (
+                                                <a href={`/?search=${encodeURIComponent(linkedDoc.title)}&viewId=${linkedDoc.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-2 py-1 rounded-md border border-blue-100 shadow-sm">
                                                     <FileText size={14} /> View
                                                 </a>
                                             ) : (
@@ -464,7 +500,7 @@ export default function StudentDashboard() {
                                         className="w-full p-2 outline-none focus:border-blue-500 text-sm custom-scrollbar"
                                     >
                                         <option value="">-- No File Attached --</option>
-                                        {archives
+                                        {linkableDocs
                                             .filter(a => a.title.toLowerCase().includes(searchTerm.toLowerCase()) || a.year?.toString().includes(searchTerm))
                                             .map(a => <option key={a.id} value={a.id}>{a.year} - {a.title}</option>)
                                         }

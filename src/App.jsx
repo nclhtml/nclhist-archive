@@ -595,14 +595,47 @@ export default function AdvancedHistoryArchive() {
   useEffect(() => {
     // Check if we arrived from the PDF Tool tab with a file
     if (location.state && location.state.linkedFile) {
-
       // Trigger your existing modal logic
       handleLinkFromTool(location.state.linkedFile);
 
       // Clear the router state so it doesn't keep popping up if you refresh the page
       navigate('/', { replace: true, state: {} });
     }
+
+    // Check if we arrived with a search query in the URL (e.g. from Student Dashboard)
+    const params = new URLSearchParams(location.search);
+    const searchQ = params.get('search');
+    if (searchQ) {
+      setSearchTerm(searchQ);
+    }
   }, [location, navigate]);
+
+  // --- AUTO-OPEN PREVIEW FROM URL ---
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const viewId = params.get('viewId');
+
+    if (viewId && archives.length > 0) {
+      if (viewId.includes('_')) {
+        const [parentId, childId] = viewId.split('_');
+        const parentDoc = archives.find(a => a.id === parentId);
+        const childDoc = parentDoc?.subQuestions?.find(sq => sq.id.toString() === childId);
+        if (parentDoc && childDoc) {
+          setPreviewItem({ uniqueId: viewId, parent: parentDoc, child: childDoc, isFullPaper: false });
+        }
+      } else {
+        const parentDoc = archives.find(a => a.id === viewId);
+        if (parentDoc) {
+          setPreviewItem({ uniqueId: viewId, parent: parentDoc, isFullPaper: true, matchedChildrenCount: parentDoc.subQuestions?.length || 0 });
+        }
+      }
+
+      // Clean up the URL so it doesn't re-trigger if the user closes the modal
+      params.delete('viewId');
+      const newSearch = params.toString();
+      navigate(`${location.pathname}${newSearch ? `?${newSearch}` : ''}`, { replace: true });
+    }
+  }, [archives, location.search, navigate]);
 
   // --- FETCH SYSTEM SETTINGS (ROLES, TIERS, ACCESS) ---
   useEffect(() => {
@@ -936,24 +969,42 @@ export default function AdvancedHistoryArchive() {
   // --- FETCH STUDENT SAMPLES FOR PREVIEW ---
   useEffect(() => {
     const fetchSamples = async () => {
-      if (previewItem && !previewItem.isFullPaper) {
-        let exactTag = "";
-        let parentTag = "";
+      if (previewItem) {
+        let searchTags = [];
 
-        if (previewItem.parent.paperType === "Paper 2 (Essay)") {
-          exactTag = `${previewItem.parent.title} Q${previewItem.child.label}`;
-          parentTag = `${previewItem.parent.title} Q${previewItem.child.label.replace(/[a-z]/gi, '')}`;
-        } else if (previewItem.parent.paperType === "Paper 1 (DBQ)") {
-          exactTag = `${previewItem.parent.title} Q1${previewItem.child.label}`;
-          parentTag = `${previewItem.parent.title} Q1`;
+        if (!previewItem.isFullPaper) {
+          let exactTag = "";
+          let parentTag = "";
+
+          if (previewItem.parent.paperType === "Paper 2 (Essay)") {
+            exactTag = `${previewItem.parent.title} Q${previewItem.child.label}`;
+            parentTag = `${previewItem.parent.title} Q${previewItem.child.label.replace(/[a-z]/gi, '')}`;
+          } else if (previewItem.parent.paperType === "Paper 1 (DBQ)") {
+            exactTag = `${previewItem.parent.title} Q1${previewItem.child.label}`;
+            parentTag = `${previewItem.parent.title} Q1`;
+          }
+
+          const titleTag = previewItem.parent.title;
+          const titleWithChildTag = `${previewItem.parent.title}${previewItem.child.label}`;
+
+          searchTags = [exactTag, parentTag, titleTag, titleWithChildTag];
+        } else {
+          // For full paper, search by parent title and main question tags
+          searchTags = [previewItem.parent.title];
+          if (previewItem.parent.paperType === "Paper 1 (DBQ)") {
+            searchTags.push(`${previewItem.parent.title} Q1`);
+          }
+          // Add up to 8 subquestion exact tags to stay under Firebase's 10 limit
+          (previewItem.parent.subQuestions || []).slice(0, 8).forEach(sq => {
+            if (previewItem.parent.paperType === "Paper 2 (Essay)") {
+              searchTags.push(`${previewItem.parent.title} Q${sq.label}`);
+            } else {
+              searchTags.push(`${previewItem.parent.title} Q1${sq.label}`);
+            }
+          });
         }
 
-        // Add fallbacks in case the user named the document "2025D Q1" directly
-        const titleTag = previewItem.parent.title;
-        const titleWithChildTag = `${previewItem.parent.title}${previewItem.child.label}`; // e.g. "2025D Q1a"
-
         try {
-          const searchTags = [exactTag, parentTag, titleTag, titleWithChildTag];
           const q = query(collection(db, "student_samples"), where("questionTags", "array-contains-any", searchTags));
           const snap = await getDocs(q);
           setPreviewSamples(snap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -1011,7 +1062,7 @@ export default function AdvancedHistoryArchive() {
       const parentTierStr = parent.tier || '10';
       const parentTierNum = parseInt(parentTierStr, 10) || 10;
 
-// --- TIER ACCESS CHECK (Cumulative & DSE Only) ---
+      // --- TIER ACCESS CHECK (Cumulative & DSE Only) ---
       if (!user.isAdmin) {
         if (isDseOnly) {
           // DSE Only role bypasses tiers but can ONLY see DSE Pastpapers
@@ -2968,7 +3019,7 @@ export default function AdvancedHistoryArchive() {
                                   </span>
                                 )}
                               </div>
-                              <div className={`leading-relaxed whitespace-pre-wrap mb-3 ${previewItem.parent.paperType === "Paper 2 (Essay)" && !previewItem.parent.hasFile ? 'text-4xl md:text-5xl font-medium text-slate-800 py-4' : 'text-sm text-slate-700'}`}>
+                              <div className={`leading-relaxed mb-3 ${previewItem.parent.paperType === "Paper 2 (Essay)" && !previewItem.parent.hasFile ? 'text-4xl md:text-5xl font-medium text-slate-800 py-4' : 'text-sm text-slate-700'}`}>
                                 {sq.content || <span className="text-slate-400 italic text-sm">No text content available.</span>}
                               </div>
                               <div className="flex flex-wrap gap-1.5">
@@ -2997,7 +3048,7 @@ export default function AdvancedHistoryArchive() {
                           <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
                             <FileText size={14} /> Question Content
                           </h3>
-                          <div className={`leading-relaxed whitespace-pre-wrap bg-white p-4 rounded-lg border border-slate-200 shadow-sm ${previewItem.parent.paperType === "Paper 2 (Essay)" && !previewItem.parent.hasFile ? 'text-4xl md:text-5xl font-medium text-slate-900 p-8' : 'text-sm text-slate-800'}`}>
+                          <div className={`leading-relaxed bg-white p-4 rounded-lg border border-slate-200 shadow-sm ${previewItem.parent.paperType === "Paper 2 (Essay)" && !previewItem.parent.hasFile ? 'text-4xl md:text-5xl font-medium text-slate-900 p-8' : 'text-sm text-slate-800'}`}>
                             {previewItem.child.content || <span className="text-slate-400 italic text-sm">No text content available. Please refer to the PDF.</span>}
                           </div>
 
@@ -3042,124 +3093,148 @@ export default function AdvancedHistoryArchive() {
                     </div>
 
                     {/* STUDENT SAMPLES SECTION (Bottom Left) */}
-                    {!previewItem.isFullPaper && previewSamples.length > 0 && (
-                      <div className="p-4 border-t border-slate-200 bg-white shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-10 flex flex-col">
-                        <div className="flex justify-between items-center mb-3">
-                          <button
-                            onClick={() => setShowStudentSamples(!showStudentSamples)}
-                            className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2 hover:text-indigo-600 transition-colors"
-                          >
-                            <GraduationCap size={14} /> Student Samples ({previewSamples.length})
-                            <ChevronDown size={14} className={`transition-transform ${showStudentSamples ? 'rotate-180' : ''}`} />
-                          </button>
+                    <div className="p-4 border-t border-slate-200 bg-white shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-10 flex flex-col">
+                      <button
+                        onClick={() => setShowStudentSamples(!showStudentSamples)}
+                        className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2 hover:text-indigo-600 transition-colors"
+                      >
+                        <GraduationCap size={14} /> Student Samples ({previewSamples.length})
+                        <ChevronDown size={14} className={`transition-transform ${showStudentSamples ? 'rotate-180' : ''}`} />
+                      </button>
 
-                          {showStudentSamples && (
-                            <select
-                              value={sampleSortOption}
-                              onChange={(e) => setSampleSortOption(e.target.value)}
-                              className="text-xs border border-slate-200 rounded p-1 outline-none focus:border-indigo-500"
-                            >
-                              <option value="mark_desc">Mark (High to Low)</option>
-                              <option value="lang_en_ch">Language (EN to CH)</option>
-                              <option value="both">Both (Lang then Mark)</option>
-                            </select>
-                          )}
-                        </div>
+                      {showStudentSamples && (
+                        <select
+                          value={sampleSortOption}
+                          onChange={(e) => setSampleSortOption(e.target.value)}
+                          className="text-xs border border-slate-200 rounded p-1 outline-none focus:border-indigo-500"
+                        >
+                          <option value="mark_desc">Mark (High to Low)</option>
+                          <option value="lang_en_ch">Language (EN to CH)</option>
+                          <option value="both">Both (Lang then Mark)</option>
+                        </select>
+                      )}
+                    </div>
 
-                        <AnimatePresence>
-                          {showStudentSamples && (
-                            <motion.div
-                              initial={{ height: 0, opacity: 0 }}
-                              animate={{ height: 'auto', opacity: 1 }}
-                              exit={{ height: 0, opacity: 0 }}
-                              className="space-y-2 max-h-[36rem] overflow-y-auto custom-scrollbar pr-1"
-                            >
-                              {previewSamples.sort((a, b) => {
-                                // Helper to get marks for sorting
-                                const getMark = (sample) => {
-                                  const tags = [
-                                    previewItem.parent.paperType === "Paper 2 (Essay)" ? `${previewItem.parent.title} Q${previewItem.child.label}` : `${previewItem.parent.title} Q1${previewItem.child.label}`,
-                                    previewItem.parent.paperType === "Paper 2 (Essay)" ? `${previewItem.parent.title} Q${previewItem.child.label.replace(/[a-z]/gi, '')}` : `${previewItem.parent.title} Q1`,
-                                    previewItem.parent.title,
-                                    `${previewItem.parent.title}${previewItem.child.label}`
-                                  ];
-                                  for (let t of tags) {
-                                    if (sample.scoresData[t]?.mark) return parseFloat(sample.scoresData[t].mark) || 0;
+                    <AnimatePresence>
+                      {showStudentSamples && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          className="space-y-2 max-h-[36rem] overflow-y-auto custom-scrollbar pr-1"
+                        >
+                          {previewSamples.length === 0 ? (
+                            <div className="text-sm text-slate-500 italic p-4 text-center border border-slate-200 rounded-lg bg-slate-50">
+                              There is currently no sample available.
+                            </div>
+                          ) : previewSamples.sort((a, b) => {
+                            // Helper to get marks for sorting
+                            const getMark = (sample) => {
+                              if (previewItem.isFullPaper) {
+                                let maxMark = 0;
+                                Object.keys(sample.scoresData || {}).forEach(tag => {
+                                  if (tag.startsWith(previewItem.parent.title)) {
+                                    const m = parseFloat(sample.scoresData[tag].mark) || 0;
+                                    if (m > maxMark) maxMark = m;
                                   }
-                                  return 0;
-                                };
-
-                                const markA = getMark(a);
-                                const markB = getMark(b);
-                                const langA = a.language || '';
-                                const langB = b.language || '';
-
-                                if (sampleSortOption === 'mark_desc') return markB - markA;
-                                if (sampleSortOption === 'lang_en_ch') return langA.localeCompare(langB);
-                                if (sampleSortOption === 'both') {
-                                  if (langA !== langB) return langA.localeCompare(langB);
-                                  return markB - markA;
+                                });
+                                return maxMark;
+                              } else {
+                                const tags = [
+                                  previewItem.parent.paperType === "Paper 2 (Essay)" ? `${previewItem.parent.title} Q${previewItem.child.label}` : `${previewItem.parent.title} Q1${previewItem.child.label}`,
+                                  previewItem.parent.paperType === "Paper 2 (Essay)" ? `${previewItem.parent.title} Q${previewItem.child.label.replace(/[a-z]/gi, '')}` : `${previewItem.parent.title} Q1`,
+                                  previewItem.parent.title,
+                                  `${previewItem.parent.title}${previewItem.child.label}`
+                                ];
+                                for (let t of tags) {
+                                  if (sample.scoresData[t]?.mark) return parseFloat(sample.scoresData[t].mark) || 0;
                                 }
                                 return 0;
-                              }).map(sample => {
-                                const exactTag = previewItem.parent.paperType === "Paper 2 (Essay)"
-                                  ? `${previewItem.parent.title} Q${previewItem.child.label}`
-                                  : `${previewItem.parent.title} Q1${previewItem.child.label}`;
-                                const parentTag = previewItem.parent.paperType === "Paper 2 (Essay)"
-                                  ? `${previewItem.parent.title} Q${previewItem.child.label.replace(/[a-z]/gi, '')}`
-                                  : `${previewItem.parent.title} Q1`;
+                              }
+                            };
 
-                                const titleTag = previewItem.parent.title;
-                                const titleWithChildTag = `${previewItem.parent.title}${previewItem.child.label}`;
+                            const markA = getMark(a);
+                            const markB = getMark(b);
+                            const langA = a.language || '';
+                            const langB = b.language || '';
 
-                                // Check all possible tag combinations
-                                const scoreData = sample.scoresData[exactTag] ||
-                                  sample.scoresData[parentTag] ||
-                                  sample.scoresData[titleTag] ||
-                                  sample.scoresData[titleWithChildTag];
+                            if (sampleSortOption === 'mark_desc') return markB - markA;
+                            if (sampleSortOption === 'lang_en_ch') return langA.localeCompare(langB);
+                            if (sampleSortOption === 'both') {
+                              if (langA !== langB) return langA.localeCompare(langB);
+                              return markB - markA;
+                            }
+                            return 0;
+                          }).map(sample => {
+                            let scoreData = null;
+                            let displayTag = "";
 
-                                // If we still don't have scoreData, skip rendering this sample
-                                if (!scoreData) return null;
+                            if (previewItem.isFullPaper) {
+                              // Find the best matching score data for the full paper
+                              const matchingTag = Object.keys(sample.scoresData || {}).find(tag => tag.startsWith(previewItem.parent.title));
+                              if (matchingTag) {
+                                scoreData = sample.scoresData[matchingTag];
+                                displayTag = matchingTag;
+                              }
+                            } else {
+                              const exactTag = previewItem.parent.paperType === "Paper 2 (Essay)"
+                                ? `${previewItem.parent.title} Q${previewItem.child.label}`
+                                : `${previewItem.parent.title} Q1${previewItem.child.label}`;
+                              const parentTag = previewItem.parent.paperType === "Paper 2 (Essay)"
+                                ? `${previewItem.parent.title} Q${previewItem.child.label.replace(/[a-z]/gi, '')}`
+                                : `${previewItem.parent.title} Q1`;
 
-                                return (
-                                  <div key={sample.id} className={`p-3 border rounded-lg transition-colors ${activeSample?.id === sample.id ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-slate-200 hover:border-indigo-300'}`}>
-                                    <div className="flex justify-between items-start mb-2">
-                                      <div className="text-xs font-medium text-slate-700">
-                                        <span className="font-bold text-slate-900">[{sample.language}]</span> Overall grade: <span className="font-bold text-indigo-600">{sample.overallGrade}</span>
-                                      </div>
-                                    </div>
-                                    <div className="flex justify-between items-end">
-                                      <div className="flex flex-col gap-1">
-                                        <div className="text-xs text-slate-600">
-                                          Mark (this question): <span className="font-bold text-slate-900">{scoreData?.mark}</span>
-                                        </div>
-                                        {scoreData?.subMarks && Object.keys(scoreData.subMarks).length > 0 && (
-                                          <div className="flex flex-wrap gap-1 mt-1">
-                                            {Object.entries(scoreData.subMarks)
-                                              .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
-                                              .map(([subQ, sMark]) => (
-                                                <span key={subQ} className="text-[10px] bg-white border border-slate-200 px-1.5 py-0.5 rounded text-slate-500">
-                                                  Q{subQ}: <span className="font-bold text-slate-700">{sMark}</span>
-                                                </span>
-                                              ))}
-                                          </div>
-                                        )}
-                                      </div>
-                                      <button
-                                        onClick={() => setActiveSample({ ...sample, currentFileUrl: scoreData.fileUrl })}
-                                        className={`text-xs font-bold px-3 py-1.5 rounded-md transition-colors h-fit ${activeSample?.id === sample.id ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'}`}
-                                      >
-                                        View Sample
-                                      </button>
-                                    </div>
+                              const titleTag = previewItem.parent.title;
+                              const titleWithChildTag = `${previewItem.parent.title}${previewItem.child.label}`;
+
+                              // Check all possible tag combinations
+                              scoreData = sample.scoresData[exactTag] ||
+                                sample.scoresData[parentTag] ||
+                                sample.scoresData[titleTag] ||
+                                sample.scoresData[titleWithChildTag];
+                            }
+
+                            // If we still don't have scoreData, skip rendering this sample
+                            if (!scoreData) return null;
+
+                            return (
+                              <div key={sample.id} className={`p-3 border rounded-lg transition-colors ${activeSample?.id === sample.id ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-slate-200 hover:border-indigo-300'}`}>
+                                <div className="flex justify-between items-start mb-2">
+                                  <div className="text-xs font-medium text-slate-700">
+                                    <span className="font-bold text-slate-900">[{sample.language}]</span> Overall grade: <span className="font-bold text-indigo-600">{sample.overallGrade}</span>
                                   </div>
-                                );
-                              })}
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
-                      </div>
-                    )}
+                                </div>
+                                <div className="flex justify-between items-end">
+                                  <div className="flex flex-col gap-1">
+                                    <div className="text-xs text-slate-600">
+                                      {previewItem.isFullPaper ? `Mark (${displayTag}): ` : `Mark (this question): `}
+                                      <span className="font-bold text-slate-900">{scoreData?.mark}</span>
+                                    </div>
+                                    {scoreData?.subMarks && Object.keys(scoreData.subMarks).length > 0 && (
+                                      <div className="flex flex-wrap gap-1 mt-1">
+                                        {Object.entries(scoreData.subMarks)
+                                          .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+                                          .map(([subQ, sMark]) => (
+                                            <span key={subQ} className="text-[10px] bg-white border border-slate-200 px-1.5 py-0.5 rounded text-slate-500">
+                                              Q{subQ}: <span className="font-bold text-slate-700">{sMark}</span>
+                                            </span>
+                                          ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <button
+                                    onClick={() => setActiveSample({ ...sample, currentFileUrl: scoreData.fileUrl })}
+                                    className={`text-xs font-bold px-3 py-1.5 rounded-md transition-colors h-fit ${activeSample?.id === sample.id ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'}`}
+                                  >
+                                    View Sample
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
                 )}
 
@@ -3181,11 +3256,12 @@ export default function AdvancedHistoryArchive() {
               </div>
             </motion.div>
           </div>
-        )}
-      </AnimatePresence>
+        )
+        }
+      </AnimatePresence >
 
       {/* --- UPLOAD / EDIT MODAL --- */}
-      <AnimatePresence>
+      < AnimatePresence >
         {isUploadModalOpen && user?.isAdmin && (
           <div
             className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 sm:p-6"

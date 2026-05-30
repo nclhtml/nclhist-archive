@@ -1,24 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import { AlertTriangle, Users, BookX, CheckCircle, Save, Upload, Plus, Trash2, Archive, Calendar, Loader2, MinusCircle, History, X } from 'lucide-react';
 import { collection, getDocs, doc, writeBatch, updateDoc, setDoc, getDoc, query, where, deleteDoc } from 'firebase/firestore';
-import { db } from './firebase'; 
+import { db } from './firebase';
 
 export default function Record() {
   // Navigation
-  const [activeTab, setActiveTab] = useState('records'); 
+  const [activeTab, setActiveTab] = useState('records');
   const [isLoading, setIsLoading] = useState(true);
-  
+
   // Data State
-  const [classes, setClasses] = useState([]); 
+  const [classes, setClasses] = useState([]);
   const [students, setStudents] = useState([]);
-  
+  const [availableEmails, setAvailableEmails] = useState([]);
+
   // Form State
   const [selectedClass, setSelectedClass] = useState('');
   const [newClassName, setNewClassName] = useState('');
   const [bulkInput, setBulkInput] = useState('');
   const [forgetInput, setForgetInput] = useState('');
   const [recordDate, setRecordDate] = useState(new Date().toISOString().split('T')[0]);
-  
+
   // Cancel Form State
   const [cancelInput, setCancelInput] = useState('');
   const [cancelDate, setCancelDate] = useState(new Date().toISOString().split('T')[0]);
@@ -38,7 +39,7 @@ export default function Record() {
         // Fetch classes list from a settings document
         const classDocRef = doc(db, "settings", "classes");
         const classDocSnap = await getDoc(classDocRef);
-        
+
         let loadedClasses = [];
         if (classDocSnap.exists()) {
           loadedClasses = classDocSnap.data().list || [];
@@ -52,6 +53,11 @@ export default function Record() {
         const querySnapshot = await getDocs(collection(db, "students"));
         const studentsList = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         setStudents(studentsList);
+
+        // Fetch authorized emails from user_roles for auto-suggestion
+        const rolesSnap = await getDocs(collection(db, "user_roles"));
+        const rolesList = rolesSnap.docs.map(d => d.id);
+        setAvailableEmails(rolesList);
 
         // Check for pending orange sheets on load
         const pendingNotifications = [];
@@ -75,7 +81,7 @@ export default function Record() {
       }
       setIsLoading(false);
     };
-    
+
     fetchData();
   }, []);
 
@@ -91,29 +97,29 @@ export default function Record() {
 
     for (const line of lines) {
       if (!line.trim()) continue;
-      
+
       let classNumber = '';
       let englishName = '';
       let chineseName = '';
+      let email = '';
 
       // Split by tabs and remove any empty parts caused by multiple tabs
       const parts = line.split('\t').map(p => p.trim()).filter(p => p !== '');
-      
+
       if (parts.length >= 4 && /^\d+$/.test(parts[1])) {
-        // Handle case where Class and Number are in separate columns (e.g., "5C \t 15 \t LEE HUI CHING \t 李栩晴")
-        // Combine parts[0] and parts[1] to get "5C15"
         classNumber = parts[0] + parts[1];
         englishName = parts[2];
         chineseName = parts[3];
+        email = parts[4] || ''; // Optional 5th column for email
       } else if (parts.length >= 3) {
-        // Standard 3-column format (e.g., "5C15 \t LEE HUI CHING \t 李栩晴")
         classNumber = parts[0];
         englishName = parts[1];
         chineseName = parts[2];
+        email = parts[3] || ''; // Optional 4th column for email
       } else {
         // Fallback to regex if spaces are used instead of tabs
         const cleanLine = line.trim();
-        
+
         // First try to match 4 parts separated by spaces: [Class] [Number] [English] [Chinese]
         const match4 = cleanLine.match(/^([A-Za-z0-9]+)\s+(\d+)\s+(.+?)\s+([^\x00-\x7F]+)$/);
         if (match4) {
@@ -137,10 +143,11 @@ export default function Record() {
           classNumber: classNumber,
           englishName: englishName,
           chineseName: chineseName || '',
+          email: email.toLowerCase(),
           recordCount: 0,
           orangeSheets: 0,
-          history: [], 
-          pastTerms: [] 
+          history: [],
+          pastTerms: []
         });
       }
     }
@@ -153,13 +160,13 @@ export default function Record() {
     try {
       const batch = writeBatch(db);
       const addedStudents = [];
-      
+
       newStudents.forEach((student) => {
         const docRef = doc(collection(db, "students"));
         batch.set(docRef, student);
         addedStudents.push({ id: docRef.id, ...student });
       });
-      
+
       await batch.commit();
       setStudents([...students, ...addedStudents]);
       setBulkInput('');
@@ -180,7 +187,7 @@ export default function Record() {
       try {
         const updatedClasses = [...classes, className].sort((a, b) => a.localeCompare(b));
         await setDoc(doc(db, "settings", "classes"), { list: updatedClasses }, { merge: true });
-        
+
         setClasses(updatedClasses);
         setSelectedClass(className);
         setNewClassName('');
@@ -199,7 +206,7 @@ export default function Record() {
       onConfirm: async () => {
         try {
           const batch = writeBatch(db);
-          
+
           const q = query(collection(db, "students"), where("className", "==", selectedClass));
           const querySnapshot = await getDocs(q);
           querySnapshot.forEach((document) => {
@@ -236,7 +243,7 @@ export default function Record() {
           await deleteDoc(doc(db, "students", student.id));
           setStudents(students.filter(s => s.id !== student.id));
           setConfirmDialog({ isOpen: false });
-          
+
           // Close modal if the deleted student was currently being viewed
           if (selectedStudent?.id === student.id) {
             setSelectedStudent(null);
@@ -250,12 +257,23 @@ export default function Record() {
     });
   };
 
+  const handleUpdateEmail = async (studentId, newEmail) => {
+    try {
+      const formattedEmail = newEmail.toLowerCase().trim();
+      await updateDoc(doc(db, "students", studentId), { email: formattedEmail });
+      setStudents(students.map(s => s.id === studentId ? { ...s, email: formattedEmail } : s));
+      setSelectedStudent(prev => ({ ...prev, email: formattedEmail }));
+    } catch (error) {
+      console.error("Error updating email:", error);
+    }
+  };
+
   // ============================================================================
   // 4. RECORD FORGETS & TRIGGER NOTIFICATIONS
   // ============================================================================
   const handleRecordForgets = async (e) => {
     e.preventDefault();
-    
+
     const numbersToRecord = forgetInput.split(/[,\s]+/).filter(n => n.trim() !== '');
     let updatedStudents = [...students];
     let newNotifications = [...notifications];
@@ -266,16 +284,16 @@ export default function Record() {
 
       for (let num of numbersToRecord) {
         const studentIndex = updatedStudents.findIndex(s => s.className === selectedClass && s.classNumber === num);
-        
+
         if (studentIndex !== -1) {
           foundCount++;
           let student = { ...updatedStudents[studentIndex] };
-          
+
           student.recordCount = (student.recordCount || 0) + 1;
-          
+
           if (!student.history) student.history = [];
           student.history.push({ date: recordDate });
-          
+
           const requiredOrangeSheets = Math.floor(student.recordCount / 2);
           if (requiredOrangeSheets > (student.orangeSheets || 0)) {
             if (!newNotifications.find(n => n.studentId === student.id)) {
@@ -292,7 +310,7 @@ export default function Record() {
           updatedStudents[studentIndex] = student;
 
           const studentRef = doc(db, "students", student.id);
-          batch.update(studentRef, { 
+          batch.update(studentRef, {
             recordCount: student.recordCount,
             history: student.history
           });
@@ -319,7 +337,7 @@ export default function Record() {
   // ============================================================================
   const handleCancelRecords = async (e) => {
     e.preventDefault();
-    
+
     const numbersToCancel = cancelInput.split(/[,\s]+/).filter(n => n.trim() !== '');
     let updatedStudents = [...students];
     let foundCount = 0;
@@ -329,21 +347,21 @@ export default function Record() {
 
       for (let num of numbersToCancel) {
         const studentIndex = updatedStudents.findIndex(s => s.className === selectedClass && s.classNumber === num);
-        
+
         if (studentIndex !== -1) {
           let student = { ...updatedStudents[studentIndex] };
-          
+
           const historyIndex = (student.history || []).findIndex(h => h.date === cancelDate);
-          
+
           if (historyIndex !== -1) {
             foundCount++;
             student.history.splice(historyIndex, 1);
             student.recordCount = Math.max(0, (student.recordCount || 0) - 1);
-            
+
             updatedStudents[studentIndex] = student;
 
             const studentRef = doc(db, "students", student.id);
-            batch.update(studentRef, { 
+            batch.update(studentRef, {
               recordCount: student.recordCount,
               history: student.history
             });
@@ -372,22 +390,22 @@ export default function Record() {
     try {
       let updatedStudents = [...students];
       const studentIndex = updatedStudents.findIndex(s => s.id === studentId);
-      
+
       if (studentIndex !== -1) {
         let student = { ...updatedStudents[studentIndex] };
-        
+
         student.history.splice(historyIndex, 1);
         student.recordCount = Math.max(0, (student.recordCount || 0) - 1);
-        
+
         const studentRef = doc(db, "students", studentId);
-        await updateDoc(studentRef, { 
+        await updateDoc(studentRef, {
           recordCount: student.recordCount,
           history: student.history
         });
 
         updatedStudents[studentIndex] = student;
         setStudents(updatedStudents);
-        setSelectedStudent(student); 
+        setSelectedStudent(student);
       }
     } catch (error) {
       console.error("Error deleting record:", error);
@@ -399,11 +417,11 @@ export default function Record() {
     try {
       let updatedStudents = [...students];
       const studentIndex = updatedStudents.findIndex(s => s.id === studentId);
-      
+
       if (studentIndex !== -1) {
         let student = { ...updatedStudents[studentIndex] };
-        student.orangeSheets = (student.orangeSheets || 0) + 1; 
-        
+        student.orangeSheets = (student.orangeSheets || 0) + 1;
+
         const studentRef = doc(db, "students", studentId);
         await updateDoc(studentRef, { orangeSheets: student.orangeSheets });
 
@@ -428,7 +446,7 @@ export default function Record() {
       onConfirm: async () => {
         try {
           const batch = writeBatch(db);
-          
+
           const updatedStudents = students.map(student => {
             const updatedStudent = {
               ...student,
@@ -459,7 +477,7 @@ export default function Record() {
 
           await batch.commit();
           setStudents(updatedStudents);
-          setNotifications([]); 
+          setNotifications([]);
           setConfirmDialog({ isOpen: false });
           alert("Term split successfully. All records have been archived and reset.");
         } catch (error) {
@@ -484,7 +502,7 @@ export default function Record() {
 
   return (
     <div className="max-w-6xl mx-auto p-6 bg-gray-50 min-h-screen font-sans relative">
-      
+
       {/* Custom Confirmation Modal */}
       {confirmDialog.isOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -492,13 +510,13 @@ export default function Record() {
             <h3 className="text-xl font-bold text-gray-900 mb-2">{confirmDialog.title}</h3>
             <p className="text-gray-600 mb-6">{confirmDialog.message}</p>
             <div className="flex justify-end space-x-3">
-              <button 
+              <button
                 onClick={() => setConfirmDialog({ isOpen: false })}
                 className="px-4 py-2 text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
               >
                 Cancel
               </button>
-              <button 
+              <button
                 onClick={confirmDialog.onConfirm}
                 className="px-4 py-2 text-white bg-red-600 hover:bg-red-700 rounded-md transition-colors"
               >
@@ -519,12 +537,24 @@ export default function Record() {
                   {selectedStudent.className} - No. {selectedStudent.classNumber}
                 </h3>
                 <p className="text-gray-600">{selectedStudent.englishName} {selectedStudent.chineseName}</p>
+                <div className="mt-2">
+                  <select
+                    value={selectedStudent.email || ''}
+                    onChange={(e) => handleUpdateEmail(selectedStudent.id, e.target.value)}
+                    className="border border-gray-300 rounded p-1 text-sm outline-none focus:border-blue-500 w-64"
+                  >
+                    <option value="">-- Select Email for Login --</option>
+                    {availableEmails.map(email => (
+                      <option key={email} value={email}>{email}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
               <button onClick={() => setSelectedStudent(null)} className="text-gray-400 hover:text-gray-600">
                 <X className="w-6 h-6" />
               </button>
             </div>
-            
+
             <div className="p-6 overflow-y-auto flex-1">
               <div className="flex items-center justify-between mb-6 bg-gray-50 p-4 rounded-lg border border-gray-200">
                 <div className="flex items-center">
@@ -545,7 +575,7 @@ export default function Record() {
                         <Calendar className="w-4 h-4 text-gray-400 mr-2" />
                         <span className="text-gray-700 font-medium">{record.date}</span>
                       </div>
-                      <button 
+                      <button
                         onClick={() => handleDeleteSingleRecord(selectedStudent.id, index)}
                         className="text-red-500 hover:text-red-700 hover:bg-red-50 p-1.5 rounded transition-colors flex items-center text-sm"
                         title="Delete this record"
@@ -557,15 +587,15 @@ export default function Record() {
                 </ul>
               )}
             </div>
-            
+
             <div className="p-4 border-t border-gray-200 bg-gray-50 rounded-b-lg flex justify-between items-center">
-              <button 
+              <button
                 onClick={(e) => handleDeleteStudent(selectedStudent, e)}
                 className="px-4 py-2 text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors flex items-center"
               >
                 <Trash2 className="w-4 h-4 mr-2" /> Delete Student
               </button>
-              <button 
+              <button
                 onClick={() => setSelectedStudent(null)}
                 className="px-4 py-2 bg-gray-800 text-white rounded-md hover:bg-gray-700 transition-colors"
               >
@@ -582,21 +612,21 @@ export default function Record() {
 
       {/* Navigation Tabs */}
       <div className="flex space-x-4 mb-6 border-b border-gray-200 pb-2 overflow-x-auto">
-        <button 
+        <button
           onClick={() => setActiveTab('records')}
           className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${activeTab === 'records' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-200'}`}
         >
           <BookX className="w-5 h-5 mr-2" />
           Record Forgets
         </button>
-        <button 
+        <button
           onClick={() => setActiveTab('cancel')}
           className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${activeTab === 'cancel' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-200'}`}
         >
           <MinusCircle className="w-5 h-5 mr-2" />
           Cancel Records
         </button>
-        <button 
+        <button
           onClick={() => setActiveTab('manage')}
           className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${activeTab === 'manage' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-200'}`}
         >
@@ -621,7 +651,7 @@ export default function Record() {
                   </p>
                   <p className="text-sm text-gray-600">Reached {notif.recordCount} records.</p>
                 </div>
-                <button 
+                <button
                   onClick={() => handleConfirmOrangeSheet(notif.studentId)}
                   className="flex items-center px-3 py-1.5 bg-orange-500 text-white text-sm font-medium rounded hover:bg-orange-600 transition-colors"
                 >
@@ -641,12 +671,12 @@ export default function Record() {
             <BookX className="w-6 h-6 mr-2 text-red-500" />
             Input Missing Items
           </h2>
-          
+
           <form onSubmit={handleRecordForgets} className="space-y-6">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">1. Select Class</label>
-              <select 
-                value={selectedClass} 
+              <select
+                value={selectedClass}
                 onChange={(e) => setSelectedClass(e.target.value)}
                 className="w-full border border-gray-300 rounded-md p-3 focus:ring-2 focus:ring-blue-500 outline-none text-lg"
                 disabled={classes.length === 0}
@@ -662,8 +692,8 @@ export default function Record() {
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                   <Calendar className="h-5 w-5 text-gray-400" />
                 </div>
-                <input 
-                  type="date" 
+                <input
+                  type="date"
                   value={recordDate}
                   onChange={(e) => setRecordDate(e.target.value)}
                   className="w-full border border-gray-300 rounded-md pl-10 p-3 focus:ring-2 focus:ring-blue-500 outline-none text-lg"
@@ -677,7 +707,7 @@ export default function Record() {
                 3. Enter Class Numbers
                 <span className="block text-xs text-gray-500 font-normal mt-1">Separate numbers with commas or spaces (e.g., 1, 5, 12, 5A1)</span>
               </label>
-              <textarea 
+              <textarea
                 value={forgetInput}
                 onChange={(e) => setForgetInput(e.target.value)}
                 rows="4"
@@ -688,8 +718,8 @@ export default function Record() {
               />
             </div>
 
-            <button 
-              type="submit" 
+            <button
+              type="submit"
               disabled={classes.length === 0}
               className="w-full flex items-center justify-center bg-red-600 text-white p-3 rounded-md hover:bg-red-700 transition-colors text-lg font-medium disabled:opacity-50"
             >
@@ -706,12 +736,12 @@ export default function Record() {
             <MinusCircle className="w-6 h-6 mr-2 text-green-600" />
             Cancel Previous Records
           </h2>
-          
+
           <form onSubmit={handleCancelRecords} className="space-y-6">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">1. Select Class</label>
-              <select 
-                value={selectedClass} 
+              <select
+                value={selectedClass}
                 onChange={(e) => setSelectedClass(e.target.value)}
                 className="w-full border border-gray-300 rounded-md p-3 focus:ring-2 focus:ring-blue-500 outline-none text-lg"
                 disabled={classes.length === 0}
@@ -727,8 +757,8 @@ export default function Record() {
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                   <Calendar className="h-5 w-5 text-gray-400" />
                 </div>
-                <input 
-                  type="date" 
+                <input
+                  type="date"
                   value={cancelDate}
                   onChange={(e) => setCancelDate(e.target.value)}
                   className="w-full border border-gray-300 rounded-md pl-10 p-3 focus:ring-2 focus:ring-blue-500 outline-none text-lg"
@@ -742,7 +772,7 @@ export default function Record() {
                 3. Enter Class Numbers
                 <span className="block text-xs text-gray-500 font-normal mt-1">Separate numbers with commas or spaces (e.g., 1, 5, 12, 5A1)</span>
               </label>
-              <textarea 
+              <textarea
                 value={cancelInput}
                 onChange={(e) => setCancelInput(e.target.value)}
                 rows="4"
@@ -753,8 +783,8 @@ export default function Record() {
               />
             </div>
 
-            <button 
-              type="submit" 
+            <button
+              type="submit"
               disabled={classes.length === 0}
               className="w-full flex items-center justify-center bg-green-600 text-white p-3 rounded-md hover:bg-green-700 transition-colors text-lg font-medium disabled:opacity-50"
             >
@@ -767,14 +797,14 @@ export default function Record() {
       {/* TAB 3: Manage Classes & Bulk Import */}
       {activeTab === 'manage' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          
+
           {/* Left Column: Controls & Bulk Import */}
           <div className="lg:col-span-1 space-y-6">
-            
+
             {/* Global Actions */}
             <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
               <h2 className="text-lg font-semibold mb-4 text-gray-800">Global Actions</h2>
-              <button 
+              <button
                 onClick={handleSplitTerm}
                 className="w-full flex items-center justify-center bg-purple-600 text-white p-2 rounded-md hover:bg-purple-700 transition-colors"
               >
@@ -786,17 +816,17 @@ export default function Record() {
             {/* Class Selector & Creator */}
             <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
               <h2 className="text-lg font-semibold mb-4 text-gray-800">Select or Add Class</h2>
-              
+
               <div className="flex space-x-2 mb-4">
-                <select 
-                  value={selectedClass} 
+                <select
+                  value={selectedClass}
                   onChange={(e) => setSelectedClass(e.target.value)}
                   className="flex-1 border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-blue-500 outline-none"
                 >
                   {classes.length === 0 && <option value="">No classes...</option>}
                   {classes.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
-                <button 
+                <button
                   onClick={handleDeleteClass}
                   disabled={!selectedClass}
                   className="bg-red-100 text-red-600 px-3 py-2 rounded-md hover:bg-red-200 transition-colors disabled:opacity-50"
@@ -807,8 +837,8 @@ export default function Record() {
               </div>
 
               <form onSubmit={handleAddClass} className="flex space-x-2">
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   value={newClassName}
                   onChange={(e) => setNewClassName(e.target.value)}
                   placeholder="New class name..."
@@ -824,13 +854,13 @@ export default function Record() {
             <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
               <h2 className="text-lg font-semibold mb-2 text-gray-800">Bulk Import Students</h2>
               <p className="text-xs text-gray-500 mb-4">
-                Paste your list below. Format: <br/>
-                <code className="bg-gray-100 px-1 py-0.5 rounded text-gray-700">1 CHAN WING YAU 陳泳攸</code><br/>
+                Paste your list below. Format: <br />
+                <code className="bg-gray-100 px-1 py-0.5 rounded text-gray-700">1 CHAN WING YAU 陳泳攸</code><br />
                 <code className="bg-gray-100 px-1 py-0.5 rounded text-gray-700 mt-1 inline-block">5A1 AU KYLIE 歐依穎</code>
               </p>
-              
+
               <form onSubmit={handleBulkImport} className="space-y-4">
-                <textarea 
+                <textarea
                   value={bulkInput}
                   onChange={(e) => setBulkInput(e.target.value)}
                   rows="8"
@@ -839,8 +869,8 @@ export default function Record() {
                   required
                   disabled={!selectedClass}
                 />
-                <button 
-                  type="submit" 
+                <button
+                  type="submit"
                   disabled={!selectedClass}
                   className="w-full flex items-center justify-center bg-blue-600 text-white p-2 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50"
                 >
@@ -859,7 +889,7 @@ export default function Record() {
               </span>
             </div>
             <p className="text-sm text-gray-500 mb-4 italic">Click on a student row to view and manage their detailed records.</p>
-            
+
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
@@ -876,43 +906,43 @@ export default function Record() {
                   {students
                     .filter(s => s.className === selectedClass)
                     // Updated sorting logic to properly handle alphanumeric sorting (e.g., 5A2 comes before 5A14)
-                    .sort((a,b) => String(a.classNumber).localeCompare(String(b.classNumber), undefined, { numeric: true }))
+                    .sort((a, b) => String(a.classNumber).localeCompare(String(b.classNumber), undefined, { numeric: true }))
                     .map(student => {
-                    const pastTotal = (student.pastTerms || []).reduce((sum, term) => sum + (term.recordCount || 0), 0);
-                    return (
-                      <tr 
-                        key={student.id} 
-                        onClick={() => setSelectedStudent(student)}
-                        className="border-b hover:bg-blue-50 cursor-pointer transition-colors"
-                        title="Click to view details"
-                      >
-                        <td className="p-3 font-medium text-gray-800">{student.classNumber}</td>
-                        <td className="p-3 text-gray-700">{student.englishName}</td>
-                        <td className="p-3 text-gray-700">{student.chineseName}</td>
-                        <td className="p-3 text-center">
-                          <span className={`px-2 py-1 rounded-full text-xs font-bold ${(student.recordCount || 0) > 0 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
-                            {student.recordCount || 0}
-                          </span>
-                        </td>
-                        <td className="p-3 text-center text-gray-400 text-sm font-medium">
-                          {pastTotal > 0 ? pastTotal : '-'}
-                        </td>
-                        <td className="p-3 text-center">
-                          <button 
-                            onClick={(e) => handleDeleteStudent(student, e)}
-                            className="text-gray-400 hover:text-red-600 p-1.5 rounded transition-colors"
-                            title="Delete Student"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                      const pastTotal = (student.pastTerms || []).reduce((sum, term) => sum + (term.recordCount || 0), 0);
+                      return (
+                        <tr
+                          key={student.id}
+                          onClick={() => setSelectedStudent(student)}
+                          className="border-b hover:bg-blue-50 cursor-pointer transition-colors"
+                          title="Click to view details"
+                        >
+                          <td className="p-3 font-medium text-gray-800">{student.classNumber}</td>
+                          <td className="p-3 text-gray-700">{student.englishName}</td>
+                          <td className="p-3 text-gray-700">{student.chineseName}</td>
+                          <td className="p-3 text-center">
+                            <span className={`px-2 py-1 rounded-full text-xs font-bold ${(student.recordCount || 0) > 0 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                              {student.recordCount || 0}
+                            </span>
+                          </td>
+                          <td className="p-3 text-center text-gray-400 text-sm font-medium">
+                            {pastTotal > 0 ? pastTotal : '-'}
+                          </td>
+                          <td className="p-3 text-center">
+                            <button
+                              onClick={(e) => handleDeleteStudent(student, e)}
+                              className="text-gray-400 hover:text-red-600 p-1.5 rounded transition-colors"
+                              title="Delete Student"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   {students.filter(s => s.className === selectedClass).length === 0 && (
                     <tr>
                       <td colSpan="6" className="p-8 text-center text-gray-500">
-                        No students found in this class. <br/> Use the Bulk Import tool to add them.
+                        No students found in this class. <br /> Use the Bulk Import tool to add them.
                       </td>
                     </tr>
                   )}

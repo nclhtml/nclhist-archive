@@ -11,6 +11,7 @@ import DseTrend from './DseTrend.jsx';
 import PdfTool from './PdfTool.jsx';
 import Record from './Record.jsx';
 import Marks from './Marks.jsx'; // <-- IMPORT THE NEW MARKS COMPONENT
+import StudentDashboard from './StudentDashboard.jsx'; // <-- ADD THIS IMPORT
 import { auth, db, googleProvider } from './firebase.js';
 import './index.css';
 
@@ -28,7 +29,7 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
-        const email = currentUser.email;
+        const email = currentUser.email.toLowerCase().trim();
         let isAdmin = false;
         let isAuthorized = false;
         let userRole = null;
@@ -129,6 +130,7 @@ const Layout = ({ children }) => {
   const isPdf = location.pathname === '/pdf';
   const isRecord = location.pathname === '/record';
   const isMarks = location.pathname === '/marks';
+  const isDashboard = location.pathname === '/dashboard'; // <-- ADD THIS
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
@@ -163,6 +165,10 @@ const Layout = ({ children }) => {
             </Link>
             <Link to="/trend" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isTrend ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
               DSE Trend Analysis
+            </Link>
+            {/* ADD THIS NEW LINK HERE */}
+            <Link to="/dashboard" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isDashboard ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+              Student Dashboard
             </Link>
 
             {/* ONLY SHOW TABS IF ADMIN */}
@@ -217,6 +223,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Marks />
               </ProtectedAdminRoute>
             } />
+            <Route path="/dashboard" element={<StudentDashboard />} />
           </Routes>
         </Layout>
       </BrowserRouter>

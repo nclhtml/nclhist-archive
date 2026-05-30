@@ -1,20 +1,21 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  BookOpen, Plus, Save, Calendar, Users, 
-  ChevronRight, Loader2, FileText, CheckCircle, 
+import {
+  BookOpen, Plus, Save, Calendar, Users,
+  ChevronRight, Loader2, FileText, CheckCircle,
   PlusCircle, Trash2, ClipboardPaste, FormInput, Calculator,
   Layers, X, BarChart2, Copy, Eye, EyeOff, Settings, Edit2, Edit,
   ChevronUp, ChevronDown, MinusCircle, ToggleLeft, ToggleRight, Percent, Info,
   Link as LinkIcon, ExternalLink, Search, Download, ArrowLeft, Tag, Edit3
 } from 'lucide-react';
-import { 
-  collection, getDocs, doc, setDoc, updateDoc, 
-  addDoc, deleteDoc, query, where, getDoc 
+import {
+  collection, getDocs, doc, setDoc, updateDoc,
+  addDoc, deleteDoc, query, where, getDoc
 } from 'firebase/firestore';
-import { db } from './firebase'; 
-import { 
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, 
-  ResponsiveContainer 
+import { db } from './firebase';
+import { useAuth } from './main.jsx'; // NEW IMPORT
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer
 } from 'recharts';
 
 // Helper to generate unique IDs for sections/subsections
@@ -29,6 +30,7 @@ const getDefaultTerms = (className) => {
 };
 
 export default function Marks() {
+  const { user } = useAuth(); // NEW: Extract user
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
@@ -40,8 +42,8 @@ export default function Marks() {
   const [categories, setCategories] = useState([
     'Assignments', 'Quizzes', 'Uniform Test', 'Exam', 'Others'
   ]);
-  const [archives, setArchives] = useState([]); 
-  
+  const [archives, setArchives] = useState([]);
+
   // Terms State
   const [termsMap, setTermsMap] = useState({});
   const [terms, setTerms] = useState([]);
@@ -62,16 +64,16 @@ export default function Marks() {
   // Form State
   const [newCategoryName, setNewCategoryName] = useState('');
   const [showAddCategory, setShowAddCategory] = useState(false);
-  
+
   const [showAddAssessment, setShowAddAssessment] = useState(false);
   const [isEditingAssessment, setIsEditingAssessment] = useState(false);
   const [newAssessmentName, setNewAssessmentName] = useState('');
   const [newAssessmentDate, setNewAssessmentDate] = useState(new Date().toISOString().split('T')[0]);
-  const [fullMark, setFullMark] = useState(100); 
-  const [paperFullMark, setPaperFullMark] = useState(100); 
+  const [fullMark, setFullMark] = useState(100);
+  const [paperFullMark, setPaperFullMark] = useState(100);
   const [formTerm, setFormTerm] = useState('');
-  const [linkedDocId, setLinkedDocId] = useState(''); 
-  
+  const [linkedDocId, setLinkedDocId] = useState('');
+
   // Multi-section State for UT/Exam
   const [sectionsConfig, setSectionsConfig] = useState([
     {
@@ -83,14 +85,14 @@ export default function Marks() {
       subSections: []
     }
   ]);
-  
+
   const [selectedClassesForNew, setSelectedClassesForNew] = useState([]);
 
   // Marks State
   const [marksData, setMarksData] = useState({});
-  
+
   // Input Method State
-  const [inputMethod, setInputMethod] = useState('individual'); 
+  const [inputMethod, setInputMethod] = useState('individual');
   const [bulkText, setBulkText] = useState('');
 
   // Mark Overview & Graph Modal State
@@ -121,9 +123,9 @@ export default function Marks() {
   const [showPresetManager, setShowPresetManager] = useState(false);
   const [newPresetName, setNewPresetName] = useState('');
   const [newPresetWeights, setNewPresetWeights] = useState({});
-  
+
   // Modal specific selections
-  const [modalClasses, setModalClasses] = useState([]); 
+  const [modalClasses, setModalClasses] = useState([]);
   const [modalTerm, setModalTerm] = useState('');
 
   // Document Linker State
@@ -152,11 +154,33 @@ export default function Marks() {
     const fetchInitialData = async () => {
       setIsLoading(true);
       try {
+        // Fetch role mappings first
+        const configSnap = await getDoc(doc(db, "system_settings", "config"));
+        const roleClasses = configSnap.exists() ? (configSnap.data().roleClasses || {}) : {};
+
         const classDocRef = doc(db, "settings", "classes");
         const classDocSnap = await getDoc(classDocRef);
         let loadedClasses = [];
         if (classDocSnap.exists()) {
           loadedClasses = classDocSnap.data().list || [];
+
+          // Fetch user role if not present on the user object
+          let currentUserRole = user?.role;
+          if (!currentUserRole && user?.email) {
+            const userDocSnap = await getDoc(doc(db, "user_roles", user.email));
+            if (userDocSnap.exists()) {
+              currentUserRole = userDocSnap.data().role;
+            } else if (user?.isAdmin) {
+              currentUserRole = 'admin';
+            }
+          }
+
+          // Filter classes based on role
+          if (currentUserRole) {
+            const allowed = roleClasses[currentUserRole] || [];
+            loadedClasses = loadedClasses.filter(c => allowed.includes(c));
+          }
+
           loadedClasses.sort((a, b) => a.localeCompare(b));
           setClasses(loadedClasses);
           if (loadedClasses.length > 0) {
@@ -199,7 +223,7 @@ export default function Marks() {
           loadedPresets.push({
             id: 'js-geog-preset',
             name: 'JS Geography',
-            weights: { 'Assignments': 0, 'Quizzes': 0, 'Uniform Test': 50 }, 
+            weights: { 'Assignments': 0, 'Quizzes': 0, 'Uniform Test': 50 },
             isCustom: true
           });
           presetsUpdated = true;
@@ -209,7 +233,7 @@ export default function Marks() {
           loadedPresets.push({
             id: 'la-hw-preset',
             name: 'Learning Attitude (Homework)',
-            weights: {}, 
+            weights: {},
             isCustom: true
           });
           presetsUpdated = true;
@@ -219,7 +243,7 @@ export default function Marks() {
           loadedPresets.push({
             id: 'la-lesson-preset',
             name: 'Learning Attitude (Lesson)',
-            weights: {}, 
+            weights: {},
             isCustom: true
           });
           presetsUpdated = true;
@@ -249,19 +273,21 @@ export default function Marks() {
       setIsLoading(false);
     };
 
-    fetchInitialData();
-  }, []);
+    if (user) {
+      fetchInitialData();
+    }
+  }, [user]);
 
   useEffect(() => {
     if (selectedClass) {
       setSelectedClassesForNew([selectedClass]);
-      
-      const classTerms = termsMap[selectedClass] && termsMap[selectedClass].length > 0 
-        ? termsMap[selectedClass] 
+
+      const classTerms = termsMap[selectedClass] && termsMap[selectedClass].length > 0
+        ? termsMap[selectedClass]
         : getDefaultTerms(selectedClass);
-        
+
       setTerms(classTerms);
-      
+
       setTerms(prevTerms => {
         if (!classTerms.includes(selectedTerm)) {
           setSelectedTerm(classTerms[0] || '');
@@ -283,27 +309,27 @@ export default function Marks() {
   useEffect(() => {
     const fetchAssessments = async () => {
       if (!selectedClass || !selectedCategory || !selectedTerm) return;
-      
+
       try {
         const q = query(
-          collection(db, "assessments"), 
+          collection(db, "assessments"),
           where("category", "==", selectedCategory)
         );
         const querySnapshot = await getDocs(q);
-        
+
         const loadedAssessments = querySnapshot.docs
           .map(doc => ({ id: doc.id, ...doc.data() }))
           .filter(a => {
-            const matchesClass = (a.classes && Array.isArray(a.classes)) 
-              ? a.classes.includes(selectedClass) 
+            const matchesClass = (a.classes && Array.isArray(a.classes))
+              ? a.classes.includes(selectedClass)
               : a.className === selectedClass;
             const matchesTerm = a.term === selectedTerm || (!a.term && selectedTerm === terms[0]);
             return matchesClass && matchesTerm;
           });
-        
+
         loadedAssessments.sort((a, b) => new Date(a.date) - new Date(b.date));
         setAssessments(loadedAssessments);
-        
+
         if (isMultiSectionCategory) {
           if (loadedAssessments.length > 0) {
             setSelectedAssessment(loadedAssessments[0]);
@@ -316,7 +342,7 @@ export default function Marks() {
 
         setMarksData({});
         setBulkText('');
-        
+
       } catch (error) {
         console.error("Error fetching assessments:", error);
       }
@@ -412,7 +438,7 @@ export default function Marks() {
   const handleDeleteCategory = async (catToDelete, e) => {
     e.stopPropagation();
     if (!window.confirm(`Are you sure you want to delete the category "${catToDelete}"?`)) return;
-    
+
     try {
       const updatedCategories = categories.filter(c => c !== catToDelete);
       await setDoc(doc(db, "settings", "categories"), { list: updatedCategories }, { merge: true });
@@ -457,8 +483,8 @@ export default function Marks() {
   };
 
   const toggleClassForNew = (className) => {
-    setSelectedClassesForNew(prev => 
-      prev.includes(className) 
+    setSelectedClassesForNew(prev =>
+      prev.includes(className)
         ? prev.filter(c => c !== className)
         : [...prev, className]
     );
@@ -466,7 +492,7 @@ export default function Marks() {
 
   const handleAddSection = () => {
     setSectionsConfig(prev => [
-      ...prev, 
+      ...prev,
       {
         id: generateId(),
         name: `Paper ${prev.length + 1}`,
@@ -489,11 +515,11 @@ export default function Marks() {
         return {
           ...sec,
           hasSubSections: willHaveSubSections,
-          subSections: willHaveSubSections && sec.subSections.length === 0 
+          subSections: willHaveSubSections && sec.subSections.length === 0
             ? [
-                { id: generateId(), name: 'Section A', fullMark: 50 },
-                { id: generateId(), name: 'Section B', fullMark: 50 }
-              ] 
+              { id: generateId(), name: 'Section A', fullMark: 50 },
+              { id: generateId(), name: 'Section B', fullMark: 50 }
+            ]
             : sec.subSections
         };
       }
@@ -555,7 +581,7 @@ export default function Marks() {
 
   const handleSaveAssessment = async (e) => {
     e.preventDefault();
-    
+
     const finalName = isMultiSectionCategory ? `${formTerm} ${selectedCategory}` : newAssessmentName.trim();
 
     if (!finalName || selectedClassesForNew.length === 0 || !selectedCategory || !formTerm) {
@@ -584,11 +610,11 @@ export default function Marks() {
       if (isEditingAssessment && selectedAssessment) {
         const docRef = doc(db, "assessments", selectedAssessment.id);
         await updateDoc(docRef, assessmentData);
-        
+
         const updatedAssessment = { ...selectedAssessment, ...assessmentData };
         setAssessments(assessments.map(a => a.id === updatedAssessment.id ? updatedAssessment : a));
         setSelectedAssessment(updatedAssessment);
-        
+
         if (formTerm !== selectedTerm) {
           setSelectedTerm(formTerm);
         }
@@ -596,7 +622,7 @@ export default function Marks() {
         assessmentData.marks = {};
         const docRef = await addDoc(collection(db, "assessments"), assessmentData);
         const addedAssessment = { id: docRef.id, ...assessmentData };
-        
+
         if (selectedClassesForNew.includes(selectedClass) && formTerm === selectedTerm) {
           setAssessments([addedAssessment, ...assessments]);
           setSelectedAssessment(addedAssessment);
@@ -613,7 +639,7 @@ export default function Marks() {
   const handleDeleteAssessment = async (id, e) => {
     if (e) e.stopPropagation();
     if (!window.confirm("Are you sure you want to delete this assessment? All marks for ALL linked classes will be lost.")) return;
-    
+
     try {
       await deleteDoc(doc(db, "assessments", id));
       setAssessments(assessments.filter(a => a.id !== id));
@@ -657,17 +683,17 @@ export default function Marks() {
   const handleBulkPaste = (e) => {
     const text = e.target.value;
     setBulkText(text);
-    
+
     const lines = text.split('\n').map(l => l.trim());
     const newMarks = { ...marksData };
     const isMulti = selectedAssessment?.sectionsConfig?.length > 0;
-    
+
     currentClassStudents.forEach((student, index) => {
       if (lines[index] !== undefined && lines[index] !== '') {
         if (isMulti) {
           const cols = lines[index].split('\t');
           const studentMarks = { ...(typeof newMarks[student.id] === 'object' ? newMarks[student.id] : {}) };
-          
+
           let colIndex = 0;
           selectedAssessment.sectionsConfig.forEach(sec => {
             if (sec.hasSubSections) {
@@ -690,30 +716,30 @@ export default function Marks() {
         }
       }
     });
-    
+
     setMarksData(newMarks);
   };
 
   const handleSaveMarks = async () => {
     if (!selectedAssessment) return;
     setIsSaving(true);
-    
+
     try {
       const assessmentRef = doc(db, "assessments", selectedAssessment.id);
-      await updateDoc(assessmentRef, { 
+      await updateDoc(assessmentRef, {
         marks: marksData
       });
-      
+
       const updatedAssessment = { ...selectedAssessment, marks: marksData };
       setSelectedAssessment(updatedAssessment);
       setAssessments(assessments.map(a => a.id === updatedAssessment.id ? updatedAssessment : a));
-      
+
       alert("Marks saved successfully!");
     } catch (error) {
       console.error("Error saving marks:", error);
       alert("Failed to save marks.");
     }
-    
+
     setIsSaving(false);
   };
 
@@ -739,12 +765,12 @@ export default function Marks() {
   // AMEND MARKS LOGIC
   // ============================================================================
   const openAmendModal = () => {
-    const initialRows = Array.from({ length: 8 }).map(() => ({ 
-      id: generateId(), 
-      query: '', 
-      student: null, 
-      marks: {}, 
-      originalMarks: {} 
+    const initialRows = Array.from({ length: 8 }).map(() => ({
+      id: generateId(),
+      query: '',
+      student: null,
+      marks: {},
+      originalMarks: {}
     }));
     setAmendRows(initialRows);
     setHasUnsavedAmendments(false);
@@ -797,7 +823,7 @@ export default function Marks() {
     if (q) {
       // Search in all classes linked to this assessment, or just current class if not shared
       const searchPool = assessmentClasses.length > 1 ? allClassesStudents : currentClassStudents;
-      
+
       foundStudent = searchPool.find(s => {
         const match1 = s.classNumber.toString() === q && s.className === selectedClass;
         const match2 = `${s.className}${s.classNumber}`.replace(/\s/g, '').toUpperCase() === q;
@@ -808,12 +834,12 @@ export default function Marks() {
     setAmendRows(prev => prev.map(r => {
       if (r.id === rowId) {
         const initialMarks = foundStudent ? JSON.parse(JSON.stringify(marksData[foundStudent.id] || {})) : {};
-        return { 
-          ...r, 
-          query, 
-          student: foundStudent, 
-          marks: initialMarks, 
-          originalMarks: JSON.parse(JSON.stringify(initialMarks)) 
+        return {
+          ...r,
+          query,
+          student: foundStudent,
+          marks: initialMarks,
+          originalMarks: JSON.parse(JSON.stringify(initialMarks))
         };
       }
       return r;
@@ -825,7 +851,7 @@ export default function Marks() {
     setAmendRows(prev => prev.map(r => {
       if (r.id === rowId && r.student) {
         const currentVal = parseFloat(r.marks[subId]) || 0;
-        const newVal = Math.max(0, currentVal + amount); 
+        const newVal = Math.max(0, currentVal + amount);
         return {
           ...r,
           marks: { ...r.marks, [subId]: newVal.toString() }
@@ -855,12 +881,12 @@ export default function Marks() {
     try {
       const assessmentRef = doc(db, "assessments", selectedAssessment.id);
       await updateDoc(assessmentRef, { marks: updatedMarksData });
-      
+
       const updatedAssessment = { ...selectedAssessment, marks: updatedMarksData };
       setSelectedAssessment(updatedAssessment);
       setAssessments(assessments.map(a => a.id === updatedAssessment.id ? updatedAssessment : a));
       setMarksData(updatedMarksData);
-      
+
       setHasUnsavedAmendments(false);
       setShowAmendModal(false);
       alert("Amendments saved successfully!");
@@ -877,7 +903,7 @@ export default function Marks() {
   // ============================================================================
   const calculateTotal = (studentMarks) => {
     if (studentMarks === undefined || studentMarks === null || studentMarks === '') return null;
-    
+
     if (typeof studentMarks !== 'object') {
       const num = parseFloat(studentMarks);
       return isNaN(num) ? null : num;
@@ -894,7 +920,7 @@ export default function Marks() {
 
   const calculateSectionRawTotal = (studentMarks, section) => {
     if (!studentMarks || typeof studentMarks !== 'object') return null;
-    
+
     if (!section.hasSubSections) {
       const mark = parseFloat(studentMarks[section.id]);
       return !isNaN(mark) ? mark : null;
@@ -938,7 +964,7 @@ export default function Marks() {
       if (secRawTotal !== null) {
         const secFullMark = parseFloat(sec.fullMark);
         const weight = parseFloat(sec.weight);
-        
+
         if (secFullMark > 0 && !isNaN(weight)) {
           total += (secRawTotal / secFullMark) * weight;
           hasValidMark = true;
@@ -971,7 +997,7 @@ export default function Marks() {
   const hasSections = selectedAssessment?.sectionsConfig && selectedAssessment.sectionsConfig.length > 0;
 
   const allScaledTotals = [];
-  
+
   // Calculate Stats Data
   const statsData = {
     final: { marks: [], fullMark: selectedAssessment?.fullMark || 100 }
@@ -994,7 +1020,7 @@ export default function Marks() {
       statsData.main = { marks: [], fullMark: selectedAssessment.fullMark || 100 };
     }
   }
-  
+
   if (selectedAssessment && currentClassStudents.length > 0) {
     const totals = currentClassStudents
       .map(s => {
@@ -1002,7 +1028,7 @@ export default function Marks() {
         const rawTotal = calculateTotal(studentMarks);
         const scaledTotal = hasSections ? calculateScaledTotal(studentMarks, selectedAssessment.sectionsConfig) : rawTotal;
         const deduction = parseFloat(marksData[`${s.id}_deduction`]) || 0;
-        
+
         let finalTotal = null;
         if (scaledTotal !== null) {
           finalTotal = (scaledTotal - deduction);
@@ -1011,12 +1037,12 @@ export default function Marks() {
 
         if (hasSections) {
           if (scaledTotal !== null) statsData.scaledTotal.marks.push(scaledTotal);
-          
+
           selectedAssessment.sectionsConfig.forEach(sec => {
             if (sec.hasSubSections) {
               let secRawTotal = calculateSectionRawTotal(studentMarks, sec);
               if (secRawTotal !== null) statsData[`sec_${sec.id}`].marks.push(secRawTotal);
-              
+
               sec.subSections.forEach(sub => {
                 const val = (studentMarks && typeof studentMarks === 'object') ? studentMarks[sub.id] : null;
                 if (val !== null && val !== '' && !isNaN(val)) statsData[sub.id].marks.push(parseFloat(val));
@@ -1031,7 +1057,7 @@ export default function Marks() {
             statsData.main.marks.push(parseFloat(studentMarks));
           }
         }
-        
+
         if (finalTotal !== null) allScaledTotals.push(finalTotal);
         return { id: s.id, total: finalTotal };
       })
@@ -1041,7 +1067,7 @@ export default function Marks() {
       totals.sort((a, b) => b.total - a.total);
       const highest = totals[0].total;
       const highestStudents = totals.filter(s => s.total === highest);
-      
+
       highestStudents.forEach(s => topStudentIds.add(s.id));
 
       if (highestStudents.length === 1 && totals.length > 1) {
@@ -1055,16 +1081,16 @@ export default function Marks() {
   const getStats = (marksArray, fullMark) => {
     const validMarks = marksArray.filter(m => m !== null && !isNaN(m)).map(Number).sort((a, b) => a - b);
     if (validMarks.length === 0) return null;
-    
+
     const sum = validMarks.reduce((a, b) => a + b, 0);
     const mean = (sum / validMarks.length).toFixed(1);
-    
+
     const mid = Math.floor(validMarks.length / 2);
     const median = validMarks.length % 2 !== 0 ? validMarks[mid].toFixed(1) : ((validMarks[mid - 1] + validMarks[mid]) / 2).toFixed(1);
-    
+
     const passThreshold = fullMark / 2;
     const passCount = validMarks.filter(m => m >= passThreshold).length;
-    
+
     const max = validMarks[validMarks.length - 1].toFixed(1);
     const min = validMarks[0].toFixed(1);
 
@@ -1121,14 +1147,14 @@ export default function Marks() {
       const rawTotal = calculateTotal(studentMarks);
       const scaledTotal = hasSections ? calculateScaledTotal(studentMarks, selectedAssessment.sectionsConfig) : rawTotal;
       const deduction = parseFloat(marksData[`${student.id}_deduction`]) || 0;
-      
+
       let finalTotal = null;
       if (scaledTotal !== null) {
         finalTotal = (scaledTotal - deduction);
       }
       return finalTotal !== null ? finalTotal.toFixed(1) : '';
     });
-    
+
     const textToCopy = totalsList.join('\n');
     navigator.clipboard.writeText(textToCopy).then(() => {
       setCopySuccess(true);
@@ -1143,14 +1169,14 @@ export default function Marks() {
   const getGraphData = () => {
     const bins = Array(10).fill(0).map((_, i) => ({ name: `${i * 10}-${i * 10 + 9}`, count: 0 }));
     bins[9].name = '90-100'; // Adjust the last bin to include 100
-    
+
     allScaledTotals.forEach(score => {
       let index = Math.floor(score / 10);
       if (index >= 10) index = 9;
       if (index < 0) index = 0;
       bins[index].count++;
     });
-    
+
     return bins;
   };
 
@@ -1160,13 +1186,13 @@ export default function Marks() {
   const handleAddPreset = async (e) => {
     e.preventDefault();
     if (!newPresetName.trim()) return;
-    
+
     const presetData = {
       id: generateId(),
       name: newPresetName,
       weights: newPresetWeights
     };
-    
+
     const updatedPresets = [...presets, presetData];
     try {
       await setDoc(doc(db, "settings", "presets"), { list: updatedPresets }, { merge: true });
@@ -1204,22 +1230,22 @@ export default function Marks() {
     const N = data.length;
     if (N < 3) return data;
     const sorted = [...data].sort((a, b) => parseFloat(b.overallScore) - parseFloat(a.overallScore));
-    
+
     // Top 3
-    for(let i=0; i<Math.min(3, N); i++) sorted[i].highlight = 'top';
-    
+    for (let i = 0; i < Math.min(3, N); i++) sorted[i].highlight = 'top';
+
     // Middle 3
     const midTarget = Math.floor(N / 3);
-    const midStart = Math.max(3, midTarget - 1); 
-    for(let i=midStart; i<Math.min(midStart+3, N); i++) {
-        if (!sorted[i].highlight) sorted[i].highlight = 'middle';
+    const midStart = Math.max(3, midTarget - 1);
+    for (let i = midStart; i < Math.min(midStart + 3, N); i++) {
+      if (!sorted[i].highlight) sorted[i].highlight = 'middle';
     }
-    
+
     // Bottom 3
     const botTarget = Math.floor((2 * N) / 3);
     const botStart = Math.max(midStart + 3, botTarget - 1);
-    for(let i=botStart; i<Math.min(botStart+3, N); i++) {
-        if (!sorted[i].highlight) sorted[i].highlight = 'bottom';
+    for (let i = botStart; i < Math.min(botStart + 3, N); i++) {
+      if (!sorted[i].highlight) sorted[i].highlight = 'bottom';
     }
 
     return sorted.sort((a, b) => {
@@ -1231,7 +1257,7 @@ export default function Marks() {
   const calculateTermScores = async () => {
     if (!selectedPresetId || modalClasses.length === 0 || !modalTerm) return;
     setIsCalculatingScores(true);
-    
+
     const preset = presets.find(p => p.id === selectedPresetId);
     if (!preset) {
       setIsCalculatingScores(false);
@@ -1241,11 +1267,11 @@ export default function Marks() {
     try {
       const q = query(collection(db, "assessments"));
       const querySnapshot = await getDocs(q);
-      
+
       const allTermAssessments = querySnapshot.docs
         .map(doc => ({ id: doc.id, ...doc.data() }))
         .filter(a => {
-          const matchesClass = (a.classes && Array.isArray(a.classes)) 
+          const matchesClass = (a.classes && Array.isArray(a.classes))
             ? a.classes.some(c => modalClasses.includes(c))
             : modalClasses.includes(a.className);
           const matchesTerm = a.term === modalTerm;
@@ -1292,14 +1318,14 @@ export default function Marks() {
 
         scoresData = modalStudents.map(student => {
           let categoryScores = {};
-          
+
           const aStats = sumAssessments(assignAssessments, student);
           const qStats = sumAssessments(quizAssessments, student);
           const utStats = sumAssessments(utAssessments, student);
 
           const combinedAQRaw = aStats.raw + qStats.raw;
           const combinedAQFull = aStats.full + qStats.full;
-          
+
           const aqScore = combinedAQFull > 0 ? (combinedAQRaw / combinedAQFull) * 50 : 0;
           const utScore = utStats.full > 0 ? (utStats.raw / utStats.full) * 50 : 0;
 
@@ -1316,7 +1342,7 @@ export default function Marks() {
         });
       } else if (preset.name === 'Learning Attitude (Homework)') {
         const assignAssessments = allTermAssessments.filter(a => a.category === 'Assignments');
-        
+
         scoresData = modalStudents.map(student => {
           const aStats = sumAssessments(assignAssessments, student);
           let score = 0;
@@ -1331,7 +1357,7 @@ export default function Marks() {
           return {
             student,
             categoryScores,
-            overallScore: score.toString() 
+            overallScore: score.toString()
           };
         });
       } else if (preset.name === 'Learning Attitude (Lesson)') {
@@ -1341,14 +1367,14 @@ export default function Marks() {
           const aStats = sumAssessments(assignAssessments, student);
           let assignPercent = aStats.full > 0 ? (aStats.raw / aStats.full) : 0;
           let recordCount = student.recordCount || 0;
-          
+
           let bonus = assignPercent > 0.9 ? 1 : 0;
           let score = 4 + bonus - Math.floor(recordCount / 2);
-          
+
           if (assignPercent < 0.6) {
             score = Math.min(score, 3);
           }
-          score = Math.max(0, Math.min(5, score)); 
+          score = Math.max(0, Math.min(5, score));
 
           let categoryScores = {
             'Lesson Attitude': { score: score, raw: recordCount, full: 0, weight: 100 }
@@ -1357,7 +1383,7 @@ export default function Marks() {
           return {
             student,
             categoryScores,
-            overallScore: score.toString() 
+            overallScore: score.toString()
           };
         });
       } else {
@@ -1394,7 +1420,7 @@ export default function Marks() {
       console.error("Error calculating term scores:", error);
       alert("Failed to calculate term scores.");
     }
-    
+
     setIsCalculatingScores(false);
   };
 
@@ -1403,9 +1429,9 @@ export default function Marks() {
   // Copy ONLY the overall Term Scores to clipboard
   const handleCopyTermScores = () => {
     if (termScoresData.length === 0) return;
-    
+
     const rows = termScoresData.map(data => data.overallScore);
-    
+
     const textToCopy = rows.join('\n');
     navigator.clipboard.writeText(textToCopy).then(() => {
       setTermCopySuccess(true);
@@ -1421,8 +1447,8 @@ export default function Marks() {
     if (modalClasses.length === 0) return [];
     // Just use the first selected class to determine terms for simplicity
     const refClass = modalClasses[0];
-    return termsMap[refClass] && termsMap[refClass].length > 0 
-      ? termsMap[refClass] 
+    return termsMap[refClass] && termsMap[refClass].length > 0
+      ? termsMap[refClass]
       : getDefaultTerms(refClass);
   }, [modalClasses, termsMap]);
 
@@ -1483,7 +1509,7 @@ export default function Marks() {
   // Calculate Overview Stats if no assessment is selected
   let overviewStats = {};
   let overviewTotalStats = { marks: [], fullMark: 0 };
-  
+
   if (!selectedAssessment && assessments.length > 0) {
     assessments.forEach(a => {
       overviewStats[a.id] = { marks: [], fullMark: a.sectionsConfig ? 100 : (a.fullMark || 100) };
@@ -1524,10 +1550,10 @@ export default function Marks() {
 
   return (
     <div className="bg-gray-50 min-h-screen font-sans flex w-full p-4 sm:p-6 gap-6">
-      
+
       {/* Left Sidebar */}
       <div className="w-64 xl:w-72 flex-shrink-0 sticky left-4 top-6 space-y-6 z-20 h-max">
-        
+
         <div className="mb-6">
           <h1 className="text-2xl font-bold text-gray-800 flex items-center">
             <BookOpen className="w-8 h-8 mr-3 text-blue-600" />
@@ -1541,8 +1567,8 @@ export default function Marks() {
             <label className="font-semibold text-gray-700 flex items-center mb-1.5 text-sm">
               <Users className="w-4 h-4 mr-2" /> Class
             </label>
-            <select 
-              value={selectedClass} 
+            <select
+              value={selectedClass}
               onChange={(e) => setSelectedClass(e.target.value)}
               className="w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium bg-gray-50"
             >
@@ -1556,7 +1582,7 @@ export default function Marks() {
               <label className="font-semibold text-gray-700 text-sm flex items-center">
                 <Calendar className="w-4 h-4 mr-2" /> Term
               </label>
-              <button 
+              <button
                 onClick={() => setShowTermManager(true)}
                 className="text-gray-400 hover:text-blue-600 transition-colors p-1 rounded hover:bg-blue-50"
                 title={`Manage Terms for ${selectedClass}`}
@@ -1564,8 +1590,8 @@ export default function Marks() {
                 <Settings className="w-4 h-4" />
               </button>
             </div>
-            <select 
-              value={selectedTerm} 
+            <select
+              value={selectedTerm}
               onChange={(e) => setSelectedTerm(e.target.value)}
               className="w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium bg-gray-50"
             >
@@ -1575,7 +1601,7 @@ export default function Marks() {
           </div>
 
           <div className="pt-3 border-t border-gray-100">
-            <button 
+            <button
               onClick={() => {
                 setModalClasses([selectedClass]);
                 setModalTerm(selectedTerm);
@@ -1590,13 +1616,12 @@ export default function Marks() {
           </div>
 
           <div className="pt-3 border-t border-gray-100">
-            <button 
+            <button
               onClick={() => setStudentView(!studentView)}
-              className={`w-full flex items-center justify-center px-4 py-2 text-sm font-bold rounded-md transition-colors border shadow-sm ${
-                studentView 
-                  ? 'bg-amber-100 text-amber-800 border-amber-300' 
-                  : 'bg-gray-50 text-gray-700 hover:bg-gray-100 border-gray-200'
-              }`}
+              className={`w-full flex items-center justify-center px-4 py-2 text-sm font-bold rounded-md transition-colors border shadow-sm ${studentView
+                ? 'bg-amber-100 text-amber-800 border-amber-300'
+                : 'bg-gray-50 text-gray-700 hover:bg-gray-100 border-gray-200'
+                }`}
               title="Toggle Student View (Hide individual marks)"
             >
               {studentView ? <EyeOff className="w-4 h-4 mr-2" /> : <Eye className="w-4 h-4 mr-2" />}
@@ -1609,7 +1634,7 @@ export default function Marks() {
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
           <div className="bg-gray-100 p-3 border-b border-gray-200 flex justify-between items-center">
             <h2 className="font-semibold text-gray-800 text-sm">Categories</h2>
-            <button 
+            <button
               onClick={() => setShowAddCategory(!showAddCategory)}
               className="text-blue-600 hover:text-blue-800"
               title="Add Category"
@@ -1617,11 +1642,11 @@ export default function Marks() {
               <PlusCircle className="w-4 h-4" />
             </button>
           </div>
-          
+
           {showAddCategory && (
             <form onSubmit={handleAddCategory} className="p-3 bg-blue-50 border-b border-gray-200 flex space-x-2">
-              <input 
-                type="text" 
+              <input
+                type="text"
                 value={newCategoryName}
                 onChange={(e) => setNewCategoryName(e.target.value)}
                 placeholder="New category..."
@@ -1638,13 +1663,12 @@ export default function Marks() {
               <li key={cat}>
                 <div
                   onClick={() => { setSelectedCategory(cat); setSelectedAssessment(null); }}
-                  className={`w-full text-left px-4 py-3 text-sm font-medium transition-colors flex items-center justify-between cursor-pointer ${
-                    selectedCategory === cat ? 'bg-blue-50 text-blue-700 border-l-4 border-blue-600' : 'text-gray-600 hover:bg-gray-50'
-                  }`}
+                  className={`w-full text-left px-4 py-3 text-sm font-medium transition-colors flex items-center justify-between cursor-pointer ${selectedCategory === cat ? 'bg-blue-50 text-blue-700 border-l-4 border-blue-600' : 'text-gray-600 hover:bg-gray-50'
+                    }`}
                 >
                   <span className="truncate mr-2">{cat}</span>
                   <div className="flex items-center space-x-2 flex-shrink-0">
-                    <button 
+                    <button
                       onClick={(e) => handleDeleteCategory(cat, e)}
                       className="text-gray-400 hover:text-red-500 transition-colors"
                       title="Delete Category"
@@ -1664,7 +1688,7 @@ export default function Marks() {
           <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
             <div className="bg-gray-100 p-3 border-b border-gray-200 flex justify-between items-center">
               <h2 className="font-semibold text-gray-800 truncate pr-2 text-sm">{selectedCategory} Items</h2>
-              <button 
+              <button
                 onClick={openAddModal}
                 className="text-green-600 hover:text-green-800 flex-shrink-0"
                 title="Add Assessment Item"
@@ -1681,9 +1705,8 @@ export default function Marks() {
                   <li>
                     <div
                       onClick={() => setSelectedAssessment(null)}
-                      className={`w-full text-left px-4 py-3 transition-colors cursor-pointer flex justify-between items-center ${
-                        !selectedAssessment ? 'bg-blue-50 text-blue-700 font-bold' : 'hover:bg-gray-50 text-gray-700 font-medium'
-                      }`}
+                      className={`w-full text-left px-4 py-3 transition-colors cursor-pointer flex justify-between items-center ${!selectedAssessment ? 'bg-blue-50 text-blue-700 font-bold' : 'hover:bg-gray-50 text-gray-700 font-medium'
+                        }`}
                     >
                       Overview
                     </div>
@@ -1692,9 +1715,8 @@ export default function Marks() {
                     <li key={item.id}>
                       <div
                         onClick={() => setSelectedAssessment(item)}
-                        className={`w-full text-left px-4 py-3 transition-colors cursor-pointer flex justify-between items-center ${
-                          selectedAssessment?.id === item.id ? 'bg-blue-50' : 'hover:bg-gray-50'
-                        }`}
+                        className={`w-full text-left px-4 py-3 transition-colors cursor-pointer flex justify-between items-center ${selectedAssessment?.id === item.id ? 'bg-blue-50' : 'hover:bg-gray-50'
+                          }`}
                       >
                         <div className="overflow-hidden pr-2">
                           <div className={`font-medium text-sm truncate ${selectedAssessment?.id === item.id ? 'text-blue-700' : 'text-gray-800'}`}>
@@ -1704,7 +1726,7 @@ export default function Marks() {
                             <Calendar className="w-3 h-3 mr-1" /> {item.date} | Full: {item.fullMark || 100}
                           </div>
                         </div>
-                        <button 
+                        <button
                           onClick={(e) => handleDeleteAssessment(item.id, e)}
                           className="text-gray-400 hover:text-red-500 p-1 flex-shrink-0"
                           title="Delete Assessment"
@@ -1731,7 +1753,7 @@ export default function Marks() {
                 <>
                   <h3 className="text-xl font-medium text-gray-700 mb-2">No {selectedCategory} configured for {selectedTerm}</h3>
                   <p className="mb-6 text-center">Click below to configure the sections and full marks for this term's {selectedCategory}.</p>
-                  <button 
+                  <button
                     onClick={openAddModal}
                     className="px-6 py-2 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 flex items-center shadow-sm"
                   >
@@ -1814,7 +1836,7 @@ export default function Marks() {
                                   studentTotal += finalMark;
                                   hasAnyMark = true;
                                 }
-                                
+
                                 const isMissing = finalMark === null;
 
                                 return (
@@ -1833,20 +1855,20 @@ export default function Marks() {
                         {currentClassStudents.length > 0 && (
                           <tr className="bg-blue-50/50 border-t-2 border-blue-200">
                             <td colSpan={2} className="p-3 font-bold text-right text-blue-800 border-r border-gray-200">
-                              Statistics<br/>
+                              Statistics<br />
                               <span className="text-[10px] font-normal text-blue-600">Mean / Median / Pass</span>
                             </td>
                             {assessments.map(a => (
-                              <StatCell 
-                                key={a.id} 
-                                stats={getStats(overviewStats[a.id].marks, overviewStats[a.id].fullMark)} 
-                                borderRight 
+                              <StatCell
+                                key={a.id}
+                                stats={getStats(overviewStats[a.id].marks, overviewStats[a.id].fullMark)}
+                                borderRight
                               />
                             ))}
-                            <StatCell 
-                              stats={getStats(overviewTotalStats.marks, overviewTotalStats.fullMark)} 
-                              isBold 
-                              bg="bg-blue-100/50" 
+                            <StatCell
+                              stats={getStats(overviewTotalStats.marks, overviewTotalStats.fullMark)}
+                              isBold
+                              bg="bg-blue-100/50"
                             />
                           </tr>
                         )}
@@ -1864,16 +1886,16 @@ export default function Marks() {
               <div>
                 <h2 className="text-xl font-bold text-gray-800 flex items-center flex-wrap gap-2">
                   {isMultiSectionCategory ? `${selectedAssessment.term || selectedTerm} ${selectedCategory}` : selectedAssessment.name}
-                  
+
                   <div className="flex items-center gap-2">
-                    <button 
+                    <button
                       onClick={openEditModal}
                       className="text-sm text-blue-600 hover:text-blue-800 flex items-center font-medium bg-blue-50 px-2 py-1 rounded border border-blue-100"
                       title="Edit Configuration & Term"
                     >
                       <Edit className="w-4 h-4 mr-1" /> Edit Settings
                     </button>
-                    <button 
+                    <button
                       onClick={() => handleDeleteAssessment(selectedAssessment.id)}
                       className="text-sm text-red-500 hover:text-red-700 flex items-center font-medium bg-red-50 px-2 py-1 rounded border border-red-100"
                     >
@@ -1891,7 +1913,7 @@ export default function Marks() {
                   {!isMultiSectionCategory && <span className="ml-2 bg-gray-100 px-2 py-0.5 rounded">Full Mark: {selectedAssessment.fullMark || 100}</span>}
                 </p>
                 {selectedAssessment.linkedDocId && (
-                  <button 
+                  <button
                     onClick={() => handleOpenPreview(selectedAssessment.linkedDocId)}
                     className="mt-2 text-sm text-indigo-600 hover:text-indigo-800 flex items-center font-medium bg-indigo-50 px-2 py-1 rounded border border-indigo-100 transition-colors"
                   >
@@ -1899,10 +1921,10 @@ export default function Marks() {
                   </button>
                 )}
               </div>
-              
+
               <div className="flex items-center space-x-3 flex-wrap gap-y-2 pl-8">
                 {assessmentClasses.length > 1 && (
-                  <button 
+                  <button
                     onClick={() => {
                       setAllClassesStudentView(true);
                       setShowAllClassesModal(true);
@@ -1913,7 +1935,7 @@ export default function Marks() {
                     <Users className="w-4 h-4 mr-1.5" /> All Classes
                   </button>
                 )}
-                <button 
+                <button
                   onClick={handleCopyTotals}
                   className="flex items-center justify-center w-[135px] px-3 py-2 text-sm font-medium rounded-md transition-colors bg-teal-50 text-teal-700 hover:bg-teal-100 border border-teal-200"
                   title="Copy total marks vertically for WebSAMS (T1A3/T2A3)"
@@ -1924,13 +1946,13 @@ export default function Marks() {
 
                 {isMultiSectionCategory && (
                   <>
-                    <button 
+                    <button
                       onClick={() => setShowOverviewModal(true)}
                       className="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200"
                     >
                       <BarChart2 className="w-4 h-4 mr-1.5" /> Overview & Graph
                     </button>
-                    <button 
+                    <button
                       onClick={openAmendModal}
                       className="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors bg-orange-50 text-orange-700 hover:bg-orange-100 border border-orange-200"
                       title="Amend individual component marks with buttons"
@@ -1941,13 +1963,13 @@ export default function Marks() {
                 )}
 
                 <div className="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
-                  <button 
+                  <button
                     onClick={() => setInputMethod('individual')}
                     className={`flex items-center px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${inputMethod === 'individual' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
                   >
                     <FormInput className="w-4 h-4 mr-1.5" /> Boxes
                   </button>
-                  <button 
+                  <button
                     onClick={() => setInputMethod('bulk')}
                     className={`flex items-center px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${inputMethod === 'bulk' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
                   >
@@ -1955,7 +1977,7 @@ export default function Marks() {
                   </button>
                 </div>
 
-                <button 
+                <button
                   onClick={handleSaveMarks}
                   disabled={isSaving}
                   className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors disabled:opacity-70 font-medium shadow-sm"
@@ -1972,11 +1994,11 @@ export default function Marks() {
                   <ClipboardPaste className="w-4 h-4 mr-1" /> Bulk Paste Marks
                 </h3>
                 <p className="text-xs text-blue-600 mb-3">
-                  {hasSections 
-                    ? "Paste a grid of marks from Excel. Columns will automatically map to your sections/sub-sections from left to right (separated by tabs)." 
+                  {hasSections
+                    ? "Paste a grid of marks from Excel. Columns will automatically map to your sections/sub-sections from left to right (separated by tabs)."
                     : "Paste a column of marks directly from Excel. It will map to students in class number order."}
                 </p>
-                <textarea 
+                <textarea
                   rows={6}
                   value={bulkText}
                   onChange={handleBulkPaste}
@@ -2007,7 +2029,7 @@ export default function Marks() {
                   <tr className="text-gray-600 text-sm uppercase tracking-wider">
                     <th className="p-3 border-b w-16 text-center align-top">No.</th>
                     <th className="p-3 border-b w-56 align-top border-r border-gray-200">English Name</th>
-                    
+
                     {hasSections ? (
                       <>
                         {selectedAssessment.sectionsConfig.map(sec => (
@@ -2036,7 +2058,7 @@ export default function Marks() {
                         <th className="p-3 border-b w-28 text-gray-700 font-bold align-top text-center">
                           <div className="flex flex-col items-center justify-center">
                             <span>Total ({showRawTotal ? selectedAssessment.paperFullMark : '100%'})</span>
-                            <button 
+                            <button
                               onClick={() => setShowRawTotal(!showRawTotal)}
                               className="flex items-center mt-1 text-[10px] font-semibold text-gray-500 hover:text-blue-600 transition-colors bg-gray-100 px-2 py-0.5 rounded-full border border-gray-200"
                               title="Toggle Total Mark View"
@@ -2050,7 +2072,7 @@ export default function Marks() {
                     ) : (
                       <th className="p-3 border-b w-32 align-top">Mark / Grade</th>
                     )}
-                    
+
                     {!studentView && showDeduct && (
                       <th className="p-3 border-b w-24 text-center align-top border-l border-gray-200 text-red-600">
                         <div className="flex items-center justify-center">
@@ -2063,7 +2085,7 @@ export default function Marks() {
                       <div className="flex flex-col items-center justify-center">
                         <span>Status</span>
                         {!studentView && (
-                          <button 
+                          <button
                             onClick={() => setShowDeduct(!showDeduct)}
                             className="flex items-center mt-1 text-[10px] font-semibold text-gray-500 hover:text-blue-600 transition-colors bg-gray-100 px-2 py-0.5 rounded-full border border-gray-200"
                             title="Toggle Deduct Column"
@@ -2097,7 +2119,7 @@ export default function Marks() {
                         const rawTotal = calculateTotal(studentMarks);
                         const scaledTotal = hasSections ? calculateScaledTotal(studentMarks, selectedAssessment.sectionsConfig) : rawTotal;
                         const rawPaperTotal = hasSections ? calculatePaperRawTotal(studentMarks, selectedAssessment.sectionsConfig) : rawTotal;
-                        
+
                         const deduction = parseFloat(marksData[`${s.id}_deduction`]) || 0;
                         let finalTotal = null;
                         if (scaledTotal !== null) {
@@ -2118,7 +2140,7 @@ export default function Marks() {
                               <div className="truncate">{s.englishName}</div>
                               <div className="text-xs text-gray-400 truncate">{s.chineseName}</div>
                             </td>
-                            
+
                             {hasSections ? (
                               <>
                                 {selectedAssessment.sectionsConfig.map(sec => {
@@ -2133,18 +2155,17 @@ export default function Marks() {
                                             const currentCol = globalColIndex++;
                                             return (
                                               <td key={sub.id} className={`p-2 text-center ${isMissing ? 'bg-red-50' : ''}`}>
-                                                <input 
-                                                  type="text" 
+                                                <input
+                                                  type="text"
                                                   data-row={rowIndex}
                                                   data-col={currentCol}
                                                   data-gramm="false" data-gramm_editor="false"
                                                   value={studentView ? (isMissing ? '' : '***') : val}
-                                                  onChange={(e) => { if(!studentView) handleMarkChange(s.id, e.target.value, sub.id) }}
+                                                  onChange={(e) => { if (!studentView) handleMarkChange(s.id, e.target.value, sub.id) }}
                                                   onKeyDown={(e) => handleKeyDown(e, rowIndex, currentCol)}
                                                   disabled={inputMethod === 'bulk' || studentView}
-                                                  className={`w-full max-w-[70px] border rounded-md p-1.5 text-center outline-none transition-colors focus:ring-2 focus:ring-blue-500 ${
-                                                    isMissing ? 'bg-red-50 border-red-300' : (inputMethod === 'bulk' || studentView ? 'bg-gray-100 text-gray-500' : 'bg-white')
-                                                  } ${!isMissing && !studentView ? 'border-gray-300' : 'border-dashed border-gray-300'}`}
+                                                  className={`w-full max-w-[70px] border rounded-md p-1.5 text-center outline-none transition-colors focus:ring-2 focus:ring-blue-500 ${isMissing ? 'bg-red-50 border-red-300' : (inputMethod === 'bulk' || studentView ? 'bg-gray-100 text-gray-500' : 'bg-white')
+                                                    } ${!isMissing && !studentView ? 'border-gray-300' : 'border-dashed border-gray-300'}`}
                                                 />
                                               </td>
                                             );
@@ -2160,18 +2181,17 @@ export default function Marks() {
                                             const isMissing = val === '';
                                             const currentCol = globalColIndex++;
                                             return (
-                                              <input 
-                                                type="text" 
+                                              <input
+                                                type="text"
                                                 data-row={rowIndex}
                                                 data-col={currentCol}
                                                 data-gramm="false" data-gramm_editor="false"
                                                 value={studentView ? (isMissing ? '' : '***') : val}
-                                                onChange={(e) => { if(!studentView) handleMarkChange(s.id, e.target.value, sec.id) }}
+                                                onChange={(e) => { if (!studentView) handleMarkChange(s.id, e.target.value, sec.id) }}
                                                 onKeyDown={(e) => handleKeyDown(e, rowIndex, currentCol)}
                                                 disabled={inputMethod === 'bulk' || studentView}
-                                                className={`w-full max-w-[70px] border rounded-md p-1.5 text-center outline-none transition-colors focus:ring-2 focus:ring-blue-500 ${
-                                                  isMissing ? 'bg-red-50 border-red-300' : (inputMethod === 'bulk' || studentView ? 'bg-gray-100 text-gray-500' : 'bg-white')
-                                                } ${!isMissing && !studentView ? 'border-gray-300' : 'border-dashed border-gray-300'}`}
+                                                className={`w-full max-w-[70px] border rounded-md p-1.5 text-center outline-none transition-colors focus:ring-2 focus:ring-blue-500 ${isMissing ? 'bg-red-50 border-red-300' : (inputMethod === 'bulk' || studentView ? 'bg-gray-100 text-gray-500' : 'bg-white')
+                                                  } ${!isMissing && !studentView ? 'border-gray-300' : 'border-dashed border-gray-300'}`}
                                               />
                                             );
                                           })()}
@@ -2186,27 +2206,26 @@ export default function Marks() {
                               </>
                             ) : (
                               <td className={`p-3 ${!hasMark ? 'bg-red-50' : ''}`}>
-                                <input 
-                                  type="text" 
+                                <input
+                                  type="text"
                                   data-row={rowIndex}
                                   data-col={0}
                                   data-gramm="false" data-gramm_editor="false"
                                   value={studentView ? (!hasMark ? '' : '***') : (studentMarks || '')}
-                                  onChange={(e) => { if(!studentView) handleMarkChange(s.id, e.target.value) }}
+                                  onChange={(e) => { if (!studentView) handleMarkChange(s.id, e.target.value) }}
                                   onKeyDown={(e) => handleKeyDown(e, rowIndex, 0)}
                                   disabled={inputMethod === 'bulk' || studentView}
                                   placeholder={inputMethod === 'bulk' ? "Pasted from above..." : "Enter mark..."}
-                                  className={`w-full max-w-[200px] border rounded-md p-2 outline-none transition-colors focus:ring-2 focus:ring-blue-500 ${
-                                    !hasMark ? 'bg-red-50 border-red-300' : (inputMethod === 'bulk' || studentView ? 'bg-gray-100 text-gray-500' : 'bg-white')
-                                  } ${hasMark && !studentView ? 'border-gray-300' : 'border-dashed border-gray-300'}`}
+                                  className={`w-full max-w-[200px] border rounded-md p-2 outline-none transition-colors focus:ring-2 focus:ring-blue-500 ${!hasMark ? 'bg-red-50 border-red-300' : (inputMethod === 'bulk' || studentView ? 'bg-gray-100 text-gray-500' : 'bg-white')
+                                    } ${hasMark && !studentView ? 'border-gray-300' : 'border-dashed border-gray-300'}`}
                                 />
                               </td>
                             )}
 
                             {!studentView && showDeduct && (
                               <td className="p-2 text-center border-l border-gray-200">
-                                <input 
-                                  type="number" 
+                                <input
+                                  type="number"
                                   step="any"
                                   data-gramm="false" data-gramm_editor="false"
                                   value={marksData[`${s.id}_deduction`] || ''}
@@ -2216,7 +2235,7 @@ export default function Marks() {
                                 />
                               </td>
                             )}
-                            
+
                             <td className={`p-3 font-bold text-center border-l border-gray-200 ${finalTotal === null ? 'bg-red-50' : (isTopMark && !studentView ? 'bg-yellow-200 text-yellow-800' : 'text-blue-700 bg-blue-50/50')}`}>
                               {finalTotal === null ? '-' : (studentView ? '***' : finalTotal.toFixed(1))}
                             </td>
@@ -2236,10 +2255,10 @@ export default function Marks() {
                       {currentClassStudents.length > 0 && (
                         <tr className="bg-blue-50/50 border-t-2 border-blue-200">
                           <td colSpan={2} className="p-3 font-bold text-right text-blue-800 border-r border-gray-200">
-                            Statistics<br/>
+                            Statistics<br />
                             <span className="text-[10px] font-normal text-blue-600">Mean / Median / Pass</span>
                           </td>
-                          
+
                           {hasSections ? (
                             <>
                               {selectedAssessment.sectionsConfig.map(sec => (
@@ -2261,9 +2280,9 @@ export default function Marks() {
                           ) : (
                             <StatCell stats={getStats(statsData.main.marks, statsData.main.fullMark)} />
                           )}
-                          
+
                           {showDeduct && !studentView && <td className="p-2 border-l border-gray-200 bg-gray-50"></td>}
-                          
+
                           <StatCell stats={getStats(statsData.final.marks, statsData.final.fullMark)} isBold borderLeft bg="bg-blue-100/50" />
                           <td className="p-3"></td>
                         </tr>
@@ -2290,7 +2309,7 @@ export default function Marks() {
                 <X className="w-6 h-6" />
               </button>
             </div>
-            
+
             <div className="p-6 overflow-y-auto flex-1">
               <form id="assessment-form" onSubmit={handleSaveAssessment} className="space-y-6">
                 {/* Basic Info */}
@@ -2298,8 +2317,8 @@ export default function Marks() {
                   {!isMultiSectionCategory && (
                     <div>
                       <label className="block text-sm font-semibold text-gray-700 mb-1">Assessment Name</label>
-                      <input 
-                        type="text" 
+                      <input
+                        type="text"
                         value={newAssessmentName}
                         onChange={(e) => setNewAssessmentName(e.target.value)}
                         data-gramm="false" data-gramm_editor="false"
@@ -2308,11 +2327,11 @@ export default function Marks() {
                       />
                     </div>
                   )}
-                  
+
                   <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-1">Date</label>
-                    <input 
-                      type="date" 
+                    <input
+                      type="date"
                       value={newAssessmentDate}
                       onChange={(e) => setNewAssessmentDate(e.target.value)}
                       className="w-full border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
@@ -2322,7 +2341,7 @@ export default function Marks() {
 
                   <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-1">Term</label>
-                    <select 
+                    <select
                       value={formTerm}
                       onChange={(e) => setFormTerm(e.target.value)}
                       className="w-full border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
@@ -2334,8 +2353,8 @@ export default function Marks() {
                   {!isMultiSectionCategory && (
                     <div>
                       <label className="block text-sm font-semibold text-gray-700 mb-1">Full Mark</label>
-                      <input 
-                        type="number" 
+                      <input
+                        type="number"
                         step="any"
                         value={fullMark}
                         onChange={(e) => setFullMark(e.target.value)}
@@ -2353,7 +2372,7 @@ export default function Marks() {
                   <div className="flex flex-wrap gap-2">
                     {classes.map(c => (
                       <label key={c} className={`flex items-center px-3 py-1.5 rounded-md border cursor-pointer transition-colors ${selectedClassesForNew.includes(c) ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}`}>
-                        <input 
+                        <input
                           type="checkbox"
                           checked={selectedClassesForNew.includes(c)}
                           onChange={() => toggleClassForNew(c)}
@@ -2394,8 +2413,8 @@ export default function Marks() {
                       <h3 className="text-lg font-bold text-gray-800">Paper & Sections Configuration</h3>
                       <div className="flex items-center space-x-2">
                         <label className="text-sm font-semibold text-gray-700">Paper Full Mark:</label>
-                        <input 
-                          type="number" 
+                        <input
+                          type="number"
                           value={paperFullMark}
                           onChange={(e) => setPaperFullMark(e.target.value)}
                           data-gramm="false" data-gramm_editor="false"
@@ -2456,7 +2475,7 @@ export default function Marks() {
                 )}
               </form>
             </div>
-            
+
             <div className="p-4 border-t border-gray-200 bg-gray-50 rounded-b-lg flex justify-end space-x-3 shrink-0">
               <button type="button" onClick={() => setShowAddAssessment(false)} className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-md font-medium hover:bg-gray-50">Cancel</button>
               <button type="submit" form="assessment-form" className="px-6 py-2 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 shadow-sm flex items-center">
@@ -2477,18 +2496,17 @@ export default function Marks() {
                 All Classes Performance - {selectedAssessment.name}
               </h2>
               <div className="flex items-center">
-                <button 
+                <button
                   onClick={() => setAllClassesStudentView(!allClassesStudentView)}
-                  className={`flex items-center px-3 py-1.5 text-sm font-bold rounded-md transition-colors border shadow-sm mr-4 ${
-                    allClassesStudentView 
-                      ? 'bg-amber-100 text-amber-800 border-amber-300' 
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border-gray-300'
-                  }`}
+                  className={`flex items-center px-3 py-1.5 text-sm font-bold rounded-md transition-colors border shadow-sm mr-4 ${allClassesStudentView
+                    ? 'bg-amber-100 text-amber-800 border-amber-300'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border-gray-300'
+                    }`}
                 >
                   {allClassesStudentView ? <EyeOff className="w-4 h-4 mr-2" /> : <Eye className="w-4 h-4 mr-2" />}
                   {allClassesStudentView ? 'Student View: ON' : 'Student View: OFF'}
                 </button>
-                <button 
+                <button
                   onClick={() => setShowAllClassesModal(false)}
                   className="text-gray-400 hover:text-gray-600 transition-colors p-2 bg-gray-100 hover:bg-gray-200 rounded-full"
                 >
@@ -2572,7 +2590,7 @@ export default function Marks() {
                 <p className="text-sm text-gray-500 mt-1">Type class number (e.g. 20) or full class+no (e.g. 4A15) to load a student.</p>
               </div>
               <div className="flex items-center space-x-3">
-                <button 
+                <button
                   onClick={saveAmendments}
                   disabled={isSaving}
                   className="flex items-center px-4 py-2 bg-orange-600 text-white font-bold rounded-lg hover:bg-orange-700 transition-colors disabled:opacity-70 shadow-sm"
@@ -2580,7 +2598,7 @@ export default function Marks() {
                   {isSaving ? <Loader2 className="w-5 h-5 mr-2 animate-spin" /> : <Save className="w-5 h-5 mr-2" />}
                   Save Changes
                 </button>
-                <button 
+                <button
                   onClick={closeAmendModal}
                   className="text-gray-400 hover:text-gray-600 transition-colors p-2 bg-gray-100 hover:bg-gray-200 rounded-full"
                 >
@@ -2588,7 +2606,7 @@ export default function Marks() {
                 </button>
               </div>
             </div>
-            
+
             <div className="p-6 overflow-y-auto overflow-x-auto flex-1">
               <table className="w-max min-w-full text-left border-collapse bg-white shadow-sm border border-gray-200 rounded-lg">
                 <thead className="bg-gray-100 sticky top-0 z-10">
@@ -2600,12 +2618,12 @@ export default function Marks() {
                         {sec.hasSubSections ? (
                           sec.subSections.map(sub => (
                             <th key={sub.id} className="p-3 border-b border-gray-200 text-center min-w-[200px]">
-                              {sec.name} - {sub.name} <br/><span className="text-[10px] normal-case text-gray-500">Full: {sub.fullMark}</span>
+                              {sec.name} - {sub.name} <br /><span className="text-[10px] normal-case text-gray-500">Full: {sub.fullMark}</span>
                             </th>
                           ))
                         ) : (
                           <th key={sec.id} className="p-3 border-b border-gray-200 text-center min-w-[200px] border-r border-gray-200">
-                            {sec.name} <br/><span className="text-[10px] normal-case text-gray-500">Full: {sec.fullMark}</span>
+                            {sec.name} <br /><span className="text-[10px] normal-case text-gray-500">Full: {sec.fullMark}</span>
                           </th>
                         )}
                       </React.Fragment>
@@ -2623,7 +2641,7 @@ export default function Marks() {
                     return (
                       <tr key={row.id} className="hover:bg-gray-50">
                         <td className="p-3 text-center">
-                          <input 
+                          <input
                             type="text"
                             value={row.query}
                             onChange={(e) => handleAmendQueryChange(row.id, e.target.value)}
@@ -2706,7 +2724,7 @@ export default function Marks() {
                 </tbody>
               </table>
               <div className="mt-4">
-                <button 
+                <button
                   onClick={handleAddAmendRow}
                   className="flex items-center px-4 py-2 bg-gray-100 text-gray-700 font-medium rounded-lg hover:bg-gray-200 transition-colors border border-gray-300"
                 >
@@ -2727,7 +2745,7 @@ export default function Marks() {
                 <Settings className="w-5 h-5 mr-2 text-gray-600" />
                 Manage Terms for {selectedClass}
               </h2>
-              <button 
+              <button
                 onClick={() => setShowTermManager(false)}
                 className="text-gray-400 hover:text-gray-600 transition-colors"
               >
@@ -2738,8 +2756,8 @@ export default function Marks() {
               <form onSubmit={handleAddTerm} className="mb-6 bg-gray-50 p-4 rounded-lg border border-gray-200">
                 <h3 className="font-semibold text-gray-700 mb-3 text-sm">Add New Term</h3>
                 <div className="flex space-x-2">
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     value={newTermName}
                     onChange={(e) => setNewTermName(e.target.value)}
                     data-gramm="false" data-gramm_editor="false"
@@ -2757,8 +2775,8 @@ export default function Marks() {
                   <li key={t} className="flex flex-col p-3 hover:bg-gray-50">
                     {editingTerm === t ? (
                       <div className="flex items-center space-x-2">
-                        <input 
-                          type="text" 
+                        <input
+                          type="text"
                           value={editTermName}
                           onChange={(e) => setEditTermName(e.target.value)}
                           data-gramm="false" data-gramm_editor="false"
@@ -2797,7 +2815,7 @@ export default function Marks() {
                 <BarChart2 className="w-7 h-7 mr-3 text-indigo-600" />
                 Analytics Overview - {selectedAssessment.name}
               </h2>
-              <button 
+              <button
                 onClick={() => setShowOverviewModal(false)}
                 className="text-gray-400 hover:text-gray-600 transition-colors p-2 bg-gray-100 hover:bg-gray-200 rounded-full"
               >
@@ -2805,12 +2823,12 @@ export default function Marks() {
               </button>
             </div>
             <div className="p-6 overflow-y-auto flex-1 flex flex-col lg:flex-row gap-8">
-              
+
               {/* Left Side: Mark Overview */}
               <div className="w-full lg:w-1/2 space-y-6">
                 <h3 className="text-lg font-bold text-gray-700 border-b border-gray-200 pb-2">Component Statistics</h3>
                 {renderStatCard("Overall Total", getStats(statsData.final.marks, statsData.final.fullMark), statsData.final.fullMark, true)}
-                
+
                 {selectedAssessment.sectionsConfig?.map(sec => (
                   <div key={sec.id} className="space-y-4">
                     {sec.hasSubSections ? (
@@ -2857,14 +2875,14 @@ export default function Marks() {
                 <Calculator className="w-5 h-5 mr-2 text-purple-600" />
                 Term Overall Score Calculator
               </h2>
-              <button 
+              <button
                 onClick={() => setShowTermScoreModal(false)}
                 className="text-gray-400 hover:text-gray-600 transition-colors"
               >
                 <X className="w-6 h-6" />
               </button>
             </div>
-            
+
             <div className="p-4 bg-white flex flex-col md:flex-row justify-between items-center border-b border-gray-200 gap-4">
               <div className="flex items-center space-x-3 w-full md:w-auto flex-wrap gap-y-2">
                 <div className="flex items-center space-x-2">
@@ -2872,8 +2890,8 @@ export default function Marks() {
                   <div className="flex flex-wrap gap-1 max-w-[200px] max-h-16 overflow-y-auto">
                     {classes.map(c => (
                       <label key={c} className="flex items-center text-xs bg-gray-100 px-2 py-1 rounded cursor-pointer hover:bg-gray-200">
-                        <input 
-                          type="checkbox" 
+                        <input
+                          type="checkbox"
                           checked={modalClasses.includes(c)}
                           onChange={() => {
                             setModalClasses(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]);
@@ -2886,10 +2904,10 @@ export default function Marks() {
                     ))}
                   </div>
                 </div>
-                
+
                 <div className="flex items-center space-x-2 pl-2 border-l border-gray-200">
                   <label className="font-semibold text-gray-700 text-sm">Term:</label>
-                  <select 
+                  <select
                     value={modalTerm}
                     onChange={(e) => {
                       setModalTerm(e.target.value);
@@ -2903,7 +2921,7 @@ export default function Marks() {
 
                 <div className="flex items-center space-x-2 pl-2 border-l border-gray-200">
                   <label className="font-semibold text-gray-700 text-sm">Preset:</label>
-                  <select 
+                  <select
                     value={selectedPresetId}
                     onChange={(e) => {
                       setSelectedPresetId(e.target.value);
@@ -2914,7 +2932,7 @@ export default function Marks() {
                     {presets.length === 0 && <option value="">No presets available</option>}
                     {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
-                  <button 
+                  <button
                     onClick={() => setShowPresetManager(true)}
                     className="text-sm bg-gray-100 text-gray-700 px-2 py-1.5 rounded-md hover:bg-gray-200 transition-colors font-medium border border-gray-300"
                   >
@@ -2924,7 +2942,7 @@ export default function Marks() {
               </div>
 
               <div className="flex items-center space-x-3 w-full md:w-auto">
-                <button 
+                <button
                   onClick={handleCopyTermScores}
                   disabled={termScoresData.length === 0}
                   className="bg-teal-50 text-teal-700 px-4 py-2 rounded-md font-medium hover:bg-teal-100 transition-colors flex items-center disabled:opacity-50 border border-teal-200 shadow-sm"
@@ -2933,7 +2951,7 @@ export default function Marks() {
                   {termCopySuccess ? <CheckCircle className="w-4 h-4 mr-2" /> : <Copy className="w-4 h-4 mr-2" />}
                   {termCopySuccess ? 'Copied!' : 'Copy Scores'}
                 </button>
-                <button 
+                <button
                   onClick={calculateTermScores}
                   disabled={!selectedPresetId || isCalculatingScores || modalClasses.length === 0}
                   className="bg-purple-600 text-white px-6 py-2 rounded-md font-medium hover:bg-purple-700 transition-colors flex items-center disabled:opacity-50 shadow-sm"
@@ -3051,7 +3069,7 @@ export default function Marks() {
                 <Settings className="w-5 h-5 mr-2 text-gray-600" />
                 Manage Presets
               </h2>
-              <button 
+              <button
                 onClick={() => setShowPresetManager(false)}
                 className="text-gray-400 hover:text-gray-600 transition-colors"
               >
@@ -3061,8 +3079,8 @@ export default function Marks() {
             <div className="p-6">
               <form onSubmit={handleAddPreset} className="mb-6 bg-gray-50 p-4 rounded-lg border border-gray-200">
                 <h3 className="font-semibold text-gray-700 mb-3 text-sm">Add New Preset</h3>
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   value={newPresetName}
                   onChange={(e) => setNewPresetName(e.target.value)}
                   data-gramm="false" data-gramm_editor="false"
@@ -3075,8 +3093,8 @@ export default function Marks() {
                     <div key={cat} className="flex justify-between items-center">
                       <label className="text-sm text-gray-600">{cat}</label>
                       <div className="flex items-center">
-                        <input 
-                          type="number" 
+                        <input
+                          type="number"
                           placeholder="0"
                           value={newPresetWeights[cat] || ''}
                           onChange={(e) => updatePresetWeight(cat, e.target.value)}
@@ -3101,7 +3119,7 @@ export default function Marks() {
                         {p.isCustom ? "Custom Calculation Logic Applied" : Object.entries(p.weights).filter(([_, w]) => w > 0).map(([c, w]) => `${c}: ${w}%`).join(', ')}
                       </span>
                     </div>
-                    <button 
+                    <button
                       onClick={() => handleDeletePreset(p.id)}
                       className="text-red-400 hover:text-red-600 p-1 ml-2"
                       title="Delete Preset"
@@ -3126,18 +3144,18 @@ export default function Marks() {
                 <LinkIcon className="w-5 h-5 mr-2 text-blue-600" />
                 Link Archive Document
               </h2>
-              <button 
+              <button
                 onClick={() => setShowDocLinker(false)}
                 className="text-gray-400 hover:text-gray-600 transition-colors"
               >
                 <X className="w-6 h-6" />
               </button>
             </div>
-            
+
             <div className="p-4 bg-white border-b border-gray-200 flex flex-col sm:flex-row gap-3">
               <div className="flex-1 relative">
                 <Search className="absolute left-3 top-2.5 text-gray-400 w-4 h-4" />
-                <input 
+                <input
                   type="text"
                   placeholder="Search document title..."
                   value={docSearchTerm}
@@ -3146,7 +3164,7 @@ export default function Marks() {
                   className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-md text-sm outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
-              <select 
+              <select
                 value={docFilterOrigin}
                 onChange={e => setDocFilterOrigin(e.target.value)}
                 className="border border-gray-300 rounded-md px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
@@ -3154,7 +3172,7 @@ export default function Marks() {
                 <option value="">All Origins</option>
                 {uniqueOrigins.map(o => <option key={o} value={o}>{o}</option>)}
               </select>
-              <select 
+              <select
                 value={docFilterYear}
                 onChange={e => setDocFilterYear(e.target.value)}
                 className="border border-gray-300 rounded-md px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
@@ -3170,7 +3188,7 @@ export default function Marks() {
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {filteredArchives.map(doc => (
-                    <div 
+                    <div
                       key={doc.id}
                       onClick={() => {
                         setLinkedDocId(doc.id);
@@ -3205,7 +3223,7 @@ export default function Marks() {
               <div className="flex items-center gap-4">
                 <div className="flex flex-col">
                   <div className="flex items-center gap-2">
-                     <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                       {previewItem.parent.year || ''} • {previewItem.parent.origin || ''}
                     </span>
                     <span className={`text-xs px-2 py-0.5 rounded font-medium ${previewItem.parent.paperType?.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
@@ -3242,7 +3260,7 @@ export default function Marks() {
 
               <div className="flex items-center gap-3">
                 {!viewingAnswer && previewItem.parent.hasAnswer && (
-                  <button 
+                  <button
                     onClick={() => setViewingAnswer(true)}
                     className="hidden sm:flex px-4 py-2 rounded-lg bg-green-600 text-white text-sm font-bold hover:bg-green-700 transition-all items-center gap-2"
                   >
@@ -3251,7 +3269,7 @@ export default function Marks() {
                 )}
 
                 {viewingAnswer && (
-                  <button 
+                  <button
                     onClick={() => setViewingAnswer(false)}
                     className="hidden sm:flex px-4 py-2 rounded-lg bg-slate-600 text-white text-sm font-bold hover:bg-slate-700 transition-all items-center gap-2"
                   >
@@ -3259,7 +3277,7 @@ export default function Marks() {
                   </button>
                 )}
 
-                <button 
+                <button
                   onClick={() => handleViewLinkedMarks(previewItem.parent.id, previewItem.parent.title)}
                   className="hidden sm:flex px-4 py-2 rounded-lg bg-teal-600 text-white text-sm font-bold hover:bg-teal-700 transition-all items-center gap-2"
                 >
@@ -3267,7 +3285,7 @@ export default function Marks() {
                 </button>
 
                 {((!viewingAnswer && previewItem.parent.hasFile) || (viewingAnswer && previewItem.parent.hasAnswer)) && (
-                  <a 
+                  <a
                     href={viewingAnswer ? previewItem.parent.answerFileUrl : previewItem.parent.fileUrl}
                     target="_blank"
                     rel="noreferrer"
@@ -3276,12 +3294,12 @@ export default function Marks() {
                     <Download size={16} /> {viewingAnswer ? "Download Answer" : "Download PDF"}
                   </a>
                 )}
-                
-                <button 
+
+                <button
                   onClick={() => {
                     setPreviewItem(null);
                     setViewingAnswer(false);
-                  }} 
+                  }}
                   className="text-slate-400 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 p-2 rounded-full transition-colors"
                 >
                   <X size={20} />
@@ -3333,7 +3351,7 @@ export default function Marks() {
               <div className="flex-1 bg-slate-200 flex flex-col h-full relative">
                 {viewingAnswer ? (
                   previewItem.parent.hasAnswer ? (
-                    <iframe 
+                    <iframe
                       src={`${previewItem.parent.answerFileUrl}#view=Fit&pagemode=thumbs&page=1&zoom=page-fit`}
                       className="w-full h-full"
                       title="Answer Preview"
@@ -3343,7 +3361,7 @@ export default function Marks() {
                   )
                 ) : (
                   previewItem.parent.hasFile ? (
-                    <iframe 
+                    <iframe
                       src={`${previewItem.parent.fileUrl}#view=Fit&pagemode=thumbs&page=1&zoom=page-fit`}
                       className="w-full h-full"
                       title="PDF Preview"

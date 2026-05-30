@@ -106,7 +106,7 @@ const CheckboxGroup = ({ options, selectedValues, onChange }) => {
     }
   };
 
-return (
+  return (
     <div className="flex flex-wrap gap-2">
       {options.map((opt) => {
         const label = typeof opt === 'object' ? opt.label : opt;
@@ -577,7 +577,9 @@ export default function AdvancedHistoryArchive() {
   const [systemTiers, setSystemTiers] = useState(
     Array.from({ length: 10 }, (_, i) => ({ id: String(10 - i), name: `Tier ${10 - i}` }))
   );
-  const [tierAccessConfig, setTierAccessConfig] = useState({}); // { role: { tierId: { date: "YYYY-MM-DD", immediate: boolean } } }
+  const [tierAccessConfig, setTierAccessConfig] = useState({});
+  const [roleClasses, setRoleClasses] = useState({}); // NEW: { roleName: ['4A', '4B'] }
+  const [availableClasses, setAvailableClasses] = useState([]); // NEW
   const [selectedRoleForAccess, setSelectedRoleForAccess] = useState('viewer');
   const [newRoleInput, setNewRoleInput] = useState('');
   const [isSavingSettings, setIsSavingSettings] = useState(false);
@@ -613,7 +615,11 @@ export default function AdvancedHistoryArchive() {
           const data = docSnap.data();
           if (data.roles && Array.isArray(data.roles)) setSystemRoles(data.roles);
           if (data.tiers && Array.isArray(data.tiers)) setSystemTiers(data.tiers);
+          if (data.roleClasses) setRoleClasses(data.roleClasses); // NEW
 
+          // Fetch available classes for mapping
+          const classDocSnap = await getDoc(doc(db, "settings", "classes"));
+          if (classDocSnap.exists()) setAvailableClasses(classDocSnap.data().list || []);
           if (data.tierAccess) {
             // Migrate old string format to object format if necessary
             const formattedAccess = {};
@@ -634,7 +640,7 @@ export default function AdvancedHistoryArchive() {
 
         // Fetch current user's specific role if not admin
         if (!user.isAdmin) {
-          const userDocRef = doc(db, "user_roles", user.email);
+          const userDocRef = doc(db, "user_roles", user.email.toLowerCase().trim());
           const userDocSnap = await getDoc(userDocRef);
           if (userDocSnap.exists()) {
             setCurrentUserRole(userDocSnap.data().role);
@@ -652,12 +658,42 @@ export default function AdvancedHistoryArchive() {
     if (!user?.isAdmin) return;
     setIsSavingSettings(true);
     try {
+      // 1. Save the base configuration
       await setDoc(doc(db, "system_settings", "config"), {
         roles: systemRoles,
         tiers: systemTiers,
-        tierAccess: tierAccessConfig
-      });
-      alert("System Settings (Roles, Tiers, Access) saved successfully!");
+        tierAccess: tierAccessConfig,
+        roleClasses: roleClasses
+      }, { merge: true });
+
+      // 2. Sync emails to students based on the mapped classes
+      const usersSnap = await getDocs(collection(db, "user_roles"));
+      const usersList = usersSnap.docs.map(d => ({ email: d.id, ...d.data() })); // <-- CHANGE IS HERE
+
+      const studentsSnap = await getDocs(collection(db, "students"));
+      const studentsList = studentsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      // 3. Iterate through users, find their assigned classes, and map the corresponding students
+      for (const u of usersList) {
+        const uRole = u.role;
+        const uClasses = roleClasses[uRole] || [];
+
+        // Find all students that belong to the classes assigned to this user's role
+        const mappedStudents = studentsList
+          .filter(s => uClasses.includes(s.className))
+          .map(s => s.id); // Storing student IDs (you can change this to s.email or s.englishName if needed later)
+
+        // Save the mapping to a new collection in Firebase
+        await setDoc(doc(db, "user_students", u.email), {
+          email: u.email,
+          role: uRole,
+          assignedClasses: uClasses,
+          mappedStudentIds: mappedStudents,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+      }
+
+      alert("System Settings and User-to-Student mappings saved successfully!");
     } catch (error) {
       console.error("Error saving system settings:", error);
       alert("Failed to save settings.");
@@ -975,13 +1011,13 @@ export default function AdvancedHistoryArchive() {
       const parentTierStr = parent.tier || '10';
       const parentTierNum = parseInt(parentTierStr, 10) || 10;
 
-      // --- TIER ACCESS CHECK (Cumulative & DSE Only) ---
+// --- TIER ACCESS CHECK (Cumulative & DSE Only) ---
       if (!user.isAdmin) {
         if (isDseOnly) {
           // DSE Only role bypasses tiers but can ONLY see DSE Pastpapers
           if (parent.origin !== "DSE Pastpaper") return;
         } else if (parentTierNum > maxUnlockedTier) {
-          // Normal progressive roles
+          // Normal progressive roles: block if tier is higher than unlocked
           return;
         }
       }
@@ -2507,16 +2543,33 @@ export default function AdvancedHistoryArchive() {
                         </h3>
                         <div className="space-y-2 mb-4">
                           {systemRoles.map(role => (
-                            <div key={role} className="flex items-center justify-between bg-slate-50 border border-slate-100 px-3 py-2 rounded-lg text-sm">
-                              <span className="font-medium text-slate-700">{role}</span>
-                              {role !== 'admin' && role !== 'viewer' && (
-                                <button
-                                  onClick={() => setSystemRoles(prev => prev.filter(r => r !== role))}
-                                  className="text-slate-400 hover:text-red-500"
-                                >
-                                  <X size={14} />
-                                </button>
-                              )}
+                            <div key={role} className="flex flex-col bg-slate-50 border border-slate-100 px-3 py-2 rounded-lg text-sm gap-2">
+                              <div className="flex items-center justify-between">
+                                <span className="font-medium text-slate-700">{role}</span>
+                                {role !== 'admin' && role !== 'viewer' && (
+                                  <button onClick={() => setSystemRoles(prev => prev.filter(r => r !== role))} className="text-slate-400 hover:text-red-500">
+                                    <X size={14} />
+                                  </button>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {availableClasses.map(c => (
+                                  <label key={c} className="flex items-center text-xs gap-1 cursor-pointer bg-white px-1.5 py-0.5 rounded border border-slate-200">
+                                    <input
+                                      type="checkbox"
+                                      checked={roleClasses[role]?.includes(c) || false}
+                                      onChange={(e) => {
+                                        const current = roleClasses[role] || [];
+                                        setRoleClasses(prev => ({
+                                          ...prev,
+                                          [role]: e.target.checked ? [...current, c] : current.filter(cls => cls !== c)
+                                        }));
+                                      }}
+                                    />
+                                    {c}
+                                  </label>
+                                ))}
+                              </div>
                             </div>
                           ))}
                         </div>

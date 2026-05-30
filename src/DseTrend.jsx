@@ -1,21 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Loader2, AlertCircle } from 'lucide-react';
-import { initializeApp } from "firebase/app";
-import { getFirestore, collection, getDocs } from "firebase/firestore";
-
-// --- CONFIGURATION ---
-const firebaseConfig = {
-  apiKey: "AIzaSyD2ZnF0VioN7pDYS6q25whLzc-BQi8EyQo",
-  authDomain: "nclhist.firebaseapp.com",
-  projectId: "nclhist",
-  storageBucket: "nclhist.firebasestorage.app",
-  messagingSenderId: "513745613340",
-  appId: "1:513745613340:web:159ab2c6f583a1160225d9",
-  measurementId: "G-0SMPXMH9Y1"
-};
-
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+import { collection, getDocs } from "firebase/firestore";
+import { db } from './firebase.js';
 
 const ensureArray = (data) => {
   if (Array.isArray(data)) return data;

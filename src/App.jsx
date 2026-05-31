@@ -499,6 +499,7 @@ export default function AdvancedHistoryArchive() {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortOption, setSortOption] = useState('year_desc');
   const [displayMode, setDisplayMode] = useState('subquestion'); // 'subquestion' | 'fullpaper'
+  const [allowedViewIds, setAllowedViewIds] = useState([]); // NEW: For bypassing tier limits via linked docs
 
   // Pagination State
   const [currentPage, setCurrentPage] = useState(1);
@@ -584,6 +585,42 @@ export default function AdvancedHistoryArchive() {
   const [newRoleInput, setNewRoleInput] = useState('');
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
+  // Bulk Tier Update State
+  const [bulkTier, setBulkTier] = useState('10');
+  const [isBulking, setIsBulking] = useState(false);
+
+  // NEW: State to hold the secure server date and time (up to minute)
+  const [serverDate, setServerDate] = useState(new Date().toISOString().substring(0, 16));
+
+  // --- ADD THIS BLOCK: FETCH SECURE TIME FOR HONG KONG ---
+  useEffect(() => {
+    const fetchSecureTime = async () => {
+      try {
+        // Hardcoded specifically for Hong Kong
+        const response = await fetch(`https://timeapi.io/api/Time/current/zone?timeZone=Asia/Hong_Kong`);
+
+        if (response.ok) {
+          const data = await response.json();
+          // Extract up to the minute (YYYY-MM-DDTHH:mm)
+          const realDateTime = data.dateTime.substring(0, 16);
+          setServerDate(realDateTime);
+        } else {
+          throw new Error("API responded but not OK");
+        }
+      } catch (error) {
+        console.warn("Failed to fetch secure time, falling back to local device time.", error);
+        // Fallback: Forces local device to format the date specifically in HK time
+        const hkTime = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Hong_Kong' }));
+        // Format to YYYY-MM-DDTHH:mm manually to avoid timezone offset issues in toISOString
+        const fallbackDateTime = new Date(hkTime.getTime() - (hkTime.getTimezoneOffset() * 60000)).toISOString().substring(0, 16);
+        setServerDate(fallbackDateTime);
+      }
+    };
+
+    fetchSecureTime();
+  }, []);
+  // --- END OF ADDED BLOCK ---
+
   // --- CLEANUP BLOB URLS ---
   useEffect(() => {
     return () => {
@@ -629,6 +666,9 @@ export default function AdvancedHistoryArchive() {
           setPreviewItem({ uniqueId: viewId, parent: parentDoc, isFullPaper: true, matchedChildrenCount: parentDoc.subQuestions?.length || 0 });
         }
       }
+
+      // Allow this specific document to bypass tier restrictions in the search engine
+      setAllowedViewIds(prev => prev.includes(viewId) ? prev : [...prev, viewId]);
 
       // Clean up the URL so it doesn't re-trigger if the user closes the modal
       params.delete('viewId');
@@ -753,6 +793,28 @@ export default function AdvancedHistoryArchive() {
     });
   };
 
+  // --- BULK UPDATE ALL DOCUMENTS TO A SPECIFIC TIER ---
+  const handleBulkUpdateTiers = async () => {
+    const targetTierName = systemTiers.find(t => t.id === bulkTier)?.name || `Tier ${bulkTier}`;
+    if (!window.confirm(`Are you sure you want to change ALL documents in the archive to "${targetTierName}"? This action cannot be undone.`)) return;
+
+    setIsBulking(true);
+    try {
+      const snap = await getDocs(collection(db, "archives"));
+      const updatePromises = snap.docs.map(d => updateDoc(doc(db, "archives", d.id), { tier: bulkTier }));
+      await Promise.all(updatePromises);
+
+      // Update local state to reflect changes immediately
+      setArchives(prev => prev.map(a => ({ ...a, tier: bulkTier })));
+      alert(`Successfully updated ${snap.docs.length} documents to ${targetTierName}!`);
+    } catch (error) {
+      console.error("Error bulk updating tiers:", error);
+      alert("Failed to bulk update documents.");
+    } finally {
+      setIsBulking(false);
+    }
+  };
+
   // --- FETCH & EXTRACT TAGS ---
   useEffect(() => {
     const fetchArchives = async () => {
@@ -821,6 +883,64 @@ export default function AdvancedHistoryArchive() {
       fetchArchives();
     } else if (!user) {
       setArchives([]); // Clear archives on logout
+    }
+  }, [user, authLoading]);
+
+  // --- FETCH ALLOWED LINKED DOCS FOR USER ---
+  useEffect(() => {
+    const fetchAllowedDocs = async () => {
+      if (!user || user.isAdmin) return;
+      try {
+        let loadedClasses = [];
+        const userEmail = user.email.toLowerCase().trim();
+
+        // 1. Check user_students
+        const userStudentDoc = await getDoc(doc(db, "user_students", userEmail));
+        if (userStudentDoc.exists() && userStudentDoc.data().assignedClasses?.length > 0) {
+          loadedClasses = [...userStudentDoc.data().assignedClasses];
+        }
+
+        // 2. Check students collection
+        const studentQuery = query(collection(db, "students"), where("email", "==", userEmail));
+        const studentSnap = await getDocs(studentQuery);
+        if (!studentSnap.empty) {
+          const studentData = studentSnap.docs[0].data();
+          if (studentData.className && !loadedClasses.includes(studentData.className)) {
+            loadedClasses.push(studentData.className);
+          }
+        }
+
+        if (loadedClasses.length === 0) return;
+
+        // 3. Fetch assessments for these classes to extract linked documents
+        const q = query(collection(db, "assessments"));
+        const snap = await getDocs(q);
+        const allowedIds = [];
+
+        snap.docs.forEach(d => {
+          const data = d.data();
+          const matchesClass = (data.classes && Array.isArray(data.classes))
+            ? data.classes.some(c => loadedClasses.includes(c))
+            : loadedClasses.includes(data.className);
+
+          if (matchesClass) {
+            if (data.linkedDocId) allowedIds.push(data.linkedDocId);
+            if (data.sectionsConfig) {
+              data.sectionsConfig.forEach(sec => {
+                if (sec.linkedDocId) allowedIds.push(sec.linkedDocId);
+              });
+            }
+          }
+        });
+
+        setAllowedViewIds(prev => [...new Set([...prev, ...allowedIds])]);
+      } catch (error) {
+        console.error("Error fetching allowed docs:", error);
+      }
+    };
+
+    if (!authLoading) {
+      fetchAllowedDocs();
     }
   }, [user, authLoading]);
 
@@ -1036,7 +1156,8 @@ export default function AdvancedHistoryArchive() {
   const filteredResults = useMemo(() => {
     if (!user || !user.isAuthorized) return [];
 
-    const today = new Date().toISOString().split('T')[0];
+    // Use the securely fetched server date instead of the local device clock
+    const today = serverDate;
 
     // --- CUMULATIVE TIER LOGIC ---
     let maxUnlockedTier = 0;
@@ -1063,13 +1184,14 @@ export default function AdvancedHistoryArchive() {
       const parentTierNum = parseInt(parentTierStr, 10) || 10;
 
       // --- TIER ACCESS CHECK (Cumulative & DSE Only) ---
+      let parentAllowedByTier = true;
       if (!user.isAdmin) {
         if (isDseOnly) {
           // DSE Only role bypasses tiers but can ONLY see DSE Pastpapers
-          if (parent.origin !== "DSE Pastpaper") return;
+          if (parent.origin !== "DSE Pastpaper") parentAllowedByTier = false;
         } else if (parentTierNum > maxUnlockedTier) {
           // Normal progressive roles: block if tier is higher than unlocked
-          return;
+          parentAllowedByTier = false;
         }
       }
 
@@ -1082,6 +1204,16 @@ export default function AdvancedHistoryArchive() {
       if (!matchOrigin || !matchYear || !matchPaper || !matchTier) return;
 
       (parent.subQuestions || []).forEach(child => {
+        const childUniqueId = `${parent.id}_${child.id}`;
+        const hasFullAccess = parentAllowedByTier || allowedViewIds.includes(parent.id);
+        const isSpecificallyAllowed = allowedViewIds.includes(childUniqueId) || hasFullAccess;
+
+        // If the parent is blocked by tier AND this specific child isn't allowed via a direct link, skip it.
+        if (!isSpecificallyAllowed) return;
+
+        // If in fullpaper mode, but user only has subquestion access, skip it so they can't view the full paper
+        if (displayMode === 'fullpaper' && !hasFullAccess) return;
+
         // 2. Child Level Filters (OR Logic within category)
 
         const childTypes = ensureArray(child.questionType);
@@ -1123,7 +1255,9 @@ export default function AdvancedHistoryArchive() {
         const matchSearch = searchTerm === '' || searchString.includes(searchTerm.toLowerCase());
 
         if (matchQuestionType && matchSourceType && matchMarks && matchSearch && matchTopic) {
-          results.push({ uniqueId: `${parent.id}_${child.id}`, parent, child });
+          // Identify if it's Extra Practice: Tier < 10, unlocked naturally, NOT via dashboard link
+          const isExtraPractice = parentTierNum < 10 && parentAllowedByTier && !allowedViewIds.includes(parent.id) && !allowedViewIds.includes(childUniqueId);
+          results.push({ uniqueId: `${parent.id}_${child.id}`, parent, child, isExtraPractice });
         }
       });
     });
@@ -1137,7 +1271,8 @@ export default function AdvancedHistoryArchive() {
             uniqueId: item.parent.id,
             parent: item.parent,
             isFullPaper: true,
-            matchedChildrenCount: 0
+            matchedChildrenCount: 0,
+            isExtraPractice: item.isExtraPractice
           });
         }
         groupedMap.get(item.parent.id).matchedChildrenCount += 1;
@@ -1147,6 +1282,18 @@ export default function AdvancedHistoryArchive() {
 
     // --- SORTING LOGIC ---
     results.sort((a, b) => {
+      // Primary sort: Extra Practice comes first
+      if (a.isExtraPractice && !b.isExtraPractice) return -1;
+      if (!a.isExtraPractice && b.isExtraPractice) return 1;
+
+      // Secondary sort: Tier (Descending) - Higher tier appears higher
+      const tierA = parseInt(a.parent.tier || '10', 10);
+      const tierB = parseInt(b.parent.tier || '10', 10);
+      if (tierA !== tierB) {
+        return tierB - tierA;
+      }
+
+      // Tertiary sort: User selected option
       switch (sortOption) {
         case 'year_desc':
           return b.parent.year - a.parent.year;
@@ -1172,7 +1319,7 @@ export default function AdvancedHistoryArchive() {
     });
 
     return results;
-  }, [archives, searchTerm, filters, user, sortOption, tierAccessConfig, currentUserRole, displayMode]);
+  }, [archives, searchTerm, filters, user, sortOption, tierAccessConfig, currentUserRole, displayMode, serverDate]);
 
   // --- PAGINATION LOGIC ---
   const totalPages = Math.ceil(filteredResults.length / itemsPerPage);
@@ -2221,6 +2368,7 @@ export default function AdvancedHistoryArchive() {
                               </div>
 
                               <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2 group-hover:text-blue-600 transition-colors">
+                                {item.isExtraPractice && <span className="text-red-600 font-bold">[Extra Practice]</span>}
                                 {parent.title}
                               </h3>
 
@@ -2258,7 +2406,7 @@ export default function AdvancedHistoryArchive() {
                                   <BookOpen size={12} /> Answer Key Available
                                 </div>
                               )}
-                              {(user?.isAdmin || (currentUserRole !== 'viewer' && currentUserRole !== 'dse_only')) && (
+                              {user?.isAdmin && (
                                 <button
                                   onClick={(e) => { e.stopPropagation(); handleViewLinkedMarks(parent.id, parent.title); }}
                                   className="w-full flex items-center justify-center gap-2 bg-teal-100 hover:bg-teal-200 text-teal-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
@@ -2307,6 +2455,7 @@ export default function AdvancedHistoryArchive() {
                               </div>
 
                               <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 group-hover:text-blue-600 transition-colors">
+                                {item.isExtraPractice && <span className="text-red-600 font-bold">[Extra Practice]</span>}
                                 {parent.title}
                                 <span className="bg-slate-800 text-white text-sm px-2 py-0.5 rounded-md">
                                   Q{child.label}
@@ -2367,7 +2516,7 @@ export default function AdvancedHistoryArchive() {
                                   <BookOpen size={12} /> Answer Key Available
                                 </div>
                               )}
-                              {(user?.isAdmin || (currentUserRole !== 'viewer' && currentUserRole !== 'dse_only')) && (
+                              {user?.isAdmin && (
                                 <button
                                   onClick={(e) => { e.stopPropagation(); handleViewLinkedMarks(parent.id, parent.title); }}
                                   className="w-full flex items-center justify-center gap-2 bg-teal-100 hover:bg-teal-200 text-teal-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
@@ -2743,7 +2892,7 @@ export default function AdvancedHistoryArchive() {
                                     <div className="flex items-center gap-2">
                                       <Calendar size={16} className="text-slate-400" />
                                       <input
-                                        type="date"
+                                        type="datetime-local"
                                         value={currentRule.date || ''}
                                         onChange={(e) => handleTierAccessChange(selectedRoleForAccess, tier.id, 'date', e.target.value)}
                                         className="p-2 border border-slate-200 rounded-md text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-slate-700"
@@ -2766,6 +2915,36 @@ export default function AdvancedHistoryArchive() {
                         </div>
                       </div>
                     </div>
+
+                    {/* BULK OVERRIDE SECTION */}
+                    <div className="mt-8 pt-6 border-t border-slate-200">
+                      <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2 mb-2">
+                        <Layers size={16} className="text-red-500" /> Bulk Update Document Tiers
+                      </h3>
+                      <p className="text-xs text-slate-500 mb-3">
+                        Force all existing documents in the archive to a specific tier (e.g., your S6 DSE tier).
+                      </p>
+                      <div className="flex items-center gap-3">
+                        <select
+                          value={bulkTier}
+                          onChange={(e) => setBulkTier(e.target.value)}
+                          className="p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-red-500 outline-none w-48"
+                        >
+                          {systemTiers.map(t => (
+                            <option key={t.id} value={t.id}>{t.name}</option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={handleBulkUpdateTiers}
+                          disabled={isBulking}
+                          className="px-4 py-2 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700 font-bold rounded-lg text-sm transition-colors flex items-center gap-2 border border-red-200 disabled:opacity-50"
+                        >
+                          {isBulking ? <Loader2 size={16} className="animate-spin" /> : <ShieldAlert size={16} />}
+                          Apply to All Documents
+                        </button>
+                      </div>
+                    </div>
+
                   </div>
                 )}
               </div>
@@ -2954,7 +3133,7 @@ export default function AdvancedHistoryArchive() {
                     </button>
                   )}
 
-                  {(user?.isAdmin || (currentUserRole !== 'viewer' && currentUserRole !== 'dse_only')) && (
+                  {user?.isAdmin && (
                     <button
                       onClick={() => handleViewLinkedMarks(previewItem.parent.id, previewItem.parent.title)}
                       className="hidden sm:flex px-4 py-2 rounded-lg bg-teal-600 text-white text-sm font-bold hover:bg-teal-700 transition-all items-center gap-2"

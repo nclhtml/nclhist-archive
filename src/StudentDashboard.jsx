@@ -45,6 +45,7 @@ export default function StudentDashboard() {
     // Drag & Drop State
     const [draggedIndex, setDraggedIndex] = useState(null);
     const [searchTerm, setSearchTerm] = useState(''); // For the document filter
+    const [maxUnlockedTier, setMaxUnlockedTier] = useState(0); // NEW: Track unlocked tier
 
     useEffect(() => {
         fetchData();
@@ -109,6 +110,32 @@ export default function StudentDashboard() {
                 setSelectedClass(loadedClasses[0]);
             }
 
+            // NEW: Fetch user role and tier access
+            let currentUserRole = user?.role || 'viewer';
+            if (!user?.role && user?.email && !user?.isAdmin) {
+                const userRoleSnap = await getDoc(doc(db, "user_roles", user.email.toLowerCase().trim()));
+                if (userRoleSnap.exists()) currentUserRole = userRoleSnap.data().role;
+            }
+
+            let unlockedTier = 0;
+            const configSnap = await getDoc(doc(db, "system_settings", "config"));
+            if (configSnap.exists()) {
+                const data = configSnap.data();
+                const tierAccess = data.tierAccess || {};
+                const roleAccess = tierAccess[currentUserRole] || {};
+                const today = new Date().toISOString().split('T')[0];
+
+                for (let i = 1; i <= 10; i++) {
+                    const tierRule = roleAccess[String(i)];
+                    if (tierRule) {
+                        if (tierRule.immediate || (tierRule.date && tierRule.date <= today)) {
+                            unlockedTier = Math.max(unlockedTier, i);
+                        }
+                    }
+                }
+            }
+            setMaxUnlockedTier(unlockedTier);
+
             // 3. Fetch All Assessments (Assignments/Quizzes)
             const q = query(collection(db, "assessments"));
             const snap = await getDocs(q);
@@ -117,8 +144,8 @@ export default function StudentDashboard() {
 
             fetchedItems.sort((a, b) => {
                 // 1. Supreme Order: Use manual drag-and-drop order if it exists
-                const orderA = a.order !== undefined ? a.order : 999999;
-                const orderB = b.order !== undefined ? b.order : 999999;
+                const orderA = a.order !== undefined ? a.order : -1;
+                const orderB = b.order !== undefined ? b.order : -1;
 
                 if (orderA !== orderB) {
                     return orderA - orderB;
@@ -208,8 +235,8 @@ export default function StudentDashboard() {
                     if (matchIdx !== -1) newAll[matchIdx].order = idx;
                 });
                 return newAll.sort((a, b) => {
-                    const orderA = a.order !== undefined ? a.order : 999999;
-                    const orderB = b.order !== undefined ? b.order : 999999;
+                    const orderA = a.order !== undefined ? a.order : -1;
+                    const orderB = b.order !== undefined ? b.order : -1;
                     if (orderA !== orderB) return orderA - orderB;
 
                     // Keep fallback logic consistent in state
@@ -304,67 +331,93 @@ export default function StudentDashboard() {
                             <tr><td colSpan="6" className="p-8 text-center text-slate-500">No assignments or quizzes found.</td></tr>
                         ) : (
                             items.map((item, index) => {
+                                const linkedDoc = linkableDocs.find(a => a.id === item.linkedDocId);
+                                const docTier = linkedDoc ? (parseInt(linkedDoc.tier, 10) || 10) : 10;
+                                const isTierUnlocked = user?.isAdmin || docTier <= maxUnlockedTier;
+                                const isEffectivelyDisclosed = item.isDisclosed !== false || (linkedDoc && isTierUnlocked);
+
                                 let studentMark = '-';
                                 if (!user?.isAdmin && currentStudentId && item.marks?.[currentStudentId]) {
-                                    const markVal = item.marks[currentStudentId];
-                                    const deduction = parseFloat(item.marks[`${currentStudentId}_deduction`]) || 0;
-
-                                    if (typeof markVal === 'object' && item.sectionsConfig) {
-                                        // Multi-section assessment (e.g., UT / Exam)
-                                        let breakdown = [];
-                                        let scaledTotal = 0;
-                                        let hasValidMark = false;
-
-                                        item.sectionsConfig.forEach(sec => {
-                                            let secRawTotal = 0;
-                                            let secHasMark = false;
-
-                                            if (sec.hasSubSections) {
-                                                sec.subSections.forEach(sub => {
-                                                    const m = parseFloat(markVal[sub.id]);
-                                                    if (!isNaN(m)) { secRawTotal += m; secHasMark = true; }
-                                                });
-                                            } else {
-                                                const m = parseFloat(markVal[sec.id]);
-                                                if (!isNaN(m)) { secRawTotal += m; secHasMark = true; }
-                                            }
-
-                                            if (secHasMark) {
-                                                breakdown.push(`${sec.name}: ${secRawTotal}/${sec.fullMark}`);
-                                                const weight = parseFloat(sec.weight);
-                                                const full = parseFloat(sec.fullMark);
-                                                if (full > 0 && !isNaN(weight)) {
-                                                    scaledTotal += (secRawTotal / full) * weight;
-                                                    hasValidMark = true;
-                                                }
-                                            }
-                                        });
-
-                                        if (hasValidMark) {
-                                            const finalTotal = scaledTotal - deduction;
-                                            studentMark = (
-                                                <div className="flex flex-col items-center justify-center text-sm leading-tight">
-                                                    <span className="font-bold text-blue-700 text-base">{finalTotal.toFixed(1)} / {item.paperFullMark || 100}%</span>
-                                                    <span className="text-xs text-slate-500 font-normal mt-1">{breakdown.join(' | ')}</span>
-                                                    {deduction > 0 && <span className="text-xs text-red-500 mt-0.5">- {deduction} (Deduction)</span>}
-                                                </div>
-                                            );
-                                        }
-                                    } else if (typeof markVal === 'object') {
-                                        // Fallback for objects without sectionsConfig
-                                        let total = 0;
-                                        Object.values(markVal).forEach(v => {
-                                            if (v && !isNaN(parseFloat(v))) total += parseFloat(v);
-                                        });
-                                        studentMark = (total - deduction).toFixed(1);
+                                    if (!isEffectivelyDisclosed) {
+                                        studentMark = <span className="text-xs text-amber-600 italic font-medium">To be disclosed</span>;
                                     } else {
-                                        // Single number/string
-                                        const parsed = parseFloat(markVal);
-                                        studentMark = !isNaN(parsed) ? (parsed - deduction).toFixed(1) : markVal;
+                                        const markVal = item.marks[currentStudentId];
+                                        const deduction = parseFloat(item.marks[`${currentStudentId}_deduction`]) || 0;
+
+                                        if (typeof markVal === 'object' && item.sectionsConfig) {
+                                            // Multi-section assessment (e.g., UT / Exam)
+                                            let breakdown = [];
+                                            let scaledTotal = 0;
+                                            let hasValidMark = false;
+
+                                            item.sectionsConfig.forEach(sec => {
+                                                let secRawTotal = 0;
+                                                let secHasMark = false;
+
+                                                if (sec.hasSubSections) {
+                                                    sec.subSections.forEach(sub => {
+                                                        const m = parseFloat(markVal[sub.id]);
+                                                        if (!isNaN(m)) { secRawTotal += m; secHasMark = true; }
+                                                    });
+                                                } else {
+                                                    const m = parseFloat(markVal[sec.id]);
+                                                    if (!isNaN(m)) { secRawTotal += m; secHasMark = true; }
+                                                }
+
+                                                if (secHasMark) {
+                                                    breakdown.push(`${sec.name}: ${secRawTotal}/${sec.fullMark}`);
+                                                    const weight = parseFloat(sec.weight);
+                                                    const full = parseFloat(sec.fullMark);
+                                                    if (full > 0 && !isNaN(weight)) {
+                                                        scaledTotal += (secRawTotal / full) * weight;
+                                                        hasValidMark = true;
+                                                    }
+                                                }
+                                            });
+
+                                            if (hasValidMark) {
+                                                const finalTotal = scaledTotal - deduction;
+                                                studentMark = (
+                                                    <div className="flex flex-col items-center justify-center text-sm leading-tight">
+                                                        <span className="font-bold text-blue-700 text-base">{finalTotal.toFixed(1)} / {item.paperFullMark || 100}%</span>
+                                                        <span className="text-xs text-slate-500 font-normal mt-1">{breakdown.join(' | ')}</span>
+                                                        {deduction > 0 && <span className="text-xs text-red-500 mt-0.5">- {deduction} (Deduction)</span>}
+                                                    </div>
+                                                );
+                                            }
+                                        } else if (typeof markVal === 'object') {
+                                            // Fallback for objects without sectionsConfig
+                                            let total = 0;
+                                            Object.values(markVal).forEach(v => {
+                                                if (v && !isNaN(parseFloat(v))) total += parseFloat(v);
+                                            });
+                                            studentMark = (total - deduction).toFixed(1);
+                                        } else {
+                                            // Single number/string
+                                            const parsed = parseFloat(markVal);
+                                            studentMark = !isNaN(parsed) ? (parsed - deduction).toFixed(1) : markVal;
+                                        }
                                     }
                                 }
 
-                                const linkedDoc = linkableDocs.find(a => a.id === item.linkedDocId);
+                                // Extract small wording for Assignments/Quizzes
+                                let smallWording = null;
+                                if (item.category === 'Assignments' || item.category === 'Quizzes') {
+                                    if (item.linkedDocId) {
+                                        const isSub = item.linkedDocId.includes('_');
+                                        const [parentId, childId] = item.linkedDocId.split('_');
+                                        const parentDoc = archives.find(a => a.id === parentId);
+                                        if (parentDoc && parentDoc.subQuestions && parentDoc.subQuestions.length > 0) {
+                                            if (isSub) {
+                                                const childDoc = parentDoc.subQuestions.find(sq => sq.id.toString() === childId);
+                                                if (childDoc) smallWording = childDoc.content;
+                                            } else {
+                                                const lastQ = parentDoc.subQuestions[parentDoc.subQuestions.length - 1];
+                                                smallWording = lastQ.content;
+                                            }
+                                        }
+                                    }
+                                }
 
                                 // Calculate rowSpan for the Term column
                                 let showTerm = false;
@@ -382,9 +435,9 @@ export default function StudentDashboard() {
                                         key={item.id}
                                         className={`hover:bg-slate-50 ${draggedIndex === index ? 'opacity-50 bg-blue-50' : ''}`}
                                         draggable={isEditing}
-                                        onDragStart={() => handleDragStart(index)}
-                                        onDragOver={(e) => handleDragOver(e, index)}
-                                        onDragEnd={handleDrop}
+                                        onDragStart={isEditing ? () => handleDragStart(index) : undefined}
+                                        onDragOver={isEditing ? (e) => handleDragOver(e, index) : undefined}
+                                        onDragEnd={isEditing ? handleDrop : undefined}
                                     >
                                         {isEditing && (
                                             <td className="p-4 text-center cursor-move text-slate-400 hover:text-slate-600">
@@ -402,12 +455,21 @@ export default function StudentDashboard() {
                                                 {item.category}
                                             </span>
                                         </td>
-                                        <td className="p-4 font-medium text-slate-800">{item.name}</td>
+                                        <td className="p-4 font-medium text-slate-800">
+                                            <div>{item.name}</div>
+                                            {smallWording && (
+                                                <div className="text-xs text-slate-400 mt-1 line-clamp-2 italic font-normal">
+                                                    {smallWording}
+                                                </div>
+                                            )}
+                                        </td>
                                         <td className="p-4 text-center font-bold text-blue-700">
                                             {React.isValidElement(studentMark) ? studentMark : (studentMark !== '-' ? `${studentMark} / ${item.fullMark || 100}` : '-')}
                                         </td>
                                         <td className="p-4 text-center">
-                                            {item.sectionsConfig && item.sectionsConfig.some(sec => sec.linkedDocId) ? (
+                                            {!isEffectivelyDisclosed && !user?.isAdmin ? (
+                                                <span className="text-xs text-slate-400 italic">Available after disclosure</span>
+                                            ) : item.sectionsConfig && item.sectionsConfig.some(sec => sec.linkedDocId) ? (
                                                 <div className="flex flex-col gap-2 items-center">
                                                     {item.sectionsConfig.filter(sec => sec.linkedDocId).map(sec => {
                                                         const lDoc = linkableDocs.find(a => a.id === sec.linkedDocId);

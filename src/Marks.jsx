@@ -607,6 +607,7 @@ export default function Marks() {
         paperFullMark: isMultiSectionCategory ? parseFloat(paperFullMark) : null,
         sectionsConfig: isMultiSectionCategory ? sectionsConfig : null,
         linkedDocId: linkedDocId || null,
+        isDisclosed: false, // NEW: Default to not disclosed
       };
 
       if (isEditingAssessment && selectedAssessment) {
@@ -1928,6 +1929,22 @@ export default function Marks() {
                       className="text-sm text-red-500 hover:text-red-700 flex items-center font-medium bg-red-50 px-2 py-1 rounded border border-red-100"
                     >
                       <Trash2 className="w-4 h-4 mr-1" /> Delete & Reset
+                    </button>
+                    <button
+                      onClick={async () => {
+                        const newStatus = !selectedAssessment.isDisclosed;
+                        try {
+                          await updateDoc(doc(db, "assessments", selectedAssessment.id), { isDisclosed: newStatus });
+                          const updated = { ...selectedAssessment, isDisclosed: newStatus };
+                          setSelectedAssessment(updated);
+                          setAssessments(assessments.map(a => a.id === updated.id ? updated : a));
+                        } catch (e) { console.error(e); alert("Failed to update disclosure status."); }
+                      }}
+                      className={`text-sm flex items-center font-medium px-2 py-1 rounded border ${selectedAssessment.isDisclosed ? 'bg-green-50 text-green-700 border-green-100 hover:text-green-800' : 'bg-amber-50 text-amber-700 border-amber-100 hover:text-amber-800'}`}
+                      title="Toggle visibility of marks and documents for students"
+                    >
+                      {selectedAssessment.isDisclosed ? <Eye className="w-4 h-4 mr-1" /> : <EyeOff className="w-4 h-4 mr-1" />}
+                      {selectedAssessment.isDisclosed ? 'Disclosed' : 'Hidden from Students'}
                     </button>
                   </div>
                 </h2>

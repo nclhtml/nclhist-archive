@@ -1,0 +1,13 @@
+{
+  "projects": {
+    "default": "nclhist"
+  },
+  "targets": {},
+  "etags": {
+    "nclhist": {
+      "extensionInstances": {
+        "firestore-send-email": "6c3541c3845647175762540005a5037e432a0509bb10b5092a6f4144ae4fa50d"
+      }
+    }
+  }
+}

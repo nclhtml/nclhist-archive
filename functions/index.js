@@ -2,7 +2,7 @@ const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
 admin.initializeApp();
 
-const { PDFDocument, rgb, degrees } = require("pdf-lib");
+const { PDFDocument, rgb, degrees, StandardFonts } = require("pdf-lib");
 const fetch = require("node-fetch");
 
 const db = admin.firestore();
@@ -32,6 +32,23 @@ exports.checkTierUnlocksAndEmail = functions.pubsub.schedule("every 5 minutes").
                 // Check if date is set, date has passed, and email hasn't been sent yet
                 if (rule.date && rule.date <= nowStr && !rule.emailSent && !rule.immediate) {
 
+                    // --- NEW: Fetch extra practices (archives) for this specific newly unlocked tier ---
+                    const archivesSnap = await db.collection("archives").where("tier", "==", String(tierId)).get();
+                    let extraPracticesHtml = "";
+
+                    if (!archivesSnap.empty) {
+                        extraPracticesHtml = "<ul>";
+                        archivesSnap.forEach(archiveDoc => {
+                            const archiveData = archiveDoc.data();
+                            // Format: 2021 DSE Pastpaper - 2021E
+                            extraPracticesHtml += `<li>${archiveData.year} ${archiveData.origin} - <strong>${archiveData.title}</strong></li>`;
+                        });
+                        extraPracticesHtml += "</ul>";
+                    } else {
+                        extraPracticesHtml = "<p><em>There is no new updates on extra practices.</em></p>";
+                    }
+                    // --- END NEW ---
+
                     // 4. Fetch all users belonging to this role
                     const usersSnap = await db.collection("user_roles").where("role", "==", role).get();
 
@@ -51,9 +68,16 @@ exports.checkTierUnlocksAndEmail = functions.pubsub.schedule("every 5 minutes").
                                     html: `
                                         <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
                                             <p>Dear Student,</p>
-                                            <p>Please be advised that the revision materials in the History Archive have been updated. <strong>Tier ${tierId}</strong> resources are now unlocked and fully accessible for your cohort (${role}).</p>
-                                            <p>You may log in to the platform at your earliest convenience to review the latest past papers and practice questions to aid in your studies.</p>
-                                            <p>We wish you the absolute best of luck with your upcoming Unit Tests and Examinations.</p>
+                                            <p>Please be advised that your <strong>student dashboard and revision materials</strong> in the History Archive have been updated. <strong>Tier ${tierId}</strong> resources are now unlocked and fully accessible for your cohort (${role}).</p>
+                                            
+                                            <p><strong>Newly Added Extra Practices:</strong></p>
+                                            ${extraPracticesHtml}
+                                            <p><em>(Note: You can find these in the search engine labelled as [Extra Practice]).</em></p>
+
+                                            <p>Please log in to the platform using your current email account at your earliest convenience to review the latest past papers and practice questions to aid in your studies:</p>
+                                            <p><a href="https://nclhist.netlify.app" style="color: #2563eb; font-weight: bold;">https://nclhist.netlify.app</a></p>
+                                            
+                                            <p>We wish you the absolute best of luck with your upcoming Uniform Tests/Examinations.</p>
                                             <br>
                                             <p>Best regards,</p>
                                             <p><strong>The History Archive Team</strong></p>
@@ -109,19 +133,33 @@ exports.getWatermarkedPdf = functions.https.onRequest(async (req, res) => {
         const pdfResponse = await fetch(fileUrl);
         if (!pdfResponse.ok) throw new Error('Failed to fetch PDF');
         const pdfBuffer = await pdfResponse.arrayBuffer();
-
         // 2. Load into pdf-lib
         const pdfDoc = await PDFDocument.load(pdfBuffer);
         const pages = pdfDoc.getPages();
 
-        // 3. Draw Watermark on every page
+        // --- NEW: Embed font to measure text width ---
+        const helveticaFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
         const watermarkText = `Downloaded by: ${email || 'Viewer'}`;
+        const textSize = 35;
+
+        // Measure the exact width and height of the text
+        const textWidth = helveticaFont.widthOfTextAtSize(watermarkText, textSize);
+        const textHeight = helveticaFont.heightAtSize(textSize);
+
+        // 3. Draw Watermark perfectly centered on every page
         pages.forEach(page => {
             const { width, height } = page.getSize();
+
+            // Math to perfectly center rotated text
+            const angleInRadians = 45 * (Math.PI / 180);
+            const startX = (width / 2) - ((textWidth / 2) * Math.cos(angleInRadians)) + ((textHeight / 2) * Math.sin(angleInRadians));
+            const startY = (height / 2) - ((textWidth / 2) * Math.sin(angleInRadians)) - ((textHeight / 2) * Math.cos(angleInRadians));
+
             page.drawText(watermarkText, {
-                x: width / 4,
-                y: height / 2,
-                size: 35,
+                x: startX,
+                y: startY,
+                size: textSize,
+                font: helveticaFont,
                 color: rgb(0.7, 0.7, 0.7),
                 opacity: 0.4,
                 rotate: degrees(45),

@@ -796,14 +796,23 @@ export default function AdvancedHistoryArchive() {
     setTierAccessConfig(prev => {
       const roleConfig = prev[role] || {};
       const tierConfig = roleConfig[tierId] || { date: '', immediate: false };
+
+      const updatedTierConfig = {
+        ...tierConfig,
+        [field]: value
+      };
+
+      // NEW: If the admin changes the date, reset emailSent to false 
+      // so the Cloud Function knows it is allowed to send a new email.
+      if (field === 'date') {
+        updatedTierConfig.emailSent = false;
+      }
+
       return {
         ...prev,
         [role]: {
           ...roleConfig,
-          [tierId]: {
-            ...tierConfig,
-            [field]: value
-          }
+          [tierId]: updatedTierConfig
         }
       };
     });

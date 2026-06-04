@@ -601,11 +601,9 @@ export default function AdvancedHistoryArchive() {
 
     // 2. If the user is an admin, return the raw Firebase URL
     // (COMMENT THIS OUT TEMPORARILY IF YOU WANT TO TEST THE WATERMARK AS AN ADMIN)
-    if (user?.isAdmin) return originalUrl; 
+    if (user?.isAdmin) return originalUrl;
 
-    // 3. For normal viewers, route through your Firebase Cloud Function
-    // !!! IMPORTANT: REPLACE THIS URL WITH YOUR ACTUAL FIREBASE FUNCTION URL !!!
-    const cloudFunctionUrl = 'https://us-central1-YOUR-PROJECT-ID.cloudfunctions.net/getWatermarkedPdf';
+    const cloudFunctionUrl = 'https://us-central1-nclhist.cloudfunctions.net/getWatermarkedPdf'; // <-- PUT YOUR REAL URL HERE
 
     return `${cloudFunctionUrl}?fileUrl=${encodeURIComponent(originalUrl)}&email=${encodeURIComponent(user?.email || 'viewer')}`;
   };

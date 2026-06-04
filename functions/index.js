@@ -17,7 +17,7 @@ exports.checkTierUnlocksAndEmail = functions.pubsub.schedule("every 5 minutes").
         // 2. Fetch the system settings
         const configRef = db.collection("system_settings").doc("config");
         const configSnap = await configRef.get();
-        
+
         if (!configSnap.exists) return null;
         const configData = configSnap.data();
         const tierAccess = configData.tierAccess || {};
@@ -31,17 +31,17 @@ exports.checkTierUnlocksAndEmail = functions.pubsub.schedule("every 5 minutes").
 
                 // Check if date is set, date has passed, and email hasn't been sent yet
                 if (rule.date && rule.date <= nowStr && !rule.emailSent && !rule.immediate) {
-                    
+
                     // 4. Fetch all users belonging to this role
                     const usersSnap = await db.collection("user_roles").where("role", "==", role).get();
-                    
+
                     if (!usersSnap.empty) {
                         const batch = db.batch(); // Process database writes in bulk
 
                         // 5. Queue an email for each user
                         usersSnap.forEach((userDoc) => {
                             const userEmail = userDoc.data().email;
-                            
+
                             // Create a new document in the 'mail' collection
                             const mailRef = db.collection("mail").doc();
                             batch.set(mailRef, {
@@ -89,16 +89,33 @@ exports.checkTierUnlocksAndEmail = functions.pubsub.schedule("every 5 minutes").
 exports.getWatermarkedPdf = functions.https.onRequest(async (req, res) => {
     // Enable CORS for your React app
     res.set('Access-Control-Allow-Origin', '*');
-    
+
     // Handle preflight OPTIONS request
     if (req.method === 'OPTIONS') {
         res.set('Access-Control-Allow-Methods', 'GET');
-        res.set('Access-Control-Allow-Headers', 'Content-Type');
+        res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
         res.set('Access-Control-Max-Age', '3600');
         return res.status(204).send('');
     }
 
     try {
+        // --- ADD THIS SECURITY BLOCK ---
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(403).send('Unauthorized: Missing token');
+        }
+
+        const idToken = authHeader.split('Bearer ')[1];
+        let decodedToken;
+        try {
+            decodedToken = await admin.auth().verifyIdToken(idToken);
+            // Overwrite the email query with the verified user's actual email
+            req.query.email = decodedToken.email;
+        } catch (error) {
+            console.error("Token verification failed:", error);
+            return res.status(403).send('Unauthorized: Invalid token');
+        } // <--- ADD THIS CLOSING BRACE HERE
+
         const { fileUrl, email } = req.query;
         if (!fileUrl) return res.status(400).send('Missing fileUrl');
 

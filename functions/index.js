@@ -99,24 +99,10 @@ exports.getWatermarkedPdf = functions.https.onRequest(async (req, res) => {
     }
 
     try {
-        // --- ADD THIS SECURITY BLOCK ---
-        const authHeader = req.headers.authorization;
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
-            return res.status(403).send('Unauthorized: Missing token');
-        }
-
-        const idToken = authHeader.split('Bearer ')[1];
-        let decodedToken;
-        try {
-            decodedToken = await admin.auth().verifyIdToken(idToken);
-            // Overwrite the email query with the verified user's actual email
-            req.query.email = decodedToken.email;
-        } catch (error) {
-            console.error("Token verification failed:", error);
-            return res.status(403).send('Unauthorized: Invalid token');
-        } // <--- ADD THIS CLOSING BRACE HERE
-
         const { fileUrl, email } = req.query;
+        if (!fileUrl) return res.status(400).send('Missing fileUrl');
+
+        // 1. Fetch the raw PDF from Firebase Storage URL
         if (!fileUrl) return res.status(400).send('Missing fileUrl');
 
         // 1. Fetch the raw PDF from Firebase Storage URL

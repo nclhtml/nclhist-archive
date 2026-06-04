@@ -592,7 +592,25 @@ export default function AdvancedHistoryArchive() {
   // NEW: State to hold the secure server date and time (up to minute)
   const [serverDate, setServerDate] = useState(new Date().toISOString().substring(0, 16));
 
-  // --- ADD THIS BLOCK: FETCH SECURE TIME FOR HONG KONG ---
+  // --- SECURE PDF URL GENERATOR (Moved OUTSIDE useEffect) ---
+  const getSecurePdfUrl = (originalUrl) => {
+    if (!originalUrl) return '';
+
+    // 1. If it's a local file being uploaded (blob:), return as-is
+    if (originalUrl.startsWith('blob:')) return originalUrl;
+
+    // 2. If the user is an admin, return the raw Firebase URL
+    // (COMMENT THIS OUT TEMPORARILY IF YOU WANT TO TEST THE WATERMARK AS AN ADMIN)
+    if (user?.isAdmin) return originalUrl; 
+
+    // 3. For normal viewers, route through your Firebase Cloud Function
+    // !!! IMPORTANT: REPLACE THIS URL WITH YOUR ACTUAL FIREBASE FUNCTION URL !!!
+    const cloudFunctionUrl = 'https://us-central1-YOUR-PROJECT-ID.cloudfunctions.net/getWatermarkedPdf';
+
+    return `${cloudFunctionUrl}?fileUrl=${encodeURIComponent(originalUrl)}&email=${encodeURIComponent(user?.email || 'viewer')}`;
+  };
+
+  // --- FETCH SECURE TIME FOR HONG KONG --- 
   useEffect(() => {
     const fetchSecureTime = async () => {
       try {
@@ -3144,7 +3162,7 @@ export default function AdvancedHistoryArchive() {
 
                   {((!viewingAnswer && !activeSample && previewItem.parent.hasFile) || (viewingAnswer && previewItem.parent.hasAnswer) || activeSample) && (
                     <a
-                      href={activeSample ? activeSample.currentFileUrl : (viewingAnswer ? previewItem.parent.answerFileUrl : previewItem.parent.fileUrl)}
+                      href={getSecurePdfUrl(activeSample ? activeSample.currentFileUrl : (viewingAnswer ? previewItem.parent.answerFileUrl : previewItem.parent.fileUrl))}
                       target="_blank"
                       rel="noreferrer"
                       className="hidden sm:flex px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 transition-all items-center gap-2"
@@ -3420,15 +3438,15 @@ export default function AdvancedHistoryArchive() {
                 {(activeSample || viewingAnswer || previewItem.parent.hasFile) && (
                   <div className="flex-1 bg-slate-200 flex flex-col h-full relative">
                     {activeSample ? (
-                      <CustomPDFViewer fileUrl={activeSample.currentFileUrl} />
+                      <CustomPDFViewer fileUrl={getSecurePdfUrl(activeSample.currentFileUrl)} />
                     ) : viewingAnswer ? (
                       previewItem.parent.hasAnswer ? (
-                        <CustomPDFViewer fileUrl={previewItem.parent.answerFileUrl} />
+                        <CustomPDFViewer fileUrl={getSecurePdfUrl(previewItem.parent.answerFileUrl)} />
                       ) : (
                         <div className="flex items-center justify-center h-full text-slate-500">No answer file available.</div>
                       )
                     ) : (
-                      <CustomPDFViewer fileUrl={previewItem.parent.fileUrl} />
+                      <CustomPDFViewer fileUrl={getSecurePdfUrl(previewItem.parent.fileUrl)} />
                     )}
                   </div>
                 )}

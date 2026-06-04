@@ -2,6 +2,9 @@ const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
 admin.initializeApp();
 
+const { PDFDocument, rgb, degrees } = require("pdf-lib");
+const fetch = require("node-fetch");
+
 const db = admin.firestore();
 
 // This runs every 5 minutes automatically
@@ -79,5 +82,57 @@ exports.checkTierUnlocksAndEmail = functions.pubsub.schedule("every 5 minutes").
     } catch (error) {
         console.error("Error in checkTierUnlocksAndEmail:", error);
         return null;
+    }
+});
+
+// --- ADD THIS NEW FUNCTION AT THE BOTTOM ---
+exports.getWatermarkedPdf = functions.https.onRequest(async (req, res) => {
+    // Enable CORS for your React app
+    res.set('Access-Control-Allow-Origin', '*');
+    
+    // Handle preflight OPTIONS request
+    if (req.method === 'OPTIONS') {
+        res.set('Access-Control-Allow-Methods', 'GET');
+        res.set('Access-Control-Allow-Headers', 'Content-Type');
+        res.set('Access-Control-Max-Age', '3600');
+        return res.status(204).send('');
+    }
+
+    try {
+        const { fileUrl, email } = req.query;
+        if (!fileUrl) return res.status(400).send('Missing fileUrl');
+
+        // 1. Fetch the raw PDF from Firebase Storage URL
+        const pdfResponse = await fetch(fileUrl);
+        if (!pdfResponse.ok) throw new Error('Failed to fetch PDF');
+        const pdfBuffer = await pdfResponse.arrayBuffer();
+
+        // 2. Load into pdf-lib
+        const pdfDoc = await PDFDocument.load(pdfBuffer);
+        const pages = pdfDoc.getPages();
+
+        // 3. Draw Watermark on every page
+        const watermarkText = `Downloaded by: ${email || 'Viewer'}`;
+        pages.forEach(page => {
+            const { width, height } = page.getSize();
+            page.drawText(watermarkText, {
+                x: width / 4,
+                y: height / 2,
+                size: 35,
+                color: rgb(0.7, 0.7, 0.7),
+                opacity: 0.4,
+                rotate: degrees(45),
+            });
+        });
+
+        // 4. Send the watermarked PDF back to the client
+        const watermarkedBytes = await pdfDoc.save();
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', 'inline; filename="watermarked_document.pdf"');
+        res.send(Buffer.from(watermarkedBytes));
+
+    } catch (error) {
+        console.error("Watermarking error:", error);
+        res.status(500).send('Error generating watermarked PDF');
     }
 });

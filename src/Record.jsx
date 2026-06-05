@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AlertTriangle, Users, BookX, CheckCircle, Save, Upload, Plus, Trash2, Archive, Calendar, Loader2, MinusCircle, History, X } from 'lucide-react';
-import { collection, getDocs, doc, writeBatch, updateDoc, setDoc, getDoc, query, where, deleteDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, writeBatch, updateDoc, setDoc, getDoc, query, where, deleteDoc, addDoc } from 'firebase/firestore';
 import { db } from './firebase';
 
 export default function Record() {
@@ -490,6 +490,33 @@ export default function Record() {
   };
 
   // ============================================================================
+  // 8. ADD DUMMY STUDENT
+  // ============================================================================
+  const handleAddDummyStudent = async () => {
+    if (!selectedClass) return alert("Please select a class first.");
+    try {
+      const dummyStudent = {
+        className: selectedClass,
+        classNumber: "99", // High number so it appears at the bottom
+        englishName: "Dummy Student",
+        chineseName: "測試學生",
+        email: "", // You can link an email later via the Student Details modal
+        recordCount: 0,
+        orangeSheets: 0,
+        history: [],
+        pastTerms: [],
+        isDummy: true // Special flag to identify the dummy account
+      };
+      const docRef = await addDoc(collection(db, "students"), dummyStudent);
+      setStudents([...students, { id: docRef.id, ...dummyStudent }]);
+      alert(`Dummy student added to ${selectedClass}!`);
+    } catch (error) {
+      console.error("Error adding dummy student:", error);
+      alert("Failed to add dummy student.");
+    }
+  };
+
+  // ============================================================================
   // UI RENDERING
   // ============================================================================
   if (isLoading) {
@@ -848,6 +875,17 @@ export default function Record() {
                   <Plus className="w-4 h-4" />
                 </button>
               </form>
+
+              {/* --- NEW: Add Dummy Student Button --- */}
+              <div className="mt-4 pt-4 border-t border-gray-100">
+                <button
+                  onClick={handleAddDummyStudent}
+                  disabled={!selectedClass}
+                  className="w-full flex items-center justify-center bg-teal-50 text-teal-600 p-2 rounded-md hover:bg-teal-100 transition-colors disabled:opacity-50 border border-teal-200 font-medium"
+                >
+                  <Users className="w-4 h-4 mr-2" /> Add Dummy Student to Class
+                </button>
+              </div>
             </div>
 
             {/* Bulk Import Form */}

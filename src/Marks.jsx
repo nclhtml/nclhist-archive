@@ -261,7 +261,10 @@ export default function Marks() {
         }
 
         const querySnapshot = await getDocs(collection(db, "students"));
-        const studentsList = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        // Filter out dummy students so they don't affect stats or appear in the list
+        const studentsList = querySnapshot.docs
+          .map(doc => ({ id: doc.id, ...doc.data() }))
+          .filter(student => !student.isDummy);
         setStudents(studentsList);
 
         // Fetch Archives for linking
@@ -2141,6 +2144,9 @@ export default function Marks() {
                         )}
                       </div>
                     </th>
+                    {!studentView && (
+                      <th className="p-3 border-b w-32 text-center align-top border-l border-gray-200">Comment</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -2292,6 +2298,17 @@ export default function Marks() {
                                 <span className="w-2 h-2 rounded-full bg-gray-300 inline-block"></span>
                               )}
                             </td>
+                            {!studentView && (
+                              <td className="p-2 text-center border-l border-gray-200">
+                                <input
+                                  type="text"
+                                  placeholder="+ Add"
+                                  value={marksData[`${s.id}_comment`] || ''}
+                                  onChange={(e) => setMarksData(prev => ({ ...prev, [`${s.id}_comment`]: e.target.value }))}
+                                  className="w-full max-w-[120px] border rounded-md p-1.5 text-xs outline-none focus:ring-2 focus:ring-blue-500 bg-white border-gray-200"
+                                />
+                              </td>
+                            )}
                           </tr>
                         );
                       })}

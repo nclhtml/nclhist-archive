@@ -32,20 +32,42 @@ exports.checkTierUnlocksAndEmail = functions.pubsub.schedule("every 5 minutes").
                 // Check if date is set, date has passed, and email hasn't been sent yet
                 if (rule.date && rule.date <= nowStr && !rule.emailSent && !rule.immediate) {
 
-                    // --- NEW: Fetch extra practices (archives) for this specific newly unlocked tier ---
-                    const archivesSnap = await db.collection("archives").where("tier", "==", String(tierId)).get();
-                    let extraPracticesHtml = "";
+                    // --- NEW: Fetch ALL assessments to find linked documents ---
+                    const assessmentsSnap = await db.collection("assessments").get();
+                    const linkedDocIds = new Set();
+                    assessmentsSnap.forEach(doc => {
+                        const data = doc.data();
+                        // Split by '_' to ensure we block the parent document even if only a sub-question is linked
+                        if (data.linkedDocId) linkedDocIds.add(data.linkedDocId.split('_')[0]);
+                        if (data.sectionsConfig) {
+                            data.sectionsConfig.forEach(sec => {
+                                if (sec.linkedDocId) linkedDocIds.add(sec.linkedDocId.split('_')[0]);
+                            });
+                        }
+                    });
 
-                    if (!archivesSnap.empty) {
-                        extraPracticesHtml = "<ul>";
-                        archivesSnap.forEach(archiveDoc => {
-                            const archiveData = archiveDoc.data();
-                            // Format: 2021 DSE Pastpaper - 2021E
-                            extraPracticesHtml += `<li>${archiveData.year} ${archiveData.origin} - <strong>${archiveData.title}</strong></li>`;
-                        });
-                        extraPracticesHtml += "</ul>";
-                    } else {
-                        extraPracticesHtml = "<p><em>There is no new updates on extra practices.</em></p>";
+                    // Fetch ALL archives, filter for unlocked cumulative tiers, and exclude linked docs
+                    const archivesSnap = await db.collection("archives").get();
+                    let extraPracticesHtml = "<ul>";
+                    let addedCount = 0;
+                    const unlockedTierNum = parseInt(tierId, 10);
+
+                    archivesSnap.forEach(archiveDoc => {
+                        const archiveData = archiveDoc.data();
+                        const archiveTierNum = parseInt(archiveData.tier || '10', 10);
+
+                        // Extra Practice = Tier < 10, unlocked by current tier, and NOT linked to any dashboard assessment
+                        if (archiveTierNum <= unlockedTierNum && archiveTierNum < 10) {
+                            if (!linkedDocIds.has(archiveDoc.id)) {
+                                extraPracticesHtml += `<li>${archiveData.year} ${archiveData.origin} - <strong>${archiveData.title}</strong></li>`;
+                                addedCount++;
+                            }
+                        }
+                    });
+                    extraPracticesHtml += "</ul>";
+
+                    if (addedCount === 0) {
+                        extraPracticesHtml = "<p><em>There are no new updates on extra practices at this moment.</em></p>";
                     }
                     // --- END NEW ---
 
@@ -68,7 +90,7 @@ exports.checkTierUnlocksAndEmail = functions.pubsub.schedule("every 5 minutes").
                                     html: `
                                         <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
                                             <p>Dear Student,</p>
-                                            <p>Please be advised that your <strong>student dashboard and revision materials</strong> in the History Archive have been updated. <strong>Tier ${tierId}</strong> resources are now unlocked and fully accessible for your cohort (${role}).</p>
+                                            <p>Please be advised that your <strong>student dashboard and revision materials</strong> in the History Archive have been updated.</p>
                                             
                                             <p><strong>Newly Added Extra Practices:</strong></p>
                                             ${extraPracticesHtml}

@@ -36,6 +36,7 @@ export default function StudentDashboard() {
     const [classes, setClasses] = useState([]);
     const [selectedClass, setSelectedClass] = useState('');
     const [currentStudentId, setCurrentStudentId] = useState(null);
+    const [currentStudentData, setCurrentStudentData] = useState(null); // <-- NEW STATE
 
     // Admin Edit State
     const [isEditing, setIsEditing] = useState(false);
@@ -46,6 +47,9 @@ export default function StudentDashboard() {
     const [draggedIndex, setDraggedIndex] = useState(null);
     const [searchTerm, setSearchTerm] = useState(''); // For the document filter
     const [maxUnlockedTier, setMaxUnlockedTier] = useState(0); // NEW: Track unlocked tier
+
+    // Comment Modal State
+    const [selectedCommentId, setSelectedCommentId] = useState(null);
 
     useEffect(() => {
         fetchData();
@@ -97,6 +101,7 @@ export default function StudentDashboard() {
                     const studentDoc = studentSnap.docs[0];
                     const studentData = studentDoc.data();
                     setCurrentStudentId(studentDoc.id); // Save ID to fetch their specific marks
+                    setCurrentStudentData(studentData); // <-- NEW: Save data to check for isDummy flag
 
                     // If they are a student, ensure their class is in the loadedClasses
                     if (studentData.className && !loadedClasses.includes(studentData.className)) {
@@ -312,7 +317,7 @@ export default function StudentDashboard() {
                 </div>
             )}
 
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200">
                 <table className="w-full text-left">
                     <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 text-sm uppercase">
                         <tr>
@@ -337,7 +342,27 @@ export default function StudentDashboard() {
                                 const isEffectivelyDisclosed = item.isDisclosed !== false || (linkedDoc && isTierUnlocked);
 
                                 let studentMark = '-';
-                                if (!user?.isAdmin && currentStudentId && item.marks?.[currentStudentId]) {
+
+                                // --- NEW: Generate fake marks if the user is a dummy account ---
+                                if (!user?.isAdmin && currentStudentData?.isDummy) {
+                                    if (!isEffectivelyDisclosed) {
+                                        studentMark = <span className="text-xs text-amber-600 italic font-medium">To be disclosed</span>;
+                                    } else {
+                                        // Generate a pseudo-random mark (60% to 100%) based on the assessment ID length/characters so it stays consistent on refresh
+                                        const pseudoRandom = (item.id.charCodeAt(0) + item.id.charCodeAt(item.id.length - 1)) % 41 + 60;
+                                        const fullMark = item.paperFullMark || item.fullMark || 100;
+                                        const generatedMark = ((pseudoRandom / 100) * fullMark).toFixed(1);
+
+                                        studentMark = (
+                                            <div className="flex flex-col items-center justify-center text-sm leading-tight">
+                                                <span className="font-bold text-teal-600 text-base">{generatedMark} / {fullMark}</span>
+                                                <span className="text-xs text-teal-500 font-normal mt-1">Generated (Dummy)</span>
+                                            </div>
+                                        );
+                                    }
+                                }
+                                // --- END NEW ---
+                                else if (!user?.isAdmin && currentStudentId && item.marks?.[currentStudentId]) {
                                     if (!isEffectivelyDisclosed) {
                                         studentMark = <span className="text-xs text-amber-600 italic font-medium">To be disclosed</span>;
                                     } else {
@@ -467,26 +492,70 @@ export default function StudentDashboard() {
                                             {React.isValidElement(studentMark) ? studentMark : (studentMark !== '-' ? `${studentMark} / ${item.fullMark || 100}` : '-')}
                                         </td>
                                         <td className="p-4 text-center">
-                                            {!isEffectivelyDisclosed && !user?.isAdmin ? (
-                                                <span className="text-xs text-slate-400 italic">Available after disclosure</span>
-                                            ) : item.sectionsConfig && item.sectionsConfig.some(sec => sec.linkedDocId) ? (
-                                                <div className="flex flex-col gap-2 items-center">
-                                                    {item.sectionsConfig.filter(sec => sec.linkedDocId).map(sec => {
-                                                        const lDoc = linkableDocs.find(a => a.id === sec.linkedDocId);
-                                                        return lDoc ? (
-                                                            <a key={sec.id} href={`/?search=${encodeURIComponent(lDoc.title)}&viewId=${lDoc.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-2 py-1 rounded-md border border-blue-100 shadow-sm">
-                                                                <FileText size={12} /> {sec.name}
-                                                            </a>
-                                                        ) : null;
-                                                    })}
-                                                </div>
-                                            ) : linkedDoc ? (
-                                                <a href={`/?search=${encodeURIComponent(linkedDoc.title)}&viewId=${linkedDoc.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-2 py-1 rounded-md border border-blue-100 shadow-sm">
-                                                    <FileText size={14} /> View
-                                                </a>
-                                            ) : (
-                                                <span className="text-xs text-slate-400 italic">No file attached</span>
-                                            )}
+                                            <div className="flex items-center justify-center gap-3">
+                                                {!isEffectivelyDisclosed && !user?.isAdmin ? (
+                                                    <span className="text-xs text-slate-400 italic">Available after disclosure</span>
+                                                ) : item.sectionsConfig && item.sectionsConfig.some(sec => sec.linkedDocId) ? (
+                                                    <div className="flex flex-col gap-2 items-center">
+                                                        {item.sectionsConfig.filter(sec => sec.linkedDocId).map(sec => {
+                                                            const lDoc = linkableDocs.find(a => a.id === sec.linkedDocId);
+                                                            return lDoc ? (
+                                                                <a key={sec.id} href={`/?search=${encodeURIComponent(lDoc.title)}&viewId=${lDoc.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-2 py-1 rounded-md border border-blue-100 shadow-sm">
+                                                                    <FileText size={12} /> {sec.name}
+                                                                </a>
+                                                            ) : null;
+                                                        })}
+                                                    </div>
+                                                ) : linkedDoc ? (
+                                                    <a href={`/?search=${encodeURIComponent(linkedDoc.title)}&viewId=${linkedDoc.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-2 py-1 rounded-md border border-blue-100 shadow-sm">
+                                                        <FileText size={14} /> View
+                                                    </a>
+                                                ) : (
+                                                    <span className="text-xs text-slate-400 italic">No file attached</span>
+                                                )}
+
+                                                {/* Teacher Comment Button */}
+                                                {!user?.isAdmin && currentStudentId && item.marks?.[`${currentStudentId}_comment`] && isEffectivelyDisclosed && (
+                                                    <div className="relative group inline-block">
+                                                        <button
+                                                            onClick={() => setSelectedCommentId(selectedCommentId === item.id ? null : item.id)}
+                                                            className="inline-flex items-center justify-center w-6 h-6 bg-amber-100 text-amber-700 rounded-full font-bold hover:bg-amber-200 transition-colors cursor-pointer"
+                                                        >
+                                                            !
+                                                        </button>
+
+                                                        {/* Custom Tooltip (Hidden when popover is open) */}
+                                                        {selectedCommentId !== item.id && (
+                                                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 hidden group-hover:block w-max max-w-xs bg-slate-800 text-white text-sm font-medium px-3 py-2 rounded shadow-lg z-10 pointer-events-none">
+                                                                Click to view teacher's comment
+                                                                <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
+                                                            </div>
+                                                        )}
+
+                                                        {/* Inline Comment Popover (Attached to the right) */}
+                                                        {selectedCommentId === item.id && (
+                                                            <div className="absolute top-1/2 -translate-y-1/2 left-full ml-4 w-64 bg-white rounded-xl shadow-[0_0_20px_rgba(0,0,0,0.1)] border border-slate-200 p-4 z-40 text-left cursor-default">
+                                                                <button
+                                                                    onClick={(e) => { e.stopPropagation(); setSelectedCommentId(null); }}
+                                                                    className="absolute top-3 right-3 text-slate-400 hover:text-slate-600 transition-colors"
+                                                                >
+                                                                    <X size={16} />
+                                                                </button>
+                                                                <h3 className="text-sm font-bold text-slate-800 mb-2 flex items-center gap-1.5">
+                                                                    <FileText className="text-amber-500" size={16} />
+                                                                    Teacher's Comment
+                                                                </h3>
+                                                                <div className="bg-amber-50/50 border border-amber-100 rounded-lg p-3 text-slate-700 text-sm whitespace-pre-wrap leading-relaxed">
+                                                                    {item.marks[`${currentStudentId}_comment`]}
+                                                                </div>
+                                                                {/* Left Arrow pointing to the button */}
+                                                                <div className="absolute top-1/2 -translate-y-1/2 right-full border-[6px] border-transparent border-r-white"></div>
+                                                                <div className="absolute top-1/2 -translate-y-1/2 right-full border-[7px] border-transparent border-r-slate-200 -z-10"></div>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
                                         </td>
                                         {isEditing && (
                                             <td className="p-4 text-center flex justify-center gap-2">

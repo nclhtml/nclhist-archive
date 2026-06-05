@@ -86,7 +86,7 @@ exports.checkTierUnlocksAndEmail = functions.pubsub.schedule("every 5 minutes").
                             batch.set(mailRef, {
                                 to: userEmail,
                                 message: {
-                                    subject: `Notification: Revision Materials Updated (Tier ${tierId})`,
+                                    subject: `Notification: Revision Materials Updated`,
                                     html: `
                                         <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
                                             <p>Dear Student,</p>

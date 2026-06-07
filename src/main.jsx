@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
 import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc, collection, getDocs, addDoc, query, orderBy, limit } from "firebase/firestore";
+import { doc, getDoc, collection, getDocs, addDoc, query, orderBy, limit, updateDoc } from "firebase/firestore";
 import { Loader2, ShieldAlert, Users, X, Bell } from 'lucide-react';
 
 // Import your components and firebase
@@ -184,7 +184,7 @@ const Layout = ({ children }) => {
     if (showAdminLogs && unreadAdminLogs > 0) {
       adminLogs.forEach(async (log) => {
         if (!log.viewed) {
-          try { await doc(db, "admin_logs", log.id).update({ viewed: true }); } catch (e) { }
+          try { await updateDoc(doc(db, "admin_logs", log.id), { viewed: true }); } catch (e) { console.error(e); }
         }
       });
       setUnreadAdminLogs(0);
@@ -267,7 +267,7 @@ const Layout = ({ children }) => {
             <div>
               {user ? (
                 <div className="flex items-center gap-3">
-{user.email === SUPER_ADMIN && (
+                  {user.email === SUPER_ADMIN && (
                     <div className="relative flex items-center gap-2">
                       {/* Admin Logs Button & Dropdown */}
                       <div className="relative">
@@ -279,7 +279,7 @@ const Layout = ({ children }) => {
                             </span>
                           )}
                         </button>
-                        
+
                         {showAdminLogs && (
                           <div className="absolute right-0 mt-2 bg-white rounded-xl shadow-2xl border border-slate-200 w-96 max-h-[60vh] flex flex-col z-[100]">
                             <div className="flex justify-between items-center p-3 border-b border-slate-200 bg-slate-50 rounded-t-xl">
@@ -294,15 +294,44 @@ const Layout = ({ children }) => {
                               ) : (
                                 <div className="flex flex-col gap-3">
                                   {adminLogs.length === 0 && <div className="text-center text-slate-500 py-4 text-xs">No recent logs.</div>}
-                                  {adminLogs.map((log) => (
-                                    <div key={log.id} className={`border rounded-lg p-3 text-xs ${log.type === 'SMTP_ERROR' ? 'bg-red-50 border-red-100' : 'bg-blue-50 border-blue-100'}`}>
-                                      <div className="flex justify-between items-start mb-1">
-                                        <span className={`font-bold ${log.type === 'SMTP_ERROR' ? 'text-red-700' : 'text-blue-700'}`}>{log.type}</span>
-                                        <span className="text-slate-500">{new Date(log.timestamp).toLocaleString('en-GB')}</span>
+                                  {adminLogs.map((log) => {
+                                    const isAlert = log.type === 'SMTP_ERROR' || log.type === 'SUSPICIOUS_DOWNLOAD' || log.type === 'USER_REPORT';
+                                    const isSuccess = log.type === 'SMTP_SUCCESS' || log.type === 'EMAIL_SUCCESS' || log.type === 'SYSTEM_SUCCESS';
+
+                                    let bgClass = 'bg-blue-50 border-blue-100';
+                                    let textClass = 'text-blue-800';
+                                    let titleClass = 'text-blue-700';
+
+                                    if (isAlert) {
+                                      bgClass = 'bg-red-50 border-red-100';
+                                      textClass = 'text-red-800';
+                                      titleClass = 'text-red-700';
+                                    } else if (isSuccess) {
+                                      bgClass = 'bg-green-50 border-green-100';
+                                      textClass = 'text-green-800';
+                                      titleClass = 'text-green-700';
+                                    }
+
+                                    return (
+                                      <div
+                                        key={log.id}
+                                        onClick={() => {
+                                          if (log.viewId) {
+                                            setShowAdminLogs(false);
+                                            window.location.href = `/?viewId=${log.viewId}`;
+                                          }
+                                        }}
+                                        className={`border rounded-lg p-3 text-xs ${log.viewId ? 'cursor-pointer hover:shadow-md transition-shadow' : ''} ${bgClass}`}
+                                      >
+                                        <div className="flex justify-between items-start mb-1">
+                                          <span className={`font-bold ${titleClass}`}>{log.type.replace('_', ' ')}</span>
+                                          <span className="text-slate-500">{new Date(log.timestamp).toLocaleString('en-GB')}</span>
+                                        </div>
+                                        <p dangerouslySetInnerHTML={{ __html: log.message }} className={textClass}></p>
+                                        {log.viewId && <div className={`mt-2 font-bold text-[10px] uppercase ${titleClass}`}>Click to view document &rarr;</div>}
                                       </div>
-                                      <p dangerouslySetInnerHTML={{ __html: log.message }} className={log.type === 'SMTP_ERROR' ? 'text-red-800' : 'text-blue-800'}></p>
-                                    </div>
-                                  ))}
+                                    );
+                                  })}
                                 </div>
                               )}
                             </div>

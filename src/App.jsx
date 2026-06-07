@@ -474,6 +474,17 @@ export default function AdvancedHistoryArchive() {
   const [expandedSections, setExpandedSections] = useState({});
   const [isLoading, setIsLoading] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [downloadHistory, setDownloadHistory] = useState([]);
+
+  // State for submitting reports (Missing lines)
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportForm, setReportForm] = useState({ reason: '', details: '' });
+  const [isSubmittingReport, setIsSubmittingReport] = useState(false);
+
+  // State for viewing reports
+  const [activeReports, setActiveReports] = useState([]);
+  const [showReportViewModal, setShowReportViewModal] = useState(false);
+  const [selectedReports, setSelectedReports] = useState([]);
 
   // Preview Modal State
   const [previewItem, setPreviewItem] = useState(null);
@@ -561,6 +572,7 @@ export default function AdvancedHistoryArchive() {
   const [isManageSamplesModalOpen, setIsManageSamplesModalOpen] = useState(false);
   const [allSamples, setAllSamples] = useState([]);
   const [expandedSampleYears, setExpandedSampleYears] = useState({});
+  const [highlightedSampleId, setHighlightedSampleId] = useState(null);
   const [selectedSampleFile, setSelectedSampleFile] = useState(null);
   const [loadedPdfDoc, setLoadedPdfDoc] = useState(null);
   const [pdfPageCount, setPdfPageCount] = useState(0);
@@ -668,30 +680,95 @@ export default function AdvancedHistoryArchive() {
     const params = new URLSearchParams(location.search);
     const viewId = params.get('viewId');
 
-    if (viewId && archives.length > 0) {
-      if (viewId.includes('_')) {
-        const [parentId, childId] = viewId.split('_');
-        const parentDoc = archives.find(a => a.id === parentId);
-        const childDoc = parentDoc?.subQuestions?.find(sq => sq.id.toString() === childId);
-        if (parentDoc && childDoc) {
-          setPreviewItem({ uniqueId: viewId, parent: parentDoc, child: childDoc, isFullPaper: false });
-        }
-      } else {
-        const parentDoc = archives.find(a => a.id === viewId);
-        if (parentDoc) {
-          setPreviewItem({ uniqueId: viewId, parent: parentDoc, isFullPaper: true, matchedChildrenCount: parentDoc.subQuestions?.length || 0 });
-        }
+    if (viewId) {
+      if (viewId.startsWith('sample_')) {
+        const sampleId = viewId.replace('sample_', '');
+
+        const loadSample = async () => {
+          setIsLoading(true);
+          try {
+            const snap = await getDocs(collection(db, "student_samples"));
+            const samplesData = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            setAllSamples(samplesData);
+
+            const targetSample = samplesData.find(s => s.id === sampleId);
+            if (targetSample) {
+              setExpandedSampleYears(prev => ({ ...prev, [targetSample.year]: true }));
+              setHighlightedSampleId(sampleId);
+              setIsManageSamplesModalOpen(true);
+              setTimeout(() => {
+                document.getElementById(`sample-${sampleId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              }, 500);
+            }
+          } catch (error) {
+            console.error("Error fetching samples for viewId:", error);
+          }
+          setIsLoading(false);
+        };
+        loadSample();
+
+        params.delete('viewId');
+        const newSearch = params.toString();
+        navigate(`${location.pathname}${newSearch ? `?${newSearch}` : ''}`, { replace: true });
+        return;
       }
 
-      // Allow this specific document to bypass tier restrictions in the search engine
-      setAllowedViewIds(prev => prev.includes(viewId) ? prev : [...prev, viewId]);
+      if (archives.length > 0) {
+        if (viewId.includes('_')) {
+          const [parentId, childId] = viewId.split('_');
+          const parentDoc = archives.find(a => a.id === parentId);
+          const childDoc = parentDoc?.subQuestions?.find(sq => sq.id.toString() === childId);
+          if (parentDoc && childDoc) {
+            setPreviewItem({ uniqueId: viewId, parent: parentDoc, child: childDoc, isFullPaper: false });
+          }
+        } else {
+          const parentDoc = archives.find(a => a.id === viewId);
+          if (parentDoc) {
+            setPreviewItem({ uniqueId: viewId, parent: parentDoc, isFullPaper: true, matchedChildrenCount: parentDoc.subQuestions?.length || 0 });
+          }
+        }
 
-      // Clean up the URL so it doesn't re-trigger if the user closes the modal
-      params.delete('viewId');
-      const newSearch = params.toString();
-      navigate(`${location.pathname}${newSearch ? `?${newSearch}` : ''}`, { replace: true });
+        // Allow this specific document to bypass tier restrictions in the search engine
+        setAllowedViewIds(prev => prev.includes(viewId) ? prev : [...prev, viewId]);
+
+        // Clean up the URL so it doesn't re-trigger if the user closes the modal
+        params.delete('viewId');
+        const newSearch = params.toString();
+        navigate(`${location.pathname}${newSearch ? `?${newSearch}` : ''}`, { replace: true });
+      }
     }
   }, [archives, location.search, navigate]);
+
+  // --- FETCH ACTIVE REPORTS (ADMIN ONLY) ---
+  useEffect(() => {
+    const fetchReports = async () => {
+      if (!user?.isAdmin) return;
+      try {
+        const q = query(collection(db, "admin_logs"), where("type", "==", "USER_REPORT"));
+        const snap = await getDocs(q);
+        setActiveReports(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      } catch (error) {
+        console.error("Error fetching reports:", error);
+      }
+    };
+    if (!authLoading) fetchReports();
+  }, [user, authLoading]);
+
+  const handleClearReport = async (reportId) => {
+    if (!window.confirm("Confirm to clear this specific report? (This means the problem is fixed)")) return;
+    try {
+      await deleteDoc(doc(db, "admin_logs", reportId));
+      setActiveReports(prev => prev.filter(r => r.id !== reportId));
+      setSelectedReports(prev => prev.filter(r => r.id !== reportId));
+
+      // Close modal if that was the last report for this document
+      if (selectedReports.length <= 1) {
+        setShowReportViewModal(false);
+      }
+    } catch (error) {
+      console.error("Error clearing report:", error);
+    }
+  };
 
   // --- FETCH SYSTEM SETTINGS (ROLES, TIERS, ACCESS) ---
   useEffect(() => {
@@ -1307,7 +1384,25 @@ export default function AdvancedHistoryArchive() {
 
     // --- SORTING LOGIC ---
     results.sort((a, b) => {
-      // Primary sort: Extra Practice comes first
+      // Primary sort: Reported items first (Admin only)
+      if (user?.isAdmin) {
+        const checkReport = (item) => {
+          return activeReports.some(r => {
+            if (item.isFullPaper) {
+              return r.viewId === item.parent.id || (r.viewId?.startsWith('sample_') && r.message.includes(item.parent.title));
+            } else {
+              return r.viewId === `${item.parent.id}_${item.child.id}` ||
+                (r.viewId?.startsWith('sample_') && r.message.includes(item.parent.title) && r.message.includes(item.child.label));
+            }
+          });
+        };
+        const aHasReport = checkReport(a);
+        const bHasReport = checkReport(b);
+        if (aHasReport && !bHasReport) return -1;
+        if (!aHasReport && bHasReport) return 1;
+      }
+
+      // Secondary sort: Extra Practice comes first
       if (a.isExtraPractice && !b.isExtraPractice) return -1;
       if (!a.isExtraPractice && b.isExtraPractice) return 1;
 
@@ -1638,8 +1733,6 @@ export default function AdvancedHistoryArchive() {
         updatedAt: new Date().toISOString(),
         updatedBy: user.email
       }));
-
-      await addDoc(collection(db, "student_samples"), payload);
 
       if (editingId) {
         await updateDoc(doc(db, "archives", editingId), payload);
@@ -2010,6 +2103,57 @@ export default function AdvancedHistoryArchive() {
       setBatchAnsPdfPreviewUrl('');
       setBatchPreviewMode('question');
     }, 300);
+  };
+
+  const handleDownloadTracking = async (fileName) => {
+    const now = Date.now();
+    const tenMinsAgo = now - 10 * 60 * 1000;
+    const newHistory = [...downloadHistory.filter(d => d.time > tenMinsAgo), { time: now, fileName }];
+    setDownloadHistory(newHistory);
+
+    if (newHistory.length === 10) {
+      try {
+        await addDoc(collection(db, "admin_logs"), {
+          type: 'SUSPICIOUS_DOWNLOAD',
+          message: `User <b>${user?.displayName || user?.email}</b> downloaded 10 documents within 10 minutes.<br/><b>Files:</b> ${newHistory.map(d => d.fileName).join(', ')}`,
+          timestamp: new Date().toISOString(),
+          viewed: false
+        });
+      } catch (e) { console.error("Error logging suspicious activity", e); }
+    }
+  };
+
+  const handleReportSubmit = async (e) => {
+    e.preventDefault();
+    setIsSubmittingReport(true);
+    try {
+      let docName = "";
+      if (activeSample) {
+        // Find the specific question tag matching the currently viewed PDF
+        const matchedTag = Object.keys(activeSample.scoresData || {}).find(tag => activeSample.scoresData[tag].fileUrl === activeSample.currentFileUrl);
+        docName = `Student Sample (${activeSample.year} - Grade: ${activeSample.overallGrade}) - Question: ${matchedTag || 'Unknown'}`;
+      } else if (viewingAnswer) {
+        docName = "Answer Key: " + previewItem.parent.title;
+      } else {
+        docName = previewItem.isFullPaper ? previewItem.parent.title : `${previewItem.parent.title} Q${previewItem.child.label}`;
+      }
+
+      const viewId = activeSample ? `sample_${activeSample.id}` : (previewItem.isFullPaper ? previewItem.parent.id : `${previewItem.parent.id}_${previewItem.child.id}`);
+
+      await addDoc(collection(db, "admin_logs"), {
+        type: 'USER_REPORT',
+        message: `<b>Report from ${user?.email}</b><br/><b>Document:</b> ${docName}<br/><b>Reason:</b> ${reportForm.reason}<br/><b>Details:</b> ${reportForm.details}`,
+        viewId: viewId,
+        timestamp: new Date().toISOString(),
+        viewed: false
+      });
+      setShowReportModal(false);
+      setReportForm({ reason: '', details: '' });
+      alert("Report submitted successfully.");
+    } catch (error) {
+      alert("Failed to submit report.");
+    }
+    setIsSubmittingReport(false);
   };
 
   const closePreview = () => {
@@ -2392,6 +2536,19 @@ export default function AdvancedHistoryArchive() {
                                 )}
                               </div>
 
+                              {user?.isAdmin && activeReports.some(r => r.viewId === parent.id || (r.viewId?.startsWith('sample_') && r.message.includes(parent.title))) && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedReports(activeReports.filter(r => r.viewId === parent.id || (r.viewId?.startsWith('sample_') && r.message.includes(parent.title))));
+                                    setShowReportViewModal(true);
+                                  }}
+                                  className="absolute top-4 right-4 bg-red-100 text-red-600 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1 hover:bg-red-200 animate-pulse shadow-sm"
+                                >
+                                  <ShieldAlert size={14} /> Reports Attached
+                                </button>
+                              )}
+
                               <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2 group-hover:text-blue-600 transition-colors">
                                 {item.isExtraPractice && <span className="text-red-600 font-bold">[Extra Practice]</span>}
                                 {parent.title}
@@ -2478,6 +2635,21 @@ export default function AdvancedHistoryArchive() {
                                   </span>
                                 )}
                               </div>
+
+                              {user?.isAdmin && activeReports.some(r => {
+                                return r.viewId === uniqueId || (r.viewId?.startsWith('sample_') && r.message.includes(parent.title) && r.message.includes(child.label));
+                              }) && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedReports(activeReports.filter(r => r.viewId === uniqueId || (r.viewId?.startsWith('sample_') && r.message.includes(parent.title) && r.message.includes(child.label))));
+                                      setShowReportViewModal(true);
+                                    }}
+                                    className="absolute top-4 right-4 bg-red-100 text-red-600 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1 hover:bg-red-200 animate-pulse shadow-sm"
+                                  >
+                                    <ShieldAlert size={14} /> Reports Attached
+                                  </button>
+                                )}
 
                               <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 group-hover:text-blue-600 transition-colors">
                                 {item.isExtraPractice && <span className="text-red-600 font-bold">[Extra Practice]</span>}
@@ -2595,7 +2767,7 @@ export default function AdvancedHistoryArchive() {
                     <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">Manage Student Samples</h2>
                     <p className="text-xs text-slate-500 mt-1">View or delete uploaded student samples organized by year.</p>
                   </div>
-                  <button onClick={() => setIsManageSamplesModalOpen(false)} className="text-slate-400 hover:text-slate-800"><X size={20} /></button>
+                  <button onClick={() => { setIsManageSamplesModalOpen(false); setHighlightedSampleId(null); }} className="text-slate-400 hover:text-slate-800"><X size={20} /></button>
                 </div>
                 <div className="flex-1 overflow-y-auto p-6 bg-slate-50/50">
                   {isLoading ? (
@@ -2613,18 +2785,46 @@ export default function AdvancedHistoryArchive() {
                             </button>
                             {isExpanded && (
                               <div className="p-4 border-t border-slate-100 space-y-3">
-                                {yearSamples.map(sample => (
-                                  <div key={sample.id} className="flex justify-between p-3 bg-slate-50 border border-slate-200 rounded-lg">
-                                    <div>
-                                      <div className="text-sm font-bold text-slate-800">[{sample.language}] Grade: {sample.overallGrade}</div>
-                                      <div className="text-xs text-slate-500 mt-1">Tags: {sample.questionTags?.join(', ')}</div>
+                                {yearSamples.map(sample => {
+                                  const sampleReports = activeReports.filter(r => r.viewId === `sample_${sample.id}`);
+                                  const isHighlighted = highlightedSampleId === sample.id;
+
+                                  return (
+                                    <div key={sample.id} id={`sample-${sample.id}`} className={`flex flex-col p-3 rounded-lg border transition-all duration-500 ${isHighlighted ? 'bg-yellow-100 border-yellow-400 shadow-md ring-2 ring-yellow-400' : 'bg-slate-50 border-slate-200'}`}>
+                                      <div className="flex justify-between items-start">
+                                        <div>
+                                          <div className="text-sm font-bold text-slate-800">[{sample.language}] Grade: {sample.overallGrade}</div>
+                                          <div className="text-xs text-slate-500 mt-1">Tags: {sample.questionTags?.join(', ')}</div>
+                                        </div>
+                                        <div className="flex gap-2">
+                                          <button onClick={() => handleEditSample(sample)} className="p-2 text-blue-500 hover:bg-blue-50 rounded-lg"><Edit size={16} /></button>
+                                          <button onClick={() => handleDeleteSample(sample.id, sample.scoresData)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                                        </div>
+                                      </div>
+
+                                      {/* INJECT REPORT DETAILS IF HIGHLIGHTED */}
+                                      {isHighlighted && sampleReports.length > 0 && (
+                                        <div className="mt-3 space-y-2 border-t border-yellow-200 pt-3">
+                                          {sampleReports.map(r => (
+                                            <div key={r.id} className="bg-red-50 border border-red-200 p-3 rounded-lg text-sm flex flex-col gap-2">
+                                              <div className="flex items-center gap-2 text-red-700 font-bold">
+                                                <ShieldAlert size={16} /> Reported Issue
+                                              </div>
+                                              {/* This renders the same HTML message as the Super Admin Log */}
+                                              <div dangerouslySetInnerHTML={{ __html: r.message }} className="text-red-800 text-xs leading-relaxed"></div>
+                                              <button
+                                                onClick={() => handleClearReport(r.id)}
+                                                className="self-start mt-1 px-3 py-1.5 bg-green-600 text-white rounded-md text-xs font-bold hover:bg-green-700 transition-colors shadow-sm flex items-center gap-1"
+                                              >
+                                                <Check size={14} /> Clear this Report
+                                              </button>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
                                     </div>
-                                    <div className="flex gap-2">
-                                      <button onClick={() => handleEditSample(sample)} className="p-2 text-blue-500 hover:bg-blue-50 rounded-lg"><Edit size={16} /></button>
-                                      <button onClick={() => handleDeleteSample(sample.id, sample.scoresData)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
-                                    </div>
-                                  </div>
-                                ))}
+                                  );
+                                })}
                               </div>
                             )}
                           </div>
@@ -3140,6 +3340,13 @@ export default function AdvancedHistoryArchive() {
                 </div>
 
                 <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setShowReportModal(true)}
+                    className="hidden sm:flex px-4 py-2 rounded-lg bg-red-50 text-red-600 border border-red-200 text-sm font-bold hover:bg-red-100 transition-all items-center gap-2"
+                  >
+                    <ShieldAlert size={16} /> Report
+                  </button>
+
                   {!viewingAnswer && previewItem.parent.hasAnswer && (
                     <button
                       onClick={() => { setViewingAnswer(true); setActiveSample(null); }}
@@ -3172,6 +3379,7 @@ export default function AdvancedHistoryArchive() {
                       href={getSecurePdfUrl(activeSample ? activeSample.currentFileUrl : (viewingAnswer ? previewItem.parent.answerFileUrl : previewItem.parent.fileUrl))}
                       target="_blank"
                       rel="noreferrer"
+                      onClick={() => handleDownloadTracking(activeSample ? "Student Sample" : (viewingAnswer ? previewItem.parent.title + " Answer" : previewItem.parent.title))}
                       className="hidden sm:flex px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 transition-all items-center gap-2"
                     >
                       <Download size={16} /> {activeSample ? "Download Sample" : (viewingAnswer ? "Download Answer" : "Download PDF")}
@@ -4365,6 +4573,70 @@ export default function AdvancedHistoryArchive() {
           </div>
         )}
       </AnimatePresence >
+      {/* --- VIEW REPORTS MODAL (ADMIN ONLY) --- */}
+      <AnimatePresence>
+        {showReportViewModal && user?.isAdmin && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[80] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-xl p-6 max-w-lg w-full shadow-2xl max-h-[80vh] flex flex-col">
+              <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-3">
+                <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2"><ShieldAlert size={20} className="text-red-500" /> Attached Reports</h2>
+                <button onClick={() => setShowReportViewModal(false)} className="text-slate-400 hover:text-slate-800"><X size={20} /></button>
+              </div>
+              <div className="flex-1 overflow-y-auto space-y-3 mb-4 custom-scrollbar">
+                {selectedReports.map(r => (
+                  <div key={r.id} className="bg-red-50 border border-red-100 p-4 rounded-lg text-sm flex flex-col gap-3">
+                    <div>
+                      <div dangerouslySetInnerHTML={{ __html: r.message }} className="text-red-800 leading-relaxed"></div>
+                      <div className="text-xs text-red-500 mt-2 font-medium">{new Date(r.timestamp).toLocaleString()}</div>
+                    </div>
+                    <button
+                      onClick={() => handleClearReport(r.id)}
+                      className="self-end px-4 py-2 bg-green-600 text-white rounded-lg text-xs font-bold hover:bg-green-700 transition-colors shadow-sm flex items-center gap-1"
+                    >
+                      <Check size={14} /> Clear this Report
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+      {/* --- REPORT MODAL --- */}
+      <AnimatePresence>
+        {showReportModal && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[80] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-xl p-6 max-w-md w-full shadow-2xl">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2"><ShieldAlert size={20} className="text-red-500" /> Report Document Issue</h2>
+                <button onClick={() => setShowReportModal(false)} className="text-slate-400 hover:text-slate-800"><X size={20} /></button>
+              </div>
+              <form onSubmit={handleReportSubmit} className="space-y-4">
+                <div>
+                  <label className="text-xs font-bold text-slate-500 mb-1 block">Reason for reporting</label>
+                  <select required className="w-full p-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-red-500" value={reportForm.reason} onChange={(e) => setReportForm({ ...reportForm, reason: e.target.value })}>
+                    <option value="">Select a reason...</option>
+                    <option value="Wrong deployment of files">Wrong deployment of files</option>
+                    <option value="Missing/wrong pages">Missing/wrong pages</option>
+                    <option value="Difficult to view">Difficult to view</option>
+                    <option value="Spelling mistakes of questions">Spelling mistakes of questions</option>
+                    <option value="No answer attached">No answer attached</option>
+                    <option value="Wrong tags">Wrong tags</option>
+                    <option value="Others (Please specify)">Others (Please specify)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-500 mb-1 block">Details</label>
+                  <textarea required rows={4} className="w-full p-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-red-500" placeholder="Please provide more details..." value={reportForm.details} onChange={(e) => setReportForm({ ...reportForm, details: e.target.value })}></textarea>
+                </div>
+                <button type="submit" disabled={isSubmittingReport} className="w-full py-2 bg-red-600 text-white rounded-lg text-sm font-bold hover:bg-red-700 disabled:opacity-50">
+                  {isSubmittingReport ? "Submitting..." : "Submit Report"}
+                </button>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
       {/* --- TOOL LINK ROUTING MODAL --- */}
       < AnimatePresence >
         {showToolLinkModal && (

@@ -10,6 +10,41 @@ const db = admin.firestore();
 // This runs every 5 minutes automatically
 exports.checkTierUnlocksAndEmail = functions.pubsub.schedule("every 5 minutes").onRun(async () => {
     try {
+// --- NEW: RETRY MECHANISM WITH 3-ATTEMPT LIMIT & GROUPED LOGGING ---
+        const failedEmailsSnap = await db.collection("mail").where("delivery.state", "==", "ERROR").get();
+        if (!failedEmailsSnap.empty) {
+            let errorDetails = [];
+            for (const mailDoc of failedEmailsSnap.docs) {
+                const mailData = mailDoc.data();
+                const errorMessage = mailData.delivery?.error || "";
+
+                if (errorMessage.includes("421") || errorMessage) {
+                    const currentRetries = mailData.retryCount || 0;
+
+                    if (currentRetries < 3) {
+                        errorDetails.push(`${mailData.to} (Attempt ${currentRetries + 1}/3)`);
+                        await mailDoc.ref.update({
+                            "delivery.state": "RETRY",
+                            "retryCount": currentRetries + 1
+                        });
+                    } else if (!mailData.adminNotified) {
+                        errorDetails.push(`${mailData.to} (FAILED completely)`);
+                        await mailDoc.ref.update({ adminNotified: true });
+                    }
+                }
+            }
+            
+            if (errorDetails.length > 0) {
+                await db.collection("admin_logs").add({
+                    type: "SMTP_ERROR",
+                    message: `Delivery errors encountered. Retrying next cycle. Affected emails: <span style="color: #dc2626; font-weight: bold;">${errorDetails.join(", ")}</span>`,
+                    timestamp: new Date().toISOString(),
+                    viewed: false
+                });
+            }
+        }
+        // --- END NEW ---
+
         // 1. Get current time in Hong Kong timezone (YYYY-MM-DDTHH:mm)
         const hkTime = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Hong_Kong' }));
         const nowStr = new Date(hkTime.getTime() - (hkTime.getTimezoneOffset() * 60000)).toISOString().substring(0, 16);
@@ -23,6 +58,7 @@ exports.checkTierUnlocksAndEmail = functions.pubsub.schedule("every 5 minutes").
         const tierAccess = configData.tierAccess || {};
 
         let updatesToSave = {}; // To track which tiers we mark as 'emailSent: true'
+        let emailsSentSummary = {}; // To track how many emails sent per role
 
         // 3. Loop through roles and tiers
         for (const role in tierAccess) {
@@ -110,6 +146,7 @@ exports.checkTierUnlocksAndEmail = functions.pubsub.schedule("every 5 minutes").
                         });
 
                         await batch.commit(); // Execute all email drops
+                        emailsSentSummary[role] = (emailsSentSummary[role] || 0) + usersSnap.size;
                     }
 
                     // 6. Queue the update to mark this tier's email as sent
@@ -122,6 +159,20 @@ exports.checkTierUnlocksAndEmail = functions.pubsub.schedule("every 5 minutes").
         if (Object.keys(updatesToSave).length > 0) {
             await configRef.update(updatesToSave);
             console.log("Successfully sent emails and updated config:", updatesToSave);
+        }
+        
+        // 8. Log the total successful emails sent to the super admin
+        if (Object.keys(emailsSentSummary).length > 0) {
+            let summaryText = Object.entries(emailsSentSummary)
+                .map(([r, count]) => `${count} emails to [${r.replace('_', ' ')}]`)
+                .join(", ");
+                
+            await db.collection("admin_logs").add({
+                type: "EMAILS_SENT",
+                message: `Successfully queued new revision material updates: ${summaryText}.`,
+                timestamp: new Date().toISOString(),
+                viewed: false
+            });
         }
 
         return null;

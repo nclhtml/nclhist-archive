@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
 import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
 import { doc, getDoc, collection, getDocs, addDoc, query, orderBy, limit } from "firebase/firestore";
-import { Loader2, ShieldAlert, Users, X } from 'lucide-react';
+import { Loader2, ShieldAlert, Users, X, Bell } from 'lucide-react';
 
 // Import your components and firebase
 import App from './App.jsx';
@@ -142,6 +142,60 @@ const Layout = ({ children }) => {
   const [systemUsers, setSystemUsers] = useState([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
 
+  // --- NEW: Admin Logs State & Fetch (3-Day Limit & Badge) ---
+  const [showAdminLogs, setShowAdminLogs] = useState(false);
+  const [adminLogs, setAdminLogs] = useState([]);
+  const [unreadAdminLogs, setUnreadAdminLogs] = useState(0);
+  const [loadingAdminLogs, setLoadingAdminLogs] = useState(false);
+
+  const fetchAdminLogs = async () => {
+    setLoadingAdminLogs(true);
+    try {
+      const threeDaysAgo = new Date();
+      threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+
+      const logsQuery = query(collection(db, "admin_logs"), orderBy("timestamp", "desc"), limit(50));
+      const logsSnap = await getDocs(logsQuery);
+
+      let fetchedLogs = [];
+      let unreadCount = 0;
+
+      logsSnap.docs.forEach(d => {
+        const data = d.data();
+        const logDate = new Date(data.timestamp);
+
+        // Only keep logs from the last 3 days
+        if (logDate >= threeDaysAgo) {
+          fetchedLogs.push({ id: d.id, ...data });
+          if (!data.viewed) unreadCount++;
+        }
+      });
+
+      setAdminLogs(fetchedLogs);
+      setUnreadAdminLogs(unreadCount);
+    } catch (error) {
+      console.error("Error fetching admin logs:", error);
+    }
+    setLoadingAdminLogs(false);
+  };
+
+  // Mark as viewed when opening the panel
+  useEffect(() => {
+    if (showAdminLogs && unreadAdminLogs > 0) {
+      adminLogs.forEach(async (log) => {
+        if (!log.viewed) {
+          try { await doc(db, "admin_logs", log.id).update({ viewed: true }); } catch (e) { }
+        }
+      });
+      setUnreadAdminLogs(0);
+    }
+  }, [showAdminLogs]);
+
+  useEffect(() => {
+    if (user?.email === SUPER_ADMIN) fetchAdminLogs();
+  }, [user]);
+  // --- END NEW ---
+
   const fetchSystemUsers = async () => {
     setLoadingUsers(true);
     try {
@@ -157,17 +211,31 @@ const Layout = ({ children }) => {
       rolesSnap.docs.forEach(d => { rolesData[d.id] = d.data().role; });
       const studentsData = studentsSnap.docs.map(d => d.data());
 
-      const logsList = logsSnap.docs.map(docSnap => {
-        const data = docSnap.data();
-        const email = data.email;
-        const linkedStudent = studentsData.find(s => s.email === email);
+      const threeDaysAgo = new Date();
+      threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
 
-        return {
-          email: email,
-          timestamp: new Date(data.timestamp).toLocaleString(),
-          role: rolesData[email] || 'No Role',
-          studentName: linkedStudent ? `${linkedStudent.englishName} (${linkedStudent.className})` : null
-        };
+      const logsList = [];
+      logsSnap.docs.forEach(docSnap => {
+        const data = docSnap.data();
+        const logDate = new Date(data.timestamp);
+
+        if (logDate >= threeDaysAgo) {
+          const email = data.email;
+          const linkedStudent = studentsData.find(s => s.email === email);
+
+          // Format: YYYY-MM-DD HH:MM:SS
+          const formattedTime = logDate.toLocaleString('en-GB', {
+            year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', second: '2-digit'
+          });
+
+          logsList.push({
+            email: email,
+            timestamp: formattedTime,
+            role: rolesData[email] || 'No Role',
+            studentName: linkedStudent ? `${linkedStudent.englishName} (${linkedStudent.className})` : null
+          });
+        }
       });
 
       setSystemUsers(logsList);
@@ -199,10 +267,90 @@ const Layout = ({ children }) => {
             <div>
               {user ? (
                 <div className="flex items-center gap-3">
-                  {user.email === SUPER_ADMIN && (
-                    <button onClick={() => setShowUsersModal(true)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors" title="View User Records">
-                      <Users size={18} />
-                    </button>
+{user.email === SUPER_ADMIN && (
+                    <div className="relative flex items-center gap-2">
+                      {/* Admin Logs Button & Dropdown */}
+                      <div className="relative">
+                        <button onClick={() => { setShowAdminLogs(!showAdminLogs); setShowUsersModal(false); }} className={`relative p-1.5 rounded-md transition-colors ${showAdminLogs ? 'text-red-600 bg-red-50' : 'text-slate-400 hover:text-red-600 hover:bg-red-50'}`} title="Super Admin Logs">
+                          <Bell size={18} />
+                          {unreadAdminLogs > 0 && (
+                            <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white ring-2 ring-white">
+                              {unreadAdminLogs}
+                            </span>
+                          )}
+                        </button>
+                        
+                        {showAdminLogs && (
+                          <div className="absolute right-0 mt-2 bg-white rounded-xl shadow-2xl border border-slate-200 w-96 max-h-[60vh] flex flex-col z-[100]">
+                            <div className="flex justify-between items-center p-3 border-b border-slate-200 bg-slate-50 rounded-t-xl">
+                              <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                                <Bell size={16} className="text-red-600" /> Super Admin Logs (Last 3 Days)
+                              </h2>
+                              <button onClick={() => setShowAdminLogs(false)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
+                            </div>
+                            <div className="p-3 overflow-y-auto flex-1">
+                              {loadingAdminLogs ? (
+                                <div className="flex justify-center py-8"><Loader2 className="animate-spin text-red-600" /></div>
+                              ) : (
+                                <div className="flex flex-col gap-3">
+                                  {adminLogs.length === 0 && <div className="text-center text-slate-500 py-4 text-xs">No recent logs.</div>}
+                                  {adminLogs.map((log) => (
+                                    <div key={log.id} className={`border rounded-lg p-3 text-xs ${log.type === 'SMTP_ERROR' ? 'bg-red-50 border-red-100' : 'bg-blue-50 border-blue-100'}`}>
+                                      <div className="flex justify-between items-start mb-1">
+                                        <span className={`font-bold ${log.type === 'SMTP_ERROR' ? 'text-red-700' : 'text-blue-700'}`}>{log.type}</span>
+                                        <span className="text-slate-500">{new Date(log.timestamp).toLocaleString('en-GB')}</span>
+                                      </div>
+                                      <p dangerouslySetInnerHTML={{ __html: log.message }} className={log.type === 'SMTP_ERROR' ? 'text-red-800' : 'text-blue-800'}></p>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* User Logs Button & Dropdown */}
+                      <div className="relative">
+                        <button onClick={() => { setShowUsersModal(!showUsersModal); setShowAdminLogs(false); }} className={`p-1.5 rounded-md transition-colors ${showUsersModal ? 'text-blue-600 bg-blue-50' : 'text-slate-400 hover:text-blue-600 hover:bg-blue-50'}`} title="View User Records">
+                          <Users size={18} />
+                        </button>
+
+                        {showUsersModal && (
+                          <div className="absolute right-0 mt-2 bg-white rounded-xl shadow-2xl border border-slate-200 w-96 max-h-[60vh] flex flex-col z-[100]">
+                            <div className="flex justify-between items-center p-3 border-b border-slate-200 bg-slate-50 rounded-t-xl">
+                              <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                                <Users size={16} className="text-blue-600" /> Login Records (Last 3 Days)
+                              </h2>
+                              <button onClick={() => setShowUsersModal(false)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
+                            </div>
+                            <div className="p-3 overflow-y-auto flex-1">
+                              {loadingUsers ? (
+                                <div className="flex justify-center py-8"><Loader2 className="animate-spin text-blue-600" /></div>
+                              ) : (
+                                <table className="w-full text-left text-xs">
+                                  <thead className="text-slate-500">
+                                    <tr><th className="pb-2 font-medium">Time</th><th className="pb-2 font-medium">User</th></tr>
+                                  </thead>
+                                  <tbody>
+                                    {systemUsers.length === 0 && <tr><td colSpan="2" className="py-4 text-center text-slate-500">No recent records.</td></tr>}
+                                    {systemUsers.map((u, i) => (
+                                      <tr key={i} className="border-t border-slate-100">
+                                        <td className="py-2 text-slate-400 whitespace-nowrap pr-2">{u.timestamp}</td>
+                                        <td className="py-2">
+                                          <div className="text-slate-700 font-medium truncate w-40" title={u.email}>{u.email}</div>
+                                          <div className="text-slate-500">{u.studentName ? <span className="text-blue-600">{u.studentName}</span> : <span className="capitalize">{u.role.replace('_', ' ')}</span>}</div>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   )}
                   <div className="text-right hidden sm:block">
                     <div className="text-sm font-bold text-slate-700">{user.displayName || user.email.split('@')[0]}</div>
@@ -253,51 +401,6 @@ const Layout = ({ children }) => {
       <div className="flex-1">
         {children}
       </div>
-
-      {/* Super Admin Users Modal */}
-      {showUsersModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
-            <div className="flex justify-between items-center p-4 border-b border-slate-200">
-              <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                <Users size={20} className="text-blue-600" /> System Users Record
-              </h2>
-              <button onClick={() => setShowUsersModal(false)} className="text-slate-400 hover:text-slate-600">
-                <X size={20} />
-              </button>
-            </div>
-            <div className="p-4 overflow-y-auto flex-1">
-              {loadingUsers ? (
-                <div className="flex justify-center py-8"><Loader2 className="animate-spin text-blue-600" /></div>
-              ) : (
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-slate-50 text-slate-600">
-                    <tr>
-                      <th className="p-3 border-b">Time</th>
-                      <th className="p-3 border-b">Email</th>
-                      <th className="p-3 border-b">Role / Identity</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {systemUsers.length === 0 && (
-                      <tr><td colSpan="3" className="p-4 text-center text-slate-500">No login records found.</td></tr>
-                    )}
-                    {systemUsers.map((u, i) => (
-                      <tr key={i} className="border-b border-slate-100 hover:bg-slate-50">
-                        <td className="p-3 text-slate-500 text-xs whitespace-nowrap">{u.timestamp}</td>
-                        <td className="p-3 text-slate-700">{u.email}</td>
-                        <td className="p-3 font-medium text-slate-800">
-                          {u.studentName ? <span className="text-blue-600">{u.studentName}</span> : <span className="capitalize">{u.role.replace('_', ' ')}</span>}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

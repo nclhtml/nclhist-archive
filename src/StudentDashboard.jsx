@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, doc, getDoc, updateDoc, addDoc, deleteDoc, query, where } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc, updateDoc, addDoc, deleteDoc, query, where, setDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import { useAuth } from './main.jsx';
-import { BookOpen, Edit, Trash2, Plus, Save, X, ExternalLink, Loader2, FileText, GripHorizontal } from 'lucide-react';
+import { BookOpen, Edit, Trash2, Plus, Save, X, ExternalLink, Loader2, FileText, GripHorizontal, Check, Star } from 'lucide-react';
 
 // Paste it right here, outside the component:
 const getTermWeight = (term) => {
@@ -50,6 +50,8 @@ export default function StudentDashboard() {
 
     // Comment Modal State
     const [selectedCommentId, setSelectedCommentId] = useState(null);
+    const [doneItems, setDoneItems] = useState([]); // NEW: Mark as done state
+    const [starredItems, setStarredItems] = useState([]); // NEW: Starring state
 
     useEffect(() => {
         fetchData();
@@ -141,29 +143,21 @@ export default function StudentDashboard() {
             }
             setMaxUnlockedTier(unlockedTier);
 
+            // Fetch User Progress (Mark as Done & Starred)
+            if (user?.email) {
+                const progressSnap = await getDoc(doc(db, "user_progress", user.email.toLowerCase().trim()));
+                if (progressSnap.exists()) {
+                    setDoneItems(progressSnap.data().doneItems || []);
+                    setStarredItems(progressSnap.data().starredItems || []);
+                }
+            }
+
             // 3. Fetch All Assessments (Assignments/Quizzes)
             const q = query(collection(db, "assessments"));
             const snap = await getDocs(q);
 
             let fetchedItems = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-            fetchedItems.sort((a, b) => {
-                // 1. Supreme Order: Use manual drag-and-drop order if it exists
-                const orderA = a.order !== undefined ? a.order : -1;
-                const orderB = b.order !== undefined ? b.order : -1;
-
-                if (orderA !== orderB) {
-                    return orderA - orderB;
-                }
-
-                // 2. Fallback to Term weight (descending)
-                const weightA = getTermWeight(a.term);
-                const weightB = getTermWeight(b.term);
-                if (weightA !== weightB) return weightB - weightA;
-
-                // 3. Fallback to Date (descending)
-                return new Date(b.date) - new Date(a.date);
-            });
             setAllItems(fetchedItems);
         } catch (error) {
             console.error("Error fetching dashboard data:", error);
@@ -174,11 +168,77 @@ export default function StudentDashboard() {
     // Dynamically filter items based on the selected tab (which is now restricted by role)
     useEffect(() => {
         if (selectedClass) {
-            setItems(allItems.filter(item => item.classes?.includes(selectedClass) || item.className === selectedClass));
+            let filtered = allItems.filter(item => item.classes?.includes(selectedClass) || item.className === selectedClass);
+
+            // Sort to push starred items to the top
+            filtered.sort((a, b) => {
+                const aIsStarred = a.linkedDocId && starredItems.includes(a.linkedDocId);
+                const bIsStarred = b.linkedDocId && starredItems.includes(b.linkedDocId);
+                if (aIsStarred && !bIsStarred) return -1;
+                if (!aIsStarred && bIsStarred) return 1;
+                return 0; // Keep existing order otherwise
+            });
+
+            setItems(filtered);
         } else {
             setItems([]);
         }
-    }, [allItems, selectedClass]);
+    }, [allItems, selectedClass, starredItems]);
+
+    const toggleStar = async (uniqueId) => {
+        if (!user?.email) return;
+        const newStarred = starredItems.includes(uniqueId)
+            ? starredItems.filter(id => id !== uniqueId)
+            : [...starredItems, uniqueId];
+        setStarredItems(newStarred);
+        try {
+            await setDoc(doc(db, "user_progress", user.email.toLowerCase().trim()), {
+                starredItems: newStarred
+            }, { merge: true });
+        } catch (error) {
+            console.error("Error saving star:", error);
+        }
+    };
+
+    const toggleMarkAsDone = async (uniqueId) => {
+        if (!user?.email) return;
+        const newDone = doneItems.includes(uniqueId)
+            ? doneItems.filter(id => id !== uniqueId)
+            : [...doneItems, uniqueId];
+        setDoneItems(newDone);
+        try {
+            await setDoc(doc(db, "user_progress", user.email.toLowerCase().trim()), {
+                doneItems: newDone
+            }, { merge: true });
+        } catch (error) {
+            console.error("Error saving progress:", error);
+        }
+    };
+
+    const handleBulkMarkAsDone = async (markAll) => {
+        if (!user?.email) return;
+        if (!window.confirm(`Are you sure you want to ${markAll ? 'mark' : 'clear'} all previous exercises as done?`)) return;
+
+        let newDone = [...doneItems];
+        items.forEach(item => {
+            if (item.linkedDocId) {
+                if (markAll && !newDone.includes(item.linkedDocId)) {
+                    newDone.push(item.linkedDocId);
+                } else if (!markAll && newDone.includes(item.linkedDocId)) {
+                    newDone = newDone.filter(id => id !== item.linkedDocId);
+                }
+            }
+        });
+
+        setDoneItems(newDone);
+        try {
+            await setDoc(doc(db, "user_progress", user.email.toLowerCase().trim()), {
+                doneItems: newDone
+            }, { merge: true });
+        } catch (error) {
+            console.error("Error saving progress:", error);
+        }
+    };
 
     const handleDelete = async (id) => {
         if (!window.confirm("Delete this item from the list?")) return;
@@ -303,19 +363,32 @@ export default function StudentDashboard() {
             </div>
 
             {/* Class/Group Tabs (Filtered by Role) */}
-            {classes.length > 0 && (
-                <div className="flex gap-2 overflow-x-auto mb-4 pb-2">
-                    {classes.map(c => (
-                        <button
-                            key={c}
-                            onClick={() => setSelectedClass(c)}
-                            className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${selectedClass === c ? 'bg-blue-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
-                        >
-                            {c}
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4 pb-2">
+                {classes.length > 0 && (
+                    <div className="flex gap-2 overflow-x-auto">
+                        {classes.map(c => (
+                            <button
+                                key={c}
+                                onClick={() => setSelectedClass(c)}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${selectedClass === c ? 'bg-blue-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+                            >
+                                {c}
+                            </button>
+                        ))}
+                    </div>
+                )}
+
+                {!user?.isAdmin && (
+                    <div className="flex gap-2 w-full sm:w-auto">
+                        <button onClick={() => handleBulkMarkAsDone(true)} className="flex-1 sm:flex-none px-3 py-1.5 bg-green-50 text-green-700 border border-green-200 rounded-lg text-xs font-bold hover:bg-green-100 transition-colors">
+                            Mark All as Done
                         </button>
-                    ))}
-                </div>
-            )}
+                        <button onClick={() => handleBulkMarkAsDone(false)} className="flex-1 sm:flex-none px-3 py-1.5 bg-slate-50 text-slate-600 border border-slate-200 rounded-lg text-xs font-bold hover:bg-slate-100 transition-colors">
+                            Clear All
+                        </button>
+                    </div>
+                )}
+            </div>
 
             <div className="bg-white rounded-xl shadow-sm border border-slate-200">
                 <table className="w-full text-left">
@@ -337,9 +410,23 @@ export default function StudentDashboard() {
                         ) : (
                             items.map((item, index) => {
                                 const linkedDoc = linkableDocs.find(a => a.id === item.linkedDocId);
-                                const docTier = linkedDoc ? (parseInt(linkedDoc.tier, 10) || 10) : 10;
-                                const isTierUnlocked = user?.isAdmin || docTier <= maxUnlockedTier;
-                                const isEffectivelyDisclosed = item.isDisclosed !== false || (linkedDoc && isTierUnlocked);
+
+                                let hasLinkedDoc = !!linkedDoc;
+                                let isTierUnlocked = user?.isAdmin;
+
+                                if (linkedDoc) {
+                                    const docTier = parseInt(linkedDoc.tier, 10) || 10;
+                                    if (docTier <= maxUnlockedTier) isTierUnlocked = true;
+                                } else if (item.sectionsConfig && item.sectionsConfig.some(sec => sec.linkedDocId)) {
+                                    hasLinkedDoc = true;
+                                    isTierUnlocked = user?.isAdmin || item.sectionsConfig.filter(sec => sec.linkedDocId).every(sec => {
+                                        const lDoc = linkableDocs.find(a => a.id === sec.linkedDocId);
+                                        const dTier = lDoc ? (parseInt(lDoc.tier, 10) || 10) : 10;
+                                        return dTier <= maxUnlockedTier;
+                                    });
+                                }
+
+                                const isEffectivelyDisclosed = item.isDisclosed !== false || (hasLinkedDoc && isTierUnlocked);
 
                                 let studentMark = '-';
 
@@ -500,16 +587,56 @@ export default function StudentDashboard() {
                                                         {item.sectionsConfig.filter(sec => sec.linkedDocId).map(sec => {
                                                             const lDoc = linkableDocs.find(a => a.id === sec.linkedDocId);
                                                             return lDoc ? (
-                                                                <a key={sec.id} href={`/?search=${encodeURIComponent(lDoc.title)}&viewId=${lDoc.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-2 py-1 rounded-md border border-blue-100 shadow-sm">
-                                                                    <FileText size={12} /> {sec.name}
-                                                                </a>
+                                                                <div key={sec.id} className="flex items-center gap-2">
+                                                                    <a href={`/?search=${encodeURIComponent(lDoc.title)}&viewId=${lDoc.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-2 py-1 rounded-md border border-blue-100 shadow-sm">
+                                                                        <FileText size={12} /> {sec.name}
+                                                                    </a>
+                                                                    {!user?.isAdmin && (
+                                                                        <>
+                                                                            <button
+                                                                                onClick={() => toggleStar(lDoc.id)}
+                                                                                className={`inline-flex items-center justify-center w-6 h-6 rounded-md border transition-colors ${starredItems.includes(lDoc.id) ? 'bg-yellow-100 border-yellow-300 text-yellow-600' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
+                                                                                title="Star / To-Do Later"
+                                                                            >
+                                                                                <Star size={12} className={starredItems.includes(lDoc.id) ? 'fill-current' : ''} />
+                                                                            </button>
+                                                                            <button
+                                                                                onClick={() => toggleMarkAsDone(lDoc.id)}
+                                                                                className={`inline-flex items-center justify-center w-6 h-6 rounded-md border transition-colors ${doneItems.includes(lDoc.id) ? 'bg-green-100 border-green-300 text-green-700' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
+                                                                                title={doneItems.includes(lDoc.id) ? "Done" : "Mark as Done"}
+                                                                            >
+                                                                                <Check size={12} className={doneItems.includes(lDoc.id) ? 'opacity-100' : 'opacity-30'} />
+                                                                            </button>
+                                                                        </>
+                                                                    )}
+                                                                </div>
                                                             ) : null;
                                                         })}
                                                     </div>
                                                 ) : linkedDoc ? (
-                                                    <a href={`/?search=${encodeURIComponent(linkedDoc.title)}&viewId=${linkedDoc.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-2 py-1 rounded-md border border-blue-100 shadow-sm">
-                                                        <FileText size={14} /> View
-                                                    </a>
+                                                    <div className="flex items-center gap-2">
+                                                        <a href={`/?search=${encodeURIComponent(linkedDoc.title)}&viewId=${linkedDoc.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-2 py-1 rounded-md border border-blue-100 shadow-sm">
+                                                            <FileText size={14} /> View
+                                                        </a>
+                                                        {!user?.isAdmin && (
+                                                            <>
+                                                                <button
+                                                                    onClick={() => toggleStar(linkedDoc.id)}
+                                                                    className={`inline-flex items-center justify-center w-7 h-7 rounded-md border transition-colors ${starredItems.includes(linkedDoc.id) ? 'bg-yellow-100 border-yellow-300 text-yellow-600' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
+                                                                    title="Star / To-Do Later"
+                                                                >
+                                                                    <Star size={14} className={starredItems.includes(linkedDoc.id) ? 'fill-current' : ''} />
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => toggleMarkAsDone(linkedDoc.id)}
+                                                                    className={`inline-flex items-center justify-center w-7 h-7 rounded-md border transition-colors ${doneItems.includes(linkedDoc.id) ? 'bg-green-100 border-green-300 text-green-700' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
+                                                                    title={doneItems.includes(linkedDoc.id) ? "Done" : "Mark as Done"}
+                                                                >
+                                                                    <Check size={14} className={doneItems.includes(linkedDoc.id) ? 'opacity-100' : 'opacity-30'} />
+                                                                </button>
+                                                            </>
+                                                        )}
+                                                    </div>
                                                 ) : (
                                                     <span className="text-xs text-slate-400 italic">No file attached</span>
                                                 )}

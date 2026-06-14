@@ -10,7 +10,7 @@ const db = admin.firestore();
 // This runs every 5 minutes automatically
 exports.checkTierUnlocksAndEmail = functions.pubsub.schedule("every 5 minutes").onRun(async () => {
     try {
-// --- NEW: RETRY MECHANISM WITH 3-ATTEMPT LIMIT & GROUPED LOGGING ---
+        // --- NEW: RETRY MECHANISM WITH 3-ATTEMPT LIMIT & GROUPED LOGGING ---
         const failedEmailsSnap = await db.collection("mail").where("delivery.state", "==", "ERROR").get();
         if (!failedEmailsSnap.empty) {
             let errorDetails = [];
@@ -33,7 +33,7 @@ exports.checkTierUnlocksAndEmail = functions.pubsub.schedule("every 5 minutes").
                     }
                 }
             }
-            
+
             if (errorDetails.length > 0) {
                 await db.collection("admin_logs").add({
                     type: "SMTP_ERROR",
@@ -160,13 +160,13 @@ exports.checkTierUnlocksAndEmail = functions.pubsub.schedule("every 5 minutes").
             await configRef.update(updatesToSave);
             console.log("Successfully sent emails and updated config:", updatesToSave);
         }
-        
+
         // 8. Log the total successful emails sent to the super admin
         if (Object.keys(emailsSentSummary).length > 0) {
             let summaryText = Object.entries(emailsSentSummary)
                 .map(([r, count]) => `${count} emails to [${r.replace('_', ' ')}]`)
                 .join(", ");
-                
+
             await db.collection("admin_logs").add({
                 type: "EMAILS_SENT",
                 message: `Successfully queued new revision material updates: ${summaryText}.`,
@@ -239,7 +239,7 @@ exports.getWatermarkedPdf = functions.https.onRequest(async (req, res) => {
             });
         });
 
-        // 4. Send the watermarked PDF back to the client
+// 4. Send the watermarked PDF back to the client
         const watermarkedBytes = await pdfDoc.save();
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', 'inline; filename="watermarked_document.pdf"');
@@ -250,3 +250,42 @@ exports.getWatermarkedPdf = functions.https.onRequest(async (req, res) => {
         res.status(500).send('Error generating watermarked PDF');
     }
 });
+
+// --- NEW: WELCOME EMAIL ON ROLE CREATION ---
+exports.sendWelcomeEmailOnRoleAdd = functions.firestore
+    .document("user_roles/{docId}")
+    .onCreate(async (snap, context) => {
+        const data = snap.data();
+        const email = data.email;
+        const role = data.role;
+
+        if (!email) return null;
+
+        // Determine the greeting based on the role
+        let greeting = "Dear Student,";
+        if (role === "admin" || role === "dse_only") {
+            greeting = "Dear Teaching Staff,";
+        }
+
+        // Create a new document in the 'mail' collection to trigger the email
+        const mailRef = db.collection("mail").doc();
+        await mailRef.set({
+            to: email,
+            message: {
+                subject: "Account Access Granted: History Archive",
+                html: `
+                    <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
+                        <p>${greeting}</p>
+                        <p>Your account has been successfully registered and granted access to the History Archive platform.</p>
+                        <p>You can now log in to the website directly using your <strong>school Google account</strong> by visiting the link below:</p>
+                        <p><a href="https://nclhist.netlify.app" style="color: #2563eb; font-weight: bold;">https://nclhist.netlify.app</a></p>
+                        <br>
+                        <p>Best regards,</p>
+                        <p><strong>The History Archive Team</strong></p>
+                    </div>
+                `
+            }
+        });
+
+        return null;
+    });

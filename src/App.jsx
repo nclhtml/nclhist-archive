@@ -5,7 +5,7 @@ import {
   Sparkles, ArrowUpDown, Eye, BookOpen, ArrowLeft,
   FileDigit, Settings, Hash, ChevronLeft, ChevronRight,
   Users, Shield, Layers, Save, Calendar, Clock, LayoutList, FileStack,
-  BarChart2, GraduationCap, FileOutput, GripHorizontal, FolderOpen
+  BarChart2, GraduationCap, FileOutput, GripHorizontal, FolderOpen, Star
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -31,6 +31,9 @@ import { db, storage } from './firebase.js';
 import { useAuth } from './main.jsx';
 import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, setDoc, getDoc, query, where } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+
+// --- IMPORT UPDATE CONTENT ---
+import { UpdateContent, updateVersion } from './UpdateContent.jsx';
 
 // --- APP CONSTANTS ---
 const ORIGINS = ["DSE Pastpaper", "Internal School Exam", "Mock Examination", "Quiz", "Exercise"];
@@ -462,6 +465,26 @@ export default function AdvancedHistoryArchive() {
   // --- GRAB GLOBAL AUTH STATE ---
   const { user, authLoading, loginWithGoogle, logout } = useAuth();
 
+  // --- UPDATE NOTIFICATION STATE ---
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [dontShowAgain, setDontShowAgain] = useState(false);
+  const [hiddenUpdates, setHiddenUpdates] = useState([]);
+
+  const handleCloseUpdateModal = async () => {
+    setShowUpdateModal(false);
+    if (dontShowAgain && user?.email) {
+      const newHidden = [...hiddenUpdates, updateVersion];
+      setHiddenUpdates(newHidden);
+      try {
+        await setDoc(doc(db, "user_progress", user.email.toLowerCase().trim()), {
+          hiddenUpdates: newHidden
+        }, { merge: true });
+      } catch (error) {
+        console.error("Error saving update preference:", error);
+      }
+    }
+  };
+
   // --- STATE ---
   const [archives, setArchives] = useState([]);
 
@@ -472,7 +495,19 @@ export default function AdvancedHistoryArchive() {
   const [manageTab, setManageTab] = useState('users'); // 'users' | 'tiers'
   const [showFilters, setShowFilters] = useState(false);
   const [expandedSections, setExpandedSections] = useState({});
+  const [expandedPapers, setExpandedPapers] = useState({}); // NEW: For full paper accordion
+  const [doneItems, setDoneItems] = useState([]); // NEW: Mark as done state
+  const [starredItems, setStarredItems] = useState([]); // NEW: Starring state
   const [isLoading, setIsLoading] = useState(false);
+
+  // Helper to highlight search terms
+  const highlightText = (text, highlight) => {
+    if (!highlight || !highlight.trim()) return text;
+    const parts = text.split(new RegExp(`(${highlight.trim()})`, 'gi'));
+    return parts.map((part, i) =>
+      part.toLowerCase() === highlight.trim().toLowerCase() ? <mark key={i} className="bg-yellow-300 text-slate-900 rounded-sm px-0.5">{part}</mark> : part
+    );
+  };
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [downloadHistory, setDownloadHistory] = useState([]);
 
@@ -648,6 +683,68 @@ export default function AdvancedHistoryArchive() {
     fetchSecureTime();
   }, []);
   // --- END OF ADDED BLOCK ---
+
+  // --- FETCH USER PROGRESS (MARK AS DONE) ---
+  useEffect(() => {
+    const fetchUserProgress = async () => {
+      if (!user?.email) return;
+      try {
+        const docRef = doc(db, "user_progress", user.email.toLowerCase().trim());
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          setDoneItems(data.doneItems || []);
+          setStarredItems(data.starredItems || []);
+
+          // Check hidden updates
+          const userHiddenUpdates = data.hiddenUpdates || [];
+          setHiddenUpdates(userHiddenUpdates);
+
+          if (!userHiddenUpdates.includes(updateVersion)) {
+            setShowUpdateModal(true);
+          }
+        } else {
+          // If no progress document exists yet, show the modal
+          setShowUpdateModal(true);
+        }
+      } catch (error) {
+        console.error("Error fetching progress:", error);
+      }
+    };
+    if (!authLoading) fetchUserProgress();
+  }, [user, authLoading]);
+
+  const toggleMarkAsDone = async (e, uniqueId) => {
+    e.stopPropagation();
+    if (!user?.email) return;
+    const newDone = doneItems.includes(uniqueId)
+      ? doneItems.filter(id => id !== uniqueId)
+      : [...doneItems, uniqueId];
+    setDoneItems(newDone);
+    try {
+      await setDoc(doc(db, "user_progress", user.email.toLowerCase().trim()), {
+        doneItems: newDone
+      }, { merge: true });
+    } catch (error) {
+      console.error("Error saving progress:", error);
+    }
+  };
+
+  const toggleStar = async (e, uniqueId) => {
+    e.stopPropagation();
+    if (!user?.email) return;
+    const newStarred = starredItems.includes(uniqueId)
+      ? starredItems.filter(id => id !== uniqueId)
+      : [...starredItems, uniqueId];
+    setStarredItems(newStarred);
+    try {
+      await setDoc(doc(db, "user_progress", user.email.toLowerCase().trim()), {
+        starredItems: newStarred
+      }, { merge: true });
+    } catch (error) {
+      console.error("Error saving star:", error);
+    }
+  };
 
   // --- CLEANUP BLOB URLS ---
   useEffect(() => {
@@ -1365,26 +1462,39 @@ export default function AdvancedHistoryArchive() {
     });
 
     // --- DISPLAY MODE GROUPING ---
-    if (displayMode === 'fullpaper') {
-      const groupedMap = new Map();
-      results.forEach(item => {
-        if (!groupedMap.has(item.parent.id)) {
-          groupedMap.set(item.parent.id, {
-            uniqueId: item.parent.id,
-            parent: item.parent,
-            isFullPaper: true,
-            matchedChildrenCount: 0,
-            isExtraPractice: item.isExtraPractice
-          });
-        }
-        groupedMap.get(item.parent.id).matchedChildrenCount += 1;
-      });
-      results = Array.from(groupedMap.values());
-    }
+    // Always group by full paper to combine modes
+    const groupedMap = new Map();
+    results.forEach(item => {
+      if (!groupedMap.has(item.parent.id)) {
+        groupedMap.set(item.parent.id, {
+          uniqueId: item.parent.id,
+          parent: item.parent,
+          isFullPaper: true,
+          matchedChildrenCount: 0,
+          matchedChildren: [],
+          isExtraPractice: item.isExtraPractice
+        });
+      }
+      groupedMap.get(item.parent.id).matchedChildrenCount += 1;
+      groupedMap.get(item.parent.id).matchedChildren.push(item.child);
+    });
+    results = Array.from(groupedMap.values());
 
     // --- SORTING LOGIC ---
     results.sort((a, b) => {
-      // Primary sort: Reported items first (Admin only)
+      // Supreme sort: Starred items pushed to top
+      const aIsStarred = starredItems.includes(a.uniqueId);
+      const bIsStarred = starredItems.includes(b.uniqueId);
+      if (aIsStarred && !bIsStarred) return -1;
+      if (!aIsStarred && bIsStarred) return 1;
+
+      // Primary sort: Done items pushed to bottom
+      const aIsDone = doneItems.includes(a.uniqueId);
+      const bIsDone = doneItems.includes(b.uniqueId);
+      if (aIsDone && !bIsDone) return 1;
+      if (!aIsDone && bIsDone) return -1;
+
+      // Secondary sort: Reported items first (Admin only)
       if (user?.isAdmin) {
         const checkReport = (item) => {
           return activeReports.some(r => {
@@ -2168,6 +2278,8 @@ export default function AdvancedHistoryArchive() {
   }, [isUploadModalOpen, previewItem, isManageFiltersOpen, isUserManagementOpen, showMarksModal]);
 
   // --- RENDER CONTENT ---
+  const showTags = user?.isAdmin || currentUserRole === 'dse_only';
+
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -2456,21 +2568,6 @@ export default function AdvancedHistoryArchive() {
                   />
                 </div>
 
-                <div className="flex bg-white border border-slate-200 rounded-xl shadow-sm p-1">
-                  <button
-                    onClick={() => setDisplayMode('subquestion')}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${displayMode === 'subquestion' ? 'bg-blue-100 text-blue-700' : 'text-slate-500 hover:bg-slate-50'}`}
-                  >
-                    <LayoutList size={16} /> Sub-Questions
-                  </button>
-                  <button
-                    onClick={() => setDisplayMode('fullpaper')}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${displayMode === 'fullpaper' ? 'bg-blue-100 text-blue-700' : 'text-slate-500 hover:bg-slate-50'}`}
-                  >
-                    <FileStack size={16} /> Full Paper
-                  </button>
-                </div>
-
                 <div className="relative w-full md:w-56">
                   <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
                     <ArrowUpDown size={16} />
@@ -2510,6 +2607,10 @@ export default function AdvancedHistoryArchive() {
 
                     if (isFullPaper) {
                       // --- FULL PAPER RENDER ---
+                      const isExpanded = expandedPapers[parent.id];
+                      const hasSearch = searchTerm.trim().length > 0;
+                      const subQuestionsToDisplay = hasSearch ? item.matchedChildren : parent.subQuestions;
+
                       return (
                         <motion.div
                           key={uniqueId}
@@ -2517,23 +2618,40 @@ export default function AdvancedHistoryArchive() {
                           initial={{ opacity: 0, y: 10 }}
                           animate={{ opacity: 1, y: 0 }}
                           exit={{ opacity: 0, scale: 0.95 }}
-                          onClick={() => setPreviewItem(item)}
-                          className="bg-white rounded-xl border border-slate-200 p-0 shadow-sm hover:shadow-lg hover:border-blue-300 cursor-pointer transition-all overflow-hidden group"
+                          className="bg-white rounded-xl border border-slate-200 p-0 shadow-sm hover:shadow-lg hover:border-blue-300 transition-all overflow-hidden group"
                         >
                           <div className="flex flex-col md:flex-row relative">
-                            <div className="flex-1 p-5 border-b md:border-b-0 md:border-r border-slate-100 relative">
-                              <div className="flex items-center gap-2 mb-2">
-                                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                                  {parent.year} • {parent.origin}
-                                </span>
-                                <span className={`text-xs px-2 py-0.5 rounded font-medium ${parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
-                                  {parent.paperType}
-                                </span>
-                                {user.isAdmin && (
-                                  <span className="text-xs px-2 py-0.5 rounded font-medium bg-indigo-100 text-indigo-700 flex items-center gap-1">
-                                    <Layers size={10} /> {systemTiers.find(t => t.id === (parent.tier || '10'))?.name || `Tier ${parent.tier || '10'}`}
+                            <div className="flex-1 p-5 border-b md:border-b-0 md:border-r border-slate-100 relative cursor-pointer" onClick={() => setPreviewItem(item)}>
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                                    {parent.year} • {parent.origin}
                                   </span>
-                                )}
+                                  <span className={`text-xs px-2 py-0.5 rounded font-medium ${parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
+                                    {parent.paperType}
+                                  </span>
+                                  {user.isAdmin && (
+                                    <span className="text-xs px-2 py-0.5 rounded font-medium bg-indigo-100 text-indigo-700 flex items-center gap-1">
+                                      <Layers size={10} /> {systemTiers.find(t => t.id === (parent.tier || '10'))?.name || `Tier ${parent.tier || '10'}`}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    onClick={(e) => toggleStar(e, uniqueId)}
+                                    className={`flex items-center justify-center p-1.5 rounded-lg transition-colors border ${starredItems.includes(uniqueId) ? 'bg-yellow-100 border-yellow-300 text-yellow-600' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
+                                    title="Star / To-Do Later"
+                                  >
+                                    <Star size={16} className={starredItems.includes(uniqueId) ? 'fill-current' : ''} />
+                                  </button>
+                                  <button
+                                    onClick={(e) => toggleMarkAsDone(e, uniqueId)}
+                                    className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-colors border ${doneItems.includes(uniqueId) ? 'bg-green-100 border-green-300 text-green-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                                  >
+                                    <Check size={14} className={doneItems.includes(uniqueId) ? 'opacity-100' : 'opacity-30'} />
+                                    {doneItems.includes(uniqueId) ? 'Done' : 'Mark as Done'}
+                                  </button>
+                                </div>
                               </div>
 
                               {user?.isAdmin && activeReports.some(r => r.viewId === parent.id || (r.viewId?.startsWith('sample_') && r.message.includes(parent.title))) && (
@@ -2554,20 +2672,85 @@ export default function AdvancedHistoryArchive() {
                                 {parent.title}
                               </h3>
 
-                              <div className="mt-3 text-slate-600 text-sm">
-                                Contains <span className="font-bold">{parent.subQuestions.length}</span> sub-questions ({matchedChildrenCount} matched your search).
+                              <div className="mt-3 text-slate-600 text-sm flex items-center justify-between bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                <div>
+                                  Contains <span className="font-bold">{parent.subQuestions.length}</span> sub-questions
+                                  {hasSearch && <span> (<span className="font-bold text-blue-600">{matchedChildrenCount}</span> matched your search).</span>}
+                                </div>
+                                {!hasSearch && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setExpandedPapers(prev => ({ ...prev, [parent.id]: !prev[parent.id] }));
+                                    }}
+                                    className="flex items-center gap-1 text-blue-600 hover:text-blue-800 font-medium bg-blue-100 px-3 py-1.5 rounded-lg transition-colors text-xs"
+                                  >
+                                    {isExpanded ? 'Hide Questions' : 'Show Questions'}
+                                    <ChevronDown size={14} className={`transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                                  </button>
+                                )}
                               </div>
 
-                              <div className="mt-4 flex flex-wrap gap-2">
-                                {ensureArray(parent.topic).map((t, i) => (
-                                  <div key={`pt-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
-                                    <Tag size={12} /> {t}
-                                  </div>
-                                ))}
-                              </div>
+                              <AnimatePresence>
+                                {(hasSearch || isExpanded) && (
+                                  <motion.div
+                                    initial={{ height: 0, opacity: 0 }}
+                                    animate={{ height: 'auto', opacity: 1 }}
+                                    exit={{ height: 0, opacity: 0 }}
+                                    className="mt-4 space-y-3 overflow-hidden"
+                                  >
+                                    {subQuestionsToDisplay.map(child => (
+                                      <div key={child.id} className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm">
+                                        <div className="flex items-center gap-2 mb-2">
+                                          <span className="bg-slate-800 text-white text-xs px-2 py-0.5 rounded-md font-bold">
+                                            Q{child.label}
+                                          </span>
+                                          {child.marks && (
+                                            <span className="text-xs text-slate-500 font-normal border border-slate-200 px-1.5 py-0.5 rounded bg-slate-50">
+                                              {child.marks} Marks
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div className="text-sm text-slate-700 italic line-clamp-3 mb-3">
+                                          {child.content ? highlightText(child.content, searchTerm) : "No text content provided."}
+                                        </div>
+                                        {showTags && (
+                                          <div className="flex flex-wrap gap-1.5">
+                                            {ensureArray(child.topic).map((t, i) => (
+                                              <span key={`ct-${i}`} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px] font-medium border border-blue-100">
+                                                {t}
+                                              </span>
+                                            ))}
+                                            {ensureArray(child.questionType).map((qt, i) => (
+                                              <span key={`qt-${i}`} className="px-1.5 py-0.5 bg-green-50 text-green-700 rounded text-[10px] font-medium border border-green-100">
+                                                {qt}
+                                              </span>
+                                            ))}
+                                            {ensureArray(child.sourceType).map((st, i) => (
+                                              <span key={`st-${i}`} className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-medium border border-slate-200">
+                                                {st}
+                                              </span>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+
+                              {showTags && (
+                                <div className="mt-4 flex flex-wrap gap-2">
+                                  {ensureArray(parent.topic).map((t, i) => (
+                                    <div key={`pt-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
+                                      <Tag size={12} /> {t}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
 
-                            <div className="p-5 bg-slate-50 md:w-64 flex flex-col justify-center items-center gap-3 relative">
+                            <div className="p-5 bg-slate-50 md:w-64 flex flex-col justify-center items-center gap-3 relative cursor-pointer" onClick={() => setPreviewItem(item)}>
                               <div className="absolute top-2 right-2 text-xs text-slate-300 font-mono select-none">
                                 ID: {parent.id}
                               </div>
@@ -2622,18 +2805,36 @@ export default function AdvancedHistoryArchive() {
                         >
                           <div className="flex flex-col md:flex-row relative">
                             <div className="flex-1 p-5 border-b md:border-b-0 md:border-r border-slate-100 relative">
-                              <div className="flex items-center gap-2 mb-2">
-                                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                                  {parent.year} • {parent.origin}
-                                </span>
-                                <span className={`text-xs px-2 py-0.5 rounded font-medium ${parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
-                                  {parent.paperType}
-                                </span>
-                                {user.isAdmin && (
-                                  <span className="text-xs px-2 py-0.5 rounded font-medium bg-indigo-100 text-indigo-700 flex items-center gap-1">
-                                    <Layers size={10} /> {systemTiers.find(t => t.id === (parent.tier || '10'))?.name || `Tier ${parent.tier || '10'}`}
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                                    {parent.year} • {parent.origin}
                                   </span>
-                                )}
+                                  <span className={`text-xs px-2 py-0.5 rounded font-medium ${parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
+                                    {parent.paperType}
+                                  </span>
+                                  {user.isAdmin && (
+                                    <span className="text-xs px-2 py-0.5 rounded font-medium bg-indigo-100 text-indigo-700 flex items-center gap-1">
+                                      <Layers size={10} /> {systemTiers.find(t => t.id === (parent.tier || '10'))?.name || `Tier ${parent.tier || '10'}`}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    onClick={(e) => toggleStar(e, uniqueId)}
+                                    className={`flex items-center justify-center p-1.5 rounded-lg transition-colors border ${starredItems.includes(uniqueId) ? 'bg-yellow-100 border-yellow-300 text-yellow-600' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
+                                    title="Star / To-Do Later"
+                                  >
+                                    <Star size={16} className={starredItems.includes(uniqueId) ? 'fill-current' : ''} />
+                                  </button>
+                                  <button
+                                    onClick={(e) => toggleMarkAsDone(e, uniqueId)}
+                                    className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-colors border ${doneItems.includes(uniqueId) ? 'bg-green-100 border-green-300 text-green-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                                  >
+                                    <Check size={14} className={doneItems.includes(uniqueId) ? 'opacity-100' : 'opacity-30'} />
+                                    {doneItems.includes(uniqueId) ? 'Done' : 'Mark as Done'}
+                                  </button>
+                                </div>
                               </div>
 
                               {user?.isAdmin && activeReports.some(r => {
@@ -2665,31 +2866,33 @@ export default function AdvancedHistoryArchive() {
                               </h3>
 
                               <div className="mt-3 text-slate-600 text-sm line-clamp-3 bg-slate-50 p-3 rounded-lg border border-slate-100 italic">
-                                {child.content || "No text content provided."}
+                                {child.content ? highlightText(child.content, searchTerm) : "No text content provided."}
                               </div>
 
-                              <div className="mt-4 flex flex-wrap gap-2">
-                                {ensureArray(parent.topic).map((t, i) => (
-                                  <div key={`pt-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
-                                    <Tag size={12} /> {t}
-                                  </div>
-                                ))}
-                                {ensureArray(child.topic).map((t, i) => (
-                                  <div key={`ct-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
-                                    <Tag size={12} /> {t}
-                                  </div>
-                                ))}
-                                {ensureArray(child.questionType).map((qt, i) => (
-                                  <div key={`qt-${i}`} className="badge bg-green-50 text-green-700 border-green-100">
-                                    {qt}
-                                  </div>
-                                ))}
-                                {ensureArray(child.sourceType).map((st, i) => (
-                                  <div key={`st-${i}`} className="badge bg-slate-100 text-slate-600 border-slate-200 flex items-center gap-1">
-                                    <FileDigit size={12} /> {st}
-                                  </div>
-                                ))}
-                              </div>
+                              {showTags && (
+                                <div className="mt-4 flex flex-wrap gap-2">
+                                  {ensureArray(parent.topic).map((t, i) => (
+                                    <div key={`pt-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
+                                      <Tag size={12} /> {t}
+                                    </div>
+                                  ))}
+                                  {ensureArray(child.topic).map((t, i) => (
+                                    <div key={`ct-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
+                                      <Tag size={12} /> {t}
+                                    </div>
+                                  ))}
+                                  {ensureArray(child.questionType).map((qt, i) => (
+                                    <div key={`qt-${i}`} className="badge bg-green-50 text-green-700 border-green-100">
+                                      {qt}
+                                    </div>
+                                  ))}
+                                  {ensureArray(child.sourceType).map((st, i) => (
+                                    <div key={`st-${i}`} className="badge bg-slate-100 text-slate-600 border-slate-200 flex items-center gap-1">
+                                      <FileDigit size={12} /> {st}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
 
                             <div className="p-5 bg-slate-50 md:w-64 flex flex-col justify-center items-center gap-3 relative">
@@ -2837,6 +3040,52 @@ export default function AdvancedHistoryArchive() {
             </div>
           )}
         </AnimatePresence>
+
+        {/* --- UPDATE NOTIFICATION MODAL --- */}
+        <AnimatePresence>
+          {showUpdateModal && user && (
+            <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="bg-white rounded-xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col"
+              >
+                <div className="p-5 border-b border-blue-100 bg-blue-50 flex justify-between items-center">
+                  <h2 className="text-lg font-bold text-blue-800 flex items-center gap-2">
+                    <Sparkles size={20} className="text-blue-600" /> System Update
+                  </h2>
+                  <button onClick={handleCloseUpdateModal} className="text-blue-400 hover:text-blue-800">
+                    <X size={20} />
+                  </button>
+                </div>
+
+                <div className="p-6 overflow-y-auto max-h-[75vh] bg-white">
+                  <UpdateContent />
+                </div>
+
+                <div className="p-5 border-t border-slate-100 bg-slate-50 flex flex-col gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer w-fit">
+                    <input
+                      type="checkbox"
+                      checked={dontShowAgain}
+                      onChange={(e) => setDontShowAgain(e.target.checked)}
+                      className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer"
+                    />
+                    <span className="text-sm font-medium text-slate-600 select-none">Don't show this again</span>
+                  </label>
+                  <button
+                    onClick={handleCloseUpdateModal}
+                    className="w-full py-2.5 bg-blue-600 text-white font-bold rounded-lg text-sm hover:bg-blue-700 transition-colors shadow-sm"
+                  >
+                    OK, Got it!
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
       </main>
 
       {/* --- USER MANAGEMENT MODAL (ADMIN ONLY) --- */}
@@ -3404,16 +3653,18 @@ export default function AdvancedHistoryArchive() {
                       {/* FULL PAPER LEFT PANEL */}
                       {previewItem.isFullPaper ? (
                         <div className="space-y-6">
-                          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                            <h3 className="text-sm font-bold text-slate-800 mb-2">Paper Overview</h3>
-                            <div className="flex flex-wrap gap-2">
-                              {ensureArray(previewItem.parent.topic).map((t, i) => (
-                                <span key={i} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1">
-                                  <Tag size={12} /> {t}
-                                </span>
-                              ))}
+                          {showTags && (
+                            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                              <h3 className="text-sm font-bold text-slate-800 mb-2">Paper Overview</h3>
+                              <div className="flex flex-wrap gap-2">
+                                {ensureArray(previewItem.parent.topic).map((t, i) => (
+                                  <span key={i} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1">
+                                    <Tag size={12} /> {t}
+                                  </span>
+                                ))}
+                              </div>
                             </div>
-                          </div>
+                          )}
 
                           <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
                             <LayoutList size={14} /> All Sub-Questions
@@ -3434,23 +3685,25 @@ export default function AdvancedHistoryArchive() {
                               <div className={`leading-relaxed mb-3 ${previewItem.parent.paperType === "Paper 2 (Essay)" && !previewItem.parent.hasFile ? 'text-4xl md:text-5xl font-medium text-slate-800 py-4' : 'text-sm text-slate-700'}`}>
                                 {sq.content || <span className="text-slate-400 italic text-sm">No text content available.</span>}
                               </div>
-                              <div className="flex flex-wrap gap-1.5">
-                                {ensureArray(sq.topic).map((t, i) => (
-                                  <span key={`t-${i}`} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px] font-medium border border-blue-100">
-                                    {t}
-                                  </span>
-                                ))}
-                                {ensureArray(sq.questionType).map((qt, i) => (
-                                  <span key={`qt-${i}`} className="px-1.5 py-0.5 bg-green-50 text-green-700 rounded text-[10px] font-medium border border-green-100">
-                                    {qt}
-                                  </span>
-                                ))}
-                                {ensureArray(sq.sourceType).map((st, i) => (
-                                  <span key={`st-${i}`} className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-medium border border-slate-200">
-                                    {st}
-                                  </span>
-                                ))}
-                              </div>
+                              {showTags && (
+                                <div className="flex flex-wrap gap-1.5">
+                                  {ensureArray(sq.topic).map((t, i) => (
+                                    <span key={`t-${i}`} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px] font-medium border border-blue-100">
+                                      {t}
+                                    </span>
+                                  ))}
+                                  {ensureArray(sq.questionType).map((qt, i) => (
+                                    <span key={`qt-${i}`} className="px-1.5 py-0.5 bg-green-50 text-green-700 rounded text-[10px] font-medium border border-green-100">
+                                      {qt}
+                                    </span>
+                                  ))}
+                                  {ensureArray(sq.sourceType).map((st, i) => (
+                                    <span key={`st-${i}`} className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-medium border border-slate-200">
+                                      {st}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           ))}
                         </div>
@@ -3464,42 +3717,44 @@ export default function AdvancedHistoryArchive() {
                             {previewItem.child.content || <span className="text-slate-400 italic text-sm">No text content available. Please refer to the PDF.</span>}
                           </div>
 
-                          <div className="mt-6 space-y-4">
-                            <div>
-                              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Topics</h4>
-                              <div className="flex flex-wrap gap-2">
-                                {[...ensureArray(previewItem.parent.topic), ...ensureArray(previewItem.child.topic)].map((t, i) => (
-                                  <span key={i} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1">
-                                    <Tag size={12} /> {t}
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
-
-                            <div>
-                              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Question Types</h4>
-                              <div className="flex flex-wrap gap-2">
-                                {ensureArray(previewItem.child.questionType).map((qt, i) => (
-                                  <span key={i} className="px-2 py-1 bg-green-50 text-green-700 rounded-md text-xs font-medium border border-green-100">
-                                    {qt}
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
-
-                            {ensureArray(previewItem.child.sourceType).length > 0 && (
+                          {showTags && (
+                            <div className="mt-6 space-y-4">
                               <div>
-                                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Source Types</h4>
+                                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Topics</h4>
                                 <div className="flex flex-wrap gap-2">
-                                  {ensureArray(previewItem.child.sourceType).map((st, i) => (
-                                    <span key={i} className="px-2 py-1 bg-slate-100 text-slate-600 rounded-md text-xs font-medium border border-slate-200 flex items-center gap-1">
-                                      <FileDigit size={12} /> {st}
+                                  {[...ensureArray(previewItem.parent.topic), ...ensureArray(previewItem.child.topic)].map((t, i) => (
+                                    <span key={i} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1">
+                                      <Tag size={12} /> {t}
                                     </span>
                                   ))}
                                 </div>
                               </div>
-                            )}
-                          </div>
+
+                              <div>
+                                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Question Types</h4>
+                                <div className="flex flex-wrap gap-2">
+                                  {ensureArray(previewItem.child.questionType).map((qt, i) => (
+                                    <span key={i} className="px-2 py-1 bg-green-50 text-green-700 rounded-md text-xs font-medium border border-green-100">
+                                      {qt}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+
+                              {ensureArray(previewItem.child.sourceType).length > 0 && (
+                                <div>
+                                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Source Types</h4>
+                                  <div className="flex flex-wrap gap-2">
+                                    {ensureArray(previewItem.child.sourceType).map((st, i) => (
+                                      <span key={i} className="px-2 py-1 bg-slate-100 text-slate-600 rounded-md text-xs font-medium border border-slate-200 flex items-center gap-1">
+                                        <FileDigit size={12} /> {st}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>

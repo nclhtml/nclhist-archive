@@ -1660,6 +1660,34 @@ export default function Marks() {
               {studentView ? 'Student View: ON' : 'Student View: OFF'}
             </button>
           </div>
+
+          <div className="pt-3 border-t border-gray-100">
+            <button
+              onClick={async () => {
+                if (!window.confirm("Are you sure you want to GLOBALLY disclose ALL hidden assessments across ALL classes and terms?")) return;
+                try {
+                  const q = query(collection(db, "assessments"), where("isDisclosed", "==", false));
+                  const snap = await getDocs(q);
+                  if (snap.empty) {
+                    alert("No hidden assessments found.");
+                    return;
+                  }
+                  const updates = snap.docs.map(d => updateDoc(doc(db, "assessments", d.id), { isDisclosed: true }));
+                  await Promise.all(updates);
+                  setAssessments(assessments.map(a => a.isDisclosed === false ? { ...a, isDisclosed: true } : a));
+                  alert(`Successfully disclosed ${snap.docs.length} hidden assessments globally.`);
+                } catch (e) {
+                  console.error(e);
+                  alert("Failed to disclose assessments.");
+                }
+              }}
+              className="w-full flex items-center justify-center px-4 py-2 text-sm font-bold rounded-md transition-colors border shadow-sm bg-green-50 text-green-700 hover:bg-green-100 border-green-200"
+              title="Instantly reveal all hidden items to students globally"
+            >
+              <Eye className="w-4 h-4 mr-2" />
+              Globally Disclose All
+            </button>
+          </div>
         </div>
 
         {/* Categories */}

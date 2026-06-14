@@ -110,7 +110,7 @@ const CheckboxGroup = ({ options, selectedValues, onChange }) => {
   };
 
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="flex flex-wrap gap-1.5 md:gap-2">
       {options.map((opt) => {
         const label = typeof opt === 'object' ? opt.label : opt;
         const value = typeof opt === 'object' ? opt.value : opt;
@@ -121,9 +121,9 @@ const CheckboxGroup = ({ options, selectedValues, onChange }) => {
             key={value}
             onClick={() => toggleValue(value)}
             className={`
-              cursor-pointer px-3 py-1.5 rounded-lg text-xs leading-tight font-medium border transition-all duration-200 flex items-center justify-center text-center flex-1 min-w-[80px] break-words
+              cursor-pointer px-2 py-1 md:px-3 md:py-1.5 rounded-md md:rounded-lg text-[10px] md:text-xs leading-tight font-medium border transition-all duration-200 flex items-center justify-center text-center flex-1 min-w-[60px] md:min-w-[80px] break-words
               ${isSelected
-                ? 'bg-blue-600 border-blue-600 text-white shadow-md shadow-blue-200'
+                ? 'bg-blue-600 border-blue-600 text-white shadow-sm md:shadow-md shadow-blue-200'
                 : 'bg-white border-slate-200 text-slate-600 hover:border-blue-300 hover:bg-slate-50'
               }
             `}
@@ -133,7 +133,7 @@ const CheckboxGroup = ({ options, selectedValues, onChange }) => {
         );
       })}
       {options.length === 0 && (
-        <div className="col-span-full text-xs text-slate-400 italic p-2 text-center">No options available</div>
+        <div className="col-span-full text-[10px] md:text-xs text-slate-400 italic p-1 md:p-2 text-center">No options available</div>
       )}
     </div>
   );
@@ -142,20 +142,20 @@ const CheckboxGroup = ({ options, selectedValues, onChange }) => {
 // --- REUSABLE COMPONENT: FILTER ACCORDION ---
 const FilterAccordion = ({ title, isOpen, onToggle, count, children, disabled, helperText }) => {
   return (
-    <div className={`border border-slate-200 rounded-xl bg-white overflow-hidden ${disabled ? 'opacity-60 grayscale' : 'shadow-sm'}`}>
+    <div className={`border border-slate-200 rounded-lg md:rounded-xl bg-white overflow-hidden ${disabled ? 'opacity-60 grayscale' : 'shadow-sm'}`}>
       <button
         onClick={disabled ? undefined : onToggle}
-        className={`w-full flex items-center justify-between p-4 text-base font-bold text-slate-700 hover:bg-slate-50 transition-colors ${disabled ? 'cursor-not-allowed' : ''}`}
+        className={`w-full flex items-center justify-between p-2.5 md:p-4 text-sm md:text-base font-bold text-slate-700 hover:bg-slate-50 transition-colors ${disabled ? 'cursor-not-allowed' : ''}`}
       >
         <div className="flex flex-col items-start">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 md:gap-3">
             {title}
-            {count > 0 && <span className="bg-blue-600 text-white text-xs px-2 py-0.5 rounded-full">{count} Selected</span>}
+            {count > 0 && <span className="bg-blue-600 text-white text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 rounded-full">{count} Selected</span>}
           </div>
-          {helperText && <span className="text-xs text-slate-400 font-normal mt-1">{helperText}</span>}
+          {helperText && <span className="text-[10px] md:text-xs text-slate-400 font-normal mt-0.5 md:mt-1">{helperText}</span>}
         </div>
-        <div className={`p-1 rounded-full bg-slate-100 transition-transform duration-300 ${isOpen ? 'rotate-180 bg-blue-100 text-blue-600' : 'text-slate-400'}`}>
-          <ChevronDown size={20} />
+        <div className={`p-0.5 md:p-1 rounded-full bg-slate-100 transition-transform duration-300 ${isOpen ? 'rotate-180 bg-blue-100 text-blue-600' : 'text-slate-400'}`}>
+          <ChevronDown size={16} className="md:w-5 md:h-5" />
         </div>
       </button>
       <AnimatePresence>
@@ -167,7 +167,7 @@ const FilterAccordion = ({ title, isOpen, onToggle, count, children, disabled, h
             transition={{ duration: 0.2 }}
             className="overflow-hidden"
           >
-            <div className="p-4 border-t border-slate-100 bg-slate-50/50">
+            <div className="p-2.5 md:p-4 border-t border-slate-100 bg-slate-50/50">
               {children}
             </div>
           </motion.div>
@@ -348,38 +348,24 @@ const PaginationControls = ({ currentPage, totalPages, onPageChange, itemsPerPag
   };
 
   return (
-    <div className={`flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-3 rounded-xl border border-slate-200 shadow-sm ${className}`}>
-      <div className="flex items-center gap-2 text-sm text-slate-600">
-        <span>Show</span>
-        <select
-          value={itemsPerPage}
-          onChange={(e) => setItemsPerPage(Number(e.target.value))}
-          className="border border-slate-200 rounded p-1 outline-none focus:border-blue-500 bg-white"
-        >
-          <option value={10}>10</option>
-          <option value={20}>20</option>
-          <option value={50}>50</option>
-        </select>
-        <span>results per page</span>
-      </div>
-
+    <div className={`flex flex-row justify-between items-center gap-2 md:gap-4 bg-white p-2 md:p-3 rounded-lg md:rounded-xl border border-slate-200 shadow-sm ${className}`}>
       <div className="flex items-center gap-1">
         <button
           onClick={() => onPageChange(currentPage - 1)}
           disabled={currentPage === 1}
-          className="p-1.5 rounded-lg border border-slate-200 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50 text-slate-600 transition-colors"
+          className="p-1 md:p-1.5 rounded-md md:rounded-lg border border-slate-200 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50 text-slate-600 transition-colors"
         >
-          <ChevronLeft size={16} />
+          <ChevronLeft size={14} className="md:w-4 md:h-4" />
         </button>
 
         {getPageNumbers().map((page, idx) => (
           <React.Fragment key={idx}>
             {page === '...' ? (
-              <span className="px-1 text-slate-400">...</span>
+              <span className="px-0.5 md:px-1 text-slate-400 text-xs md:text-sm">...</span>
             ) : (
               <button
                 onClick={() => onPageChange(page)}
-                className={`w-8 h-8 flex items-center justify-center rounded-lg text-sm font-medium transition-colors ${currentPage === page
+                className={`w-6 h-6 md:w-8 md:h-8 flex items-center justify-center rounded-md md:rounded-lg text-[10px] md:text-sm font-medium transition-colors ${currentPage === page
                   ? 'bg-blue-600 text-white shadow-md shadow-blue-200'
                   : 'text-slate-600 hover:bg-slate-100 border border-transparent hover:border-slate-200'
                   }`}
@@ -393,10 +379,24 @@ const PaginationControls = ({ currentPage, totalPages, onPageChange, itemsPerPag
         <button
           onClick={() => onPageChange(currentPage + 1)}
           disabled={currentPage === totalPages || totalPages === 0}
-          className="p-1.5 rounded-lg border border-slate-200 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50 text-slate-600 transition-colors"
+          className="p-1 md:p-1.5 rounded-md md:rounded-lg border border-slate-200 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50 text-slate-600 transition-colors"
         >
-          <ChevronRight size={16} />
+          <ChevronRight size={14} className="md:w-4 md:h-4" />
         </button>
+      </div>
+
+      <div className="flex items-center gap-1 md:gap-2 text-[10px] md:text-sm text-slate-600">
+        <span className="hidden sm:inline">Show</span>
+        <select
+          value={itemsPerPage}
+          onChange={(e) => setItemsPerPage(Number(e.target.value))}
+          className="border border-slate-200 rounded p-0.5 md:p-1 outline-none focus:border-blue-500 bg-white text-[10px] md:text-sm"
+        >
+          <option value={10}>10</option>
+          <option value={20}>20</option>
+          <option value={50}>50</option>
+        </select>
+        <span className="hidden sm:inline">results per page</span>
       </div>
     </div>
   );
@@ -2303,20 +2303,20 @@ export default function AdvancedHistoryArchive() {
       <main className="flex-1 p-6 md:p-10 max-w-[1600px] mx-auto w-full">
 
         {/* Header */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
-          <div className="flex-1">
-            <h1 className="text-3xl font-bold text-slate-800 flex items-center gap-3">
-              History Archive
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2 md:gap-4 mb-3 md:mb-6">
+          <div className="flex-1 flex flex-row md:flex-col items-center md:items-start justify-between w-full md:w-auto">
+            <h1 className="text-sm md:text-3xl font-bold text-slate-800 flex items-center gap-2 md:gap-3">
+              <span className="hidden md:inline">History Archive</span>
               {user && user.isAdmin && (
-                <span className="text-xs bg-purple-600 text-white px-2 py-1 rounded-md uppercase tracking-wider font-bold">Admin Mode</span>
+                <span className="text-[10px] md:text-xs bg-purple-600 text-white px-1.5 md:px-2 py-0.5 md:py-1 rounded-md uppercase tracking-wider font-bold">Admin Mode</span>
               )}
               {user && user.isAuthorized && !user.isAdmin && (
-                <span className="text-xs bg-green-600 text-white px-2 py-1 rounded-md uppercase tracking-wider font-bold">Viewer Mode</span>
+                <span className="text-[10px] md:text-xs bg-green-600 text-white px-1.5 md:px-2 py-0.5 md:py-1 rounded-md uppercase tracking-wider font-bold">Viewer Mode</span>
               )}
             </h1>
 
-            <div className="flex items-center gap-4 mt-3">
-              <p className="text-slate-500 text-sm">
+            <div className="flex items-center gap-4 mt-0 md:mt-3">
+              <p className="text-slate-500 text-xs md:text-sm">
                 {user && user.isAuthorized
                   ? `Found ${filteredResults.length} ${displayMode === 'subquestion' ? 'sub-questions' : 'papers'}`
                   : 'Secure Database Access'
@@ -2325,7 +2325,7 @@ export default function AdvancedHistoryArchive() {
 
               {/* Auth Status / Logout */}
               {user && (
-                <div className="flex items-center gap-2 text-xs text-slate-400 border-l border-slate-300 pl-4">
+                <div className="hidden md:flex items-center gap-2 text-xs text-slate-400 border-l border-slate-300 pl-4">
                   <User size={12} />
                   <span className="truncate w-32">{user.email}</span>
                   <button onClick={logout} className="text-red-500 hover:text-red-700 hover:underline ml-1">
@@ -2336,25 +2336,20 @@ export default function AdvancedHistoryArchive() {
             </div>
           </div>
 
-          {user && user.isAuthorized && (
-            <div className="flex gap-2 w-full md:w-auto mt-4 md:mt-0 flex-wrap">
-              {/* --- NEW: USER MANAGEMENT BUTTON --- */}
-              {user.isAdmin && (
-                <>
-                  <button
-                    onClick={() => setIsUserManagementOpen(true)}
-                    className="btn-secondary flex-1 md:flex-none hover:bg-purple-50 hover:text-purple-700 hover:border-purple-200"
-                  >
-                    <Users size={18} /> Manage Access
-                  </button>
-                  <button onClick={openManageSamplesModal} className="btn-secondary flex-1 md:flex-none hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200">
-                    <FolderOpen size={18} /> Manage Samples
-                  </button>
-                  <button onClick={() => setIsUploadModalOpen(true)} className="btn-primary flex-1 md:flex-none">
-                    <Upload size={18} /> Upload
-                  </button>
-                </>
-              )}
+          {user && user.isAdmin && (
+            <div className="flex gap-1.5 md:gap-2 w-full md:w-auto mt-2 md:mt-0 flex-nowrap md:flex-wrap">
+              <button
+                onClick={() => setIsUserManagementOpen(true)}
+                className="btn-secondary flex-1 md:flex-none hover:bg-purple-50 hover:text-purple-700 hover:border-purple-200 text-[10px] md:text-sm px-2 py-1.5 md:px-4 md:py-2"
+              >
+                <Users className="w-3.5 h-3.5 md:w-[18px] md:h-[18px]" /> <span className="whitespace-nowrap">Access</span>
+              </button>
+              <button onClick={openManageSamplesModal} className="btn-secondary flex-1 md:flex-none hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 text-[10px] md:text-sm px-2 py-1.5 md:px-4 md:py-2">
+                <FolderOpen className="w-3.5 h-3.5 md:w-[18px] md:h-[18px]" /> <span className="whitespace-nowrap">Samples</span>
+              </button>
+              <button onClick={() => setIsUploadModalOpen(true)} className="btn-primary flex-1 md:flex-none text-[10px] md:text-sm px-2 py-1.5 md:px-4 md:py-2">
+                <Upload className="w-3.5 h-3.5 md:w-[18px] md:h-[18px]" /> <span className="whitespace-nowrap">Upload</span>
+              </button>
             </div>
           )}
         </div>
@@ -2389,24 +2384,31 @@ export default function AdvancedHistoryArchive() {
         {user && user.isAuthorized && (
           <div className="animate-in fade-in duration-300 flex flex-col md:flex-row gap-6 items-start">
             {/* --- LEFT FILTER PANEL --- */}
-            <div className="w-full md:w-72 lg:w-80 shrink-0 mb-6 md:mb-0 sticky top-6 max-h-[calc(100vh-3rem)] overflow-y-auto custom-scrollbar">
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 shadow-inner w-full md:w-72 lg:w-80">
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
-                    <Filter size={14} /> Active Filters
+            <div className={`w-full md:w-72 lg:w-80 shrink-0 mb-3 md:mb-0 md:sticky md:top-6 ${showFilters ? 'sticky top-0 z-40 max-h-[80vh] overflow-y-auto custom-scrollbar' : ''} md:max-h-[calc(100vh-3rem)] md:overflow-y-auto md:custom-scrollbar`}>
+              <div className="bg-slate-50 border border-slate-200 rounded-lg md:rounded-xl p-2.5 md:p-4 shadow-inner w-full md:w-72 lg:w-80">
+                <div className="flex justify-between items-center mb-0 md:mb-4">
+                  <h3 className="text-xs md:text-sm font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 md:gap-2">
+                    <Filter size={14} className="w-3.5 h-3.5 md:w-4 md:h-4" /> Active Filters
                   </h3>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 items-center">
+                    {/* Mobile Toggle Button */}
+                    <button
+                      onClick={() => setShowFilters(!showFilters)}
+                      className="md:hidden text-[10px] flex items-center gap-1 bg-blue-100 text-blue-700 px-2 py-1 rounded font-bold"
+                    >
+                      {showFilters ? 'Hide Filters' : 'Show Filters'}
+                    </button>
                     {user.isAdmin && (
                       <button
                         onClick={() => setIsManageFiltersOpen(true)}
-                        className="text-xs flex items-center gap-1 text-slate-500 hover:text-slate-800 px-2 py-1 rounded hover:bg-slate-200 transition-colors"
+                        className="hidden md:flex text-xs items-center gap-1 text-slate-500 hover:text-slate-800 px-2 py-1 rounded hover:bg-slate-200 transition-colors"
                       >
                         <Settings size={12} /> Manage Tags
                       </button>
                     )}
                     <button
                       onClick={() => setFilters({ origin: [], year: [], paperType: [], questionType: [], sourceType: [], marks: [], topic: [], tier: [] })}
-                      className="text-xs text-red-500 hover:text-red-700 font-medium px-2 py-1 rounded hover:bg-red-50 transition-colors"
+                      className="hidden md:block text-xs text-red-500 hover:text-red-700 font-medium px-2 py-1 rounded hover:bg-red-50 transition-colors"
                     >
                       Reset All
                     </button>
@@ -2414,7 +2416,7 @@ export default function AdvancedHistoryArchive() {
                 </div>
 
                 {/* VERTICAL STACK OF ACCORDIONS */}
-                <div className="flex flex-col gap-2">
+                <div className={`flex-col gap-2 mt-2 md:mt-0 ${showFilters ? 'flex' : 'hidden md:flex'}`}>
                   {/* Tier (Admin Only) */}
                   {user.isAdmin && (
                     <FilterAccordion
@@ -2556,33 +2558,33 @@ export default function AdvancedHistoryArchive() {
             {/* --- MAIN CONTENT AREA (Search & Results) --- */}
             <div className="flex-1 min-w-0 w-full">
               {/* Search Bar, Display Mode & Sort */}
-              <div className="flex flex-col md:flex-row gap-4 mb-6">
+              <div className="flex flex-row gap-2 md:gap-3 mb-4 md:mb-6">
                 <div className="relative flex-1">
-                  <Search className="absolute left-4 top-3.5 text-slate-400" size={20} />
+                  <Search className="absolute left-3 md:left-4 top-2 md:top-3.5 text-slate-400 w-4 h-4 md:w-5 md:h-5" />
                   <input
                     type="text"
-                    placeholder="Search for topics, question types, or titles (e.g., 2026E Q1, 2025D Q1a)..."
+                    placeholder="Search topics, types..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="w-full pl-9 md:pl-12 pr-3 md:pr-4 py-1.5 md:py-3 text-xs md:text-base bg-white border border-slate-200 rounded-lg md:rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500 outline-none"
                   />
                 </div>
 
-                <div className="relative w-full md:w-56">
-                  <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
-                    <ArrowUpDown size={16} />
+                <div className="relative w-[130px] md:w-56 shrink-0">
+                  <div className="absolute left-2 md:left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
+                    <ArrowUpDown size={12} className="md:w-4 md:h-4" />
                   </div>
                   <select
                     value={sortOption}
                     onChange={(e) => setSortOption(e.target.value)}
-                    className="w-full pl-10 pr-8 py-3 bg-white border border-slate-200 rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500 outline-none appearance-none cursor-pointer text-sm font-medium text-slate-700"
+                    className="w-full pl-7 md:pl-10 pr-6 md:pr-8 py-1.5 md:py-3 bg-white border border-slate-200 rounded-lg md:rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500 outline-none appearance-none cursor-pointer text-[10px] md:text-sm font-medium text-slate-700"
                   >
                     {SORT_OPTIONS.map(opt => (
                       <option key={opt.value} value={opt.value}>{opt.label}</option>
                     ))}
                   </select>
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
-                    <ChevronDown size={14} />
+                  <div className="absolute right-2 md:right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
+                    <ChevronDown size={12} className="md:w-3.5 md:h-3.5" />
                   </div>
                 </div>
               </div>
@@ -2621,35 +2623,35 @@ export default function AdvancedHistoryArchive() {
                           className="bg-white rounded-xl border border-slate-200 p-0 shadow-sm hover:shadow-lg hover:border-blue-300 transition-all overflow-hidden group"
                         >
                           <div className="flex flex-col md:flex-row relative">
-                            <div className="flex-1 p-5 border-b md:border-b-0 md:border-r border-slate-100 relative cursor-pointer" onClick={() => setPreviewItem(item)}>
-                              <div className="flex items-center justify-between mb-2">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                            <div className="flex-1 p-3 md:p-5 border-b md:border-b-0 md:border-r border-slate-100 relative cursor-pointer" onClick={() => setPreviewItem(item)}>
+                              <div className="flex items-center justify-between gap-2 mb-1.5">
+                                <div className="flex flex-wrap items-center gap-1.5 md:gap-2">
+                                  <span className="text-[10px] md:text-xs font-bold text-slate-500 uppercase tracking-wider">
                                     {parent.year} • {parent.origin}
                                   </span>
-                                  <span className={`text-xs px-2 py-0.5 rounded font-medium ${parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
+                                  <span className={`text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 rounded font-medium ${parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
                                     {parent.paperType}
                                   </span>
                                   {user.isAdmin && (
-                                    <span className="text-xs px-2 py-0.5 rounded font-medium bg-indigo-100 text-indigo-700 flex items-center gap-1">
-                                      <Layers size={10} /> {systemTiers.find(t => t.id === (parent.tier || '10'))?.name || `Tier ${parent.tier || '10'}`}
+                                    <span className="text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 rounded font-medium bg-indigo-100 text-indigo-700 flex items-center gap-1">
+                                      <Layers size={10} /> <span className="hidden sm:inline">{systemTiers.find(t => t.id === (parent.tier || '10'))?.name || `Tier ${parent.tier || '10'}`}</span>
                                     </span>
                                   )}
                                 </div>
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-1.5 shrink-0">
                                   <button
                                     onClick={(e) => toggleStar(e, uniqueId)}
-                                    className={`flex items-center justify-center p-1.5 rounded-lg transition-colors border ${starredItems.includes(uniqueId) ? 'bg-yellow-100 border-yellow-300 text-yellow-600' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
+                                    className={`flex items-center justify-center p-1 md:p-1.5 rounded-lg transition-colors border ${starredItems.includes(uniqueId) ? 'bg-yellow-100 border-yellow-300 text-yellow-600' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
                                     title="Star / To-Do Later"
                                   >
-                                    <Star size={16} className={starredItems.includes(uniqueId) ? 'fill-current' : ''} />
+                                    <Star size={14} className={`md:w-4 md:h-4 ${starredItems.includes(uniqueId) ? 'fill-current' : ''}`} />
                                   </button>
                                   <button
                                     onClick={(e) => toggleMarkAsDone(e, uniqueId)}
-                                    className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-colors border ${doneItems.includes(uniqueId) ? 'bg-green-100 border-green-300 text-green-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                                    className={`flex items-center gap-1 px-2 md:px-3 py-1 md:py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-colors border ${doneItems.includes(uniqueId) ? 'bg-green-100 border-green-300 text-green-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
                                   >
                                     <Check size={14} className={doneItems.includes(uniqueId) ? 'opacity-100' : 'opacity-30'} />
-                                    {doneItems.includes(uniqueId) ? 'Done' : 'Mark as Done'}
+                                    <span className="hidden sm:inline">{doneItems.includes(uniqueId) ? 'Done' : 'Mark as Done'}</span>
                                   </button>
                                 </div>
                               </div>
@@ -2661,21 +2663,21 @@ export default function AdvancedHistoryArchive() {
                                     setSelectedReports(activeReports.filter(r => r.viewId === parent.id || (r.viewId?.startsWith('sample_') && r.message.includes(parent.title))));
                                     setShowReportViewModal(true);
                                   }}
-                                  className="absolute top-4 right-4 bg-red-100 text-red-600 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1 hover:bg-red-200 animate-pulse shadow-sm"
+                                  className="absolute top-2 right-2 md:top-4 md:right-4 bg-red-100 text-red-600 px-2 md:px-3 py-0.5 md:py-1 rounded-full text-[10px] md:text-xs font-bold flex items-center gap-1 hover:bg-red-200 animate-pulse shadow-sm"
                                 >
-                                  <ShieldAlert size={14} /> Reports Attached
+                                  <ShieldAlert size={12} /> <span className="hidden sm:inline">Reports Attached</span>
                                 </button>
                               )}
 
-                              <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2 group-hover:text-blue-600 transition-colors">
-                                {item.isExtraPractice && <span className="text-red-600 font-bold">[Extra Practice]</span>}
+                              <h3 className="text-base md:text-xl font-bold text-slate-800 flex flex-wrap items-center gap-1.5 md:gap-2 group-hover:text-blue-600 transition-colors leading-tight">
+                                {item.isExtraPractice && <span className="text-red-600 font-bold text-sm md:text-base">[Extra Practice]</span>}
                                 {parent.title}
                               </h3>
 
-                              <div className="mt-3 text-slate-600 text-sm flex items-center justify-between bg-slate-50 p-3 rounded-lg border border-slate-100">
+                              <div className="mt-2 md:mt-3 text-slate-600 text-xs md:text-sm flex items-center justify-between bg-slate-50 p-2 md:p-3 rounded-lg border border-slate-100">
                                 <div>
                                   Contains <span className="font-bold">{parent.subQuestions.length}</span> sub-questions
-                                  {hasSearch && <span> (<span className="font-bold text-blue-600">{matchedChildrenCount}</span> matched your search).</span>}
+                                  {hasSearch && <span> (<span className="font-bold text-blue-600">{matchedChildrenCount}</span> matched).</span>}
                                 </div>
                                 {!hasSearch && (
                                   <button
@@ -2683,10 +2685,11 @@ export default function AdvancedHistoryArchive() {
                                       e.stopPropagation();
                                       setExpandedPapers(prev => ({ ...prev, [parent.id]: !prev[parent.id] }));
                                     }}
-                                    className="flex items-center gap-1 text-blue-600 hover:text-blue-800 font-medium bg-blue-100 px-3 py-1.5 rounded-lg transition-colors text-xs"
+                                    className="flex items-center gap-1 text-blue-600 hover:text-blue-800 font-medium bg-blue-100 px-2 py-1 md:px-3 md:py-1.5 rounded-lg transition-colors text-[10px] md:text-xs"
                                   >
-                                    {isExpanded ? 'Hide Questions' : 'Show Questions'}
-                                    <ChevronDown size={14} className={`transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                                    <span className="hidden sm:inline">{isExpanded ? 'Hide Questions' : 'Show Questions'}</span>
+                                    <span className="sm:hidden">{isExpanded ? 'Hide' : 'Show'}</span>
+                                    <ChevronDown size={12} className={`md:w-3.5 md:h-3.5 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                                   </button>
                                 )}
                               </div>
@@ -2697,37 +2700,37 @@ export default function AdvancedHistoryArchive() {
                                     initial={{ height: 0, opacity: 0 }}
                                     animate={{ height: 'auto', opacity: 1 }}
                                     exit={{ height: 0, opacity: 0 }}
-                                    className="mt-4 space-y-3 overflow-hidden"
+                                    className="mt-3 md:mt-4 space-y-2 md:space-y-3 overflow-hidden"
                                   >
                                     {subQuestionsToDisplay.map(child => (
-                                      <div key={child.id} className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm">
-                                        <div className="flex items-center gap-2 mb-2">
-                                          <span className="bg-slate-800 text-white text-xs px-2 py-0.5 rounded-md font-bold">
+                                      <div key={child.id} className="bg-white p-3 md:p-4 rounded-lg border border-slate-200 shadow-sm">
+                                        <div className="flex items-center gap-2 mb-1.5 md:mb-2">
+                                          <span className="bg-slate-800 text-white text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 rounded-md font-bold">
                                             Q{child.label}
                                           </span>
                                           {child.marks && (
-                                            <span className="text-xs text-slate-500 font-normal border border-slate-200 px-1.5 py-0.5 rounded bg-slate-50">
+                                            <span className="text-[10px] md:text-xs text-slate-500 font-normal border border-slate-200 px-1.5 py-0.5 rounded bg-slate-50">
                                               {child.marks} Marks
                                             </span>
                                           )}
                                         </div>
-                                        <div className="text-sm text-slate-700 italic line-clamp-3 mb-3">
+                                        <div className="text-xs md:text-sm text-slate-700 italic line-clamp-3 mb-2 md:mb-3">
                                           {child.content ? highlightText(child.content, searchTerm) : "No text content provided."}
                                         </div>
                                         {showTags && (
-                                          <div className="flex flex-wrap gap-1.5">
+                                          <div className="flex flex-wrap gap-1 md:gap-1.5">
                                             {ensureArray(child.topic).map((t, i) => (
-                                              <span key={`ct-${i}`} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px] font-medium border border-blue-100">
+                                              <span key={`ct-${i}`} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[9px] md:text-[10px] font-medium border border-blue-100">
                                                 {t}
                                               </span>
                                             ))}
                                             {ensureArray(child.questionType).map((qt, i) => (
-                                              <span key={`qt-${i}`} className="px-1.5 py-0.5 bg-green-50 text-green-700 rounded text-[10px] font-medium border border-green-100">
+                                              <span key={`qt-${i}`} className="px-1.5 py-0.5 bg-green-50 text-green-700 rounded text-[9px] md:text-[10px] font-medium border border-green-100">
                                                 {qt}
                                               </span>
                                             ))}
                                             {ensureArray(child.sourceType).map((st, i) => (
-                                              <span key={`st-${i}`} className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-medium border border-slate-200">
+                                              <span key={`st-${i}`} className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[9px] md:text-[10px] font-medium border border-slate-200">
                                                 {st}
                                               </span>
                                             ))}
@@ -2740,17 +2743,34 @@ export default function AdvancedHistoryArchive() {
                               </AnimatePresence>
 
                               {showTags && (
-                                <div className="mt-4 flex flex-wrap gap-2">
+                                <div className="mt-3 md:mt-4 flex flex-wrap gap-1.5 md:gap-2">
                                   {ensureArray(parent.topic).map((t, i) => (
-                                    <div key={`pt-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
-                                      <Tag size={12} /> {t}
+                                    <div key={`pt-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1 text-[10px] md:text-xs">
+                                      <Tag size={10} className="md:w-3 md:h-3" /> {t}
                                     </div>
                                   ))}
                                 </div>
                               )}
+
+                              <div className="md:hidden mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                  {parent.hasFile && <span className="text-[10px] text-slate-500 flex items-center gap-1"><FileText size={10} /> PDF</span>}
+                                  {parent.hasAnswer && <span className="text-[10px] text-green-600 flex items-center gap-1"><BookOpen size={10} /> Ans</span>}
+                                </div>
+                                {user?.isAdmin && (
+                                  <div className="flex items-center gap-1.5">
+                                    <button onClick={(e) => { e.stopPropagation(); handleViewLinkedMarks(parent.id, parent.title); }} className="bg-teal-100 text-teal-800 px-2 py-1 rounded text-[10px] font-medium flex items-center gap-1">
+                                      <BarChart2 size={10} /> Marks
+                                    </button>
+                                    <button onClick={(e) => handleEditClick(e, parent)} className="bg-slate-200 text-slate-700 px-2 py-1 rounded text-[10px] font-medium flex items-center gap-1">
+                                      <Edit size={10} /> Edit
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
                             </div>
 
-                            <div className="p-5 bg-slate-50 md:w-64 flex flex-col justify-center items-center gap-3 relative cursor-pointer" onClick={() => setPreviewItem(item)}>
+                            <div className="hidden md:flex p-5 bg-slate-50 w-64 flex-col justify-center items-center gap-3 relative cursor-pointer" onClick={() => setPreviewItem(item)}>
                               <div className="absolute top-2 right-2 text-xs text-slate-300 font-mono select-none">
                                 ID: {parent.id}
                               </div>
@@ -2804,35 +2824,35 @@ export default function AdvancedHistoryArchive() {
                           className="bg-white rounded-xl border border-slate-200 p-0 shadow-sm hover:shadow-lg hover:border-blue-300 cursor-pointer transition-all overflow-hidden group"
                         >
                           <div className="flex flex-col md:flex-row relative">
-                            <div className="flex-1 p-5 border-b md:border-b-0 md:border-r border-slate-100 relative">
-                              <div className="flex items-center justify-between mb-2">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                            <div className="flex-1 p-3 md:p-5 border-b md:border-b-0 md:border-r border-slate-100 relative">
+                              <div className="flex items-center justify-between gap-2 mb-1.5">
+                                <div className="flex flex-wrap items-center gap-1.5 md:gap-2">
+                                  <span className="text-[10px] md:text-xs font-bold text-slate-500 uppercase tracking-wider">
                                     {parent.year} • {parent.origin}
                                   </span>
-                                  <span className={`text-xs px-2 py-0.5 rounded font-medium ${parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
+                                  <span className={`text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 rounded font-medium ${parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
                                     {parent.paperType}
                                   </span>
                                   {user.isAdmin && (
-                                    <span className="text-xs px-2 py-0.5 rounded font-medium bg-indigo-100 text-indigo-700 flex items-center gap-1">
-                                      <Layers size={10} /> {systemTiers.find(t => t.id === (parent.tier || '10'))?.name || `Tier ${parent.tier || '10'}`}
+                                    <span className="text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 rounded font-medium bg-indigo-100 text-indigo-700 flex items-center gap-1">
+                                      <Layers size={10} /> <span className="hidden sm:inline">{systemTiers.find(t => t.id === (parent.tier || '10'))?.name || `Tier ${parent.tier || '10'}`}</span>
                                     </span>
                                   )}
                                 </div>
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-1.5 shrink-0">
                                   <button
                                     onClick={(e) => toggleStar(e, uniqueId)}
-                                    className={`flex items-center justify-center p-1.5 rounded-lg transition-colors border ${starredItems.includes(uniqueId) ? 'bg-yellow-100 border-yellow-300 text-yellow-600' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
+                                    className={`flex items-center justify-center p-1 md:p-1.5 rounded-lg transition-colors border ${starredItems.includes(uniqueId) ? 'bg-yellow-100 border-yellow-300 text-yellow-600' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
                                     title="Star / To-Do Later"
                                   >
-                                    <Star size={16} className={starredItems.includes(uniqueId) ? 'fill-current' : ''} />
+                                    <Star size={14} className={`md:w-4 md:h-4 ${starredItems.includes(uniqueId) ? 'fill-current' : ''}`} />
                                   </button>
                                   <button
                                     onClick={(e) => toggleMarkAsDone(e, uniqueId)}
-                                    className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-colors border ${doneItems.includes(uniqueId) ? 'bg-green-100 border-green-300 text-green-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                                    className={`flex items-center gap-1 px-2 md:px-3 py-1 md:py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-colors border ${doneItems.includes(uniqueId) ? 'bg-green-100 border-green-300 text-green-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
                                   >
                                     <Check size={14} className={doneItems.includes(uniqueId) ? 'opacity-100' : 'opacity-30'} />
-                                    {doneItems.includes(uniqueId) ? 'Done' : 'Mark as Done'}
+                                    <span className="hidden sm:inline">{doneItems.includes(uniqueId) ? 'Done' : 'Mark as Done'}</span>
                                   </button>
                                 </div>
                               </div>
@@ -2846,56 +2866,73 @@ export default function AdvancedHistoryArchive() {
                                       setSelectedReports(activeReports.filter(r => r.viewId === uniqueId || (r.viewId?.startsWith('sample_') && r.message.includes(parent.title) && r.message.includes(child.label))));
                                       setShowReportViewModal(true);
                                     }}
-                                    className="absolute top-4 right-4 bg-red-100 text-red-600 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1 hover:bg-red-200 animate-pulse shadow-sm"
+                                    className="absolute top-2 right-2 md:top-4 md:right-4 bg-red-100 text-red-600 px-2 md:px-3 py-0.5 md:py-1 rounded-full text-[10px] md:text-xs font-bold flex items-center gap-1 hover:bg-red-200 animate-pulse shadow-sm"
                                   >
-                                    <ShieldAlert size={14} /> Reports Attached
+                                    <ShieldAlert size={12} /> <span className="hidden sm:inline">Reports Attached</span>
                                   </button>
                                 )}
 
-                              <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 group-hover:text-blue-600 transition-colors">
-                                {item.isExtraPractice && <span className="text-red-600 font-bold">[Extra Practice]</span>}
+                              <h3 className="text-sm md:text-lg font-bold text-slate-800 flex flex-wrap items-center gap-1.5 md:gap-2 group-hover:text-blue-600 transition-colors leading-tight">
+                                {item.isExtraPractice && <span className="text-red-600 font-bold text-sm md:text-base">[Extra Practice]</span>}
                                 {parent.title}
-                                <span className="bg-slate-800 text-white text-sm px-2 py-0.5 rounded-md">
+                                <span className="bg-slate-800 text-white text-[10px] md:text-sm px-1.5 md:px-2 py-0.5 rounded-md">
                                   Q{child.label}
                                 </span>
                                 {child.marks && (
-                                  <span className="text-xs text-slate-400 font-normal border border-slate-200 px-1.5 py-0.5 rounded">
+                                  <span className="text-[10px] md:text-xs text-slate-400 font-normal border border-slate-200 px-1.5 py-0.5 rounded">
                                     {child.marks} Marks
                                   </span>
                                 )}
                               </h3>
 
-                              <div className="mt-3 text-slate-600 text-sm line-clamp-3 bg-slate-50 p-3 rounded-lg border border-slate-100 italic">
+                              <div className="mt-2 md:mt-3 text-slate-600 text-xs md:text-sm line-clamp-3 bg-slate-50 p-2 md:p-3 rounded-lg border border-slate-100 italic">
                                 {child.content ? highlightText(child.content, searchTerm) : "No text content provided."}
                               </div>
 
                               {showTags && (
-                                <div className="mt-4 flex flex-wrap gap-2">
+                                <div className="mt-3 md:mt-4 flex flex-wrap gap-1.5 md:gap-2">
                                   {ensureArray(parent.topic).map((t, i) => (
-                                    <div key={`pt-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
-                                      <Tag size={12} /> {t}
+                                    <div key={`pt-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1 text-[10px] md:text-xs">
+                                      <Tag size={10} className="md:w-3 md:h-3" /> {t}
                                     </div>
                                   ))}
                                   {ensureArray(child.topic).map((t, i) => (
-                                    <div key={`ct-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1">
-                                      <Tag size={12} /> {t}
+                                    <div key={`ct-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1 text-[10px] md:text-xs">
+                                      <Tag size={10} className="md:w-3 md:h-3" /> {t}
                                     </div>
                                   ))}
                                   {ensureArray(child.questionType).map((qt, i) => (
-                                    <div key={`qt-${i}`} className="badge bg-green-50 text-green-700 border-green-100">
+                                    <div key={`qt-${i}`} className="badge bg-green-50 text-green-700 border-green-100 text-[10px] md:text-xs">
                                       {qt}
                                     </div>
                                   ))}
                                   {ensureArray(child.sourceType).map((st, i) => (
-                                    <div key={`st-${i}`} className="badge bg-slate-100 text-slate-600 border-slate-200 flex items-center gap-1">
-                                      <FileDigit size={12} /> {st}
+                                    <div key={`st-${i}`} className="badge bg-slate-100 text-slate-600 border-slate-200 flex items-center gap-1 text-[10px] md:text-xs">
+                                      <FileDigit size={10} className="md:w-3 md:h-3" /> {st}
                                     </div>
                                   ))}
                                 </div>
                               )}
+
+                              <div className="md:hidden mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                  {parent.hasFile && <span className="text-[10px] text-slate-500 flex items-center gap-1"><FileText size={10} /> PDF</span>}
+                                  {parent.hasAnswer && <span className="text-[10px] text-green-600 flex items-center gap-1"><BookOpen size={10} /> Ans</span>}
+                                </div>
+                                {user?.isAdmin && (
+                                  <div className="flex items-center gap-1.5">
+                                    <button onClick={(e) => { e.stopPropagation(); handleViewLinkedMarks(parent.id, parent.title); }} className="bg-teal-100 text-teal-800 px-2 py-1 rounded text-[10px] font-medium flex items-center gap-1">
+                                      <BarChart2 size={10} /> Marks
+                                    </button>
+                                    <button onClick={(e) => handleEditClick(e, parent)} className="bg-slate-200 text-slate-700 px-2 py-1 rounded text-[10px] font-medium flex items-center gap-1">
+                                      <Edit size={10} /> Edit
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
                             </div>
 
-                            <div className="p-5 bg-slate-50 md:w-64 flex flex-col justify-center items-center gap-3 relative">
+                            <div className="hidden md:flex p-5 bg-slate-50 w-64 flex-col justify-center items-center gap-3 relative">
                               <div className="absolute top-2 right-2 text-xs text-slate-300 font-mono select-none">
                                 ID: {parent.id}
                               </div>
@@ -3549,38 +3586,47 @@ export default function AdvancedHistoryArchive() {
               className="bg-white rounded-xl w-full max-w-full h-full shadow-2xl flex flex-col overflow-hidden"
             >
               {/* Preview Header */}
-              <div className="px-6 py-3 border-b border-slate-200 flex justify-between items-center bg-white shrink-0 z-10">
-                <div className="flex items-center gap-4">
-                  <div className="flex flex-col">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+              <div className="px-2 md:px-6 py-2 md:py-3 border-b border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center bg-white shrink-0 z-10 gap-2 md:gap-4 overflow-x-auto">
+                <div className="flex items-center gap-4 w-full md:w-auto">
+                  <div className="flex flex-col w-full">
+                    {/* Tags row above title */}
+                    <div className="flex flex-wrap items-center gap-1 md:gap-2 mb-1">
+                      <span className="text-[9px] md:text-xs font-bold text-slate-500 uppercase tracking-wider">
                         {previewItem.parent.year} • {previewItem.parent.origin}
                       </span>
-                      <span className={`text-xs px-2 py-0.5 rounded font-medium ${previewItem.parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
+                      <span className={`text-[9px] md:text-xs px-1.5 md:px-2 py-0.5 rounded font-medium ${previewItem.parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
                         {previewItem.parent.paperType}
                       </span>
                       {user.isAdmin && (
-                        <span className="text-xs px-2 py-0.5 rounded font-medium bg-indigo-100 text-indigo-700 flex items-center gap-1">
+                        <span className="text-[9px] md:text-xs px-1.5 md:px-2 py-0.5 rounded font-medium bg-indigo-100 text-indigo-700 flex items-center gap-1">
                           <Layers size={10} /> {systemTiers.find(t => t.id === (previewItem.parent.tier || '10'))?.name || `Tier ${previewItem.parent.tier || '10'}`}
                         </span>
                       )}
+                      {/* Mobile-only topics (Paper Overview replacement) */}
+                      <div className="flex md:hidden flex-wrap gap-1">
+                        {ensureArray(previewItem.parent.topic).map((t, i) => (
+                          <span key={i} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded-md text-[9px] font-medium border border-blue-100 flex items-center gap-1">
+                            <Tag size={8} /> {t}
+                          </span>
+                        ))}
+                      </div>
                     </div>
-                    <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    <h2 className="text-sm md:text-lg font-bold text-slate-800 flex flex-wrap items-center gap-1 md:gap-2 leading-tight">
                       {viewingAnswer ? "Answer Key: " : ""}{previewItem.parent.title}
                       {!viewingAnswer && !previewItem.isFullPaper && (
                         <>
-                          <span className="bg-slate-800 text-white text-sm px-2 py-0.5 rounded-md">
+                          <span className="bg-slate-800 text-white text-[10px] md:text-sm px-1.5 md:px-2 py-0.5 rounded-md">
                             Q{previewItem.child.label}
                           </span>
                           {previewItem.child.marks && (
-                            <span className="text-xs text-slate-500 font-normal border border-slate-200 px-2 py-0.5 rounded bg-slate-50">
+                            <span className="text-[10px] md:text-xs text-slate-500 font-normal border border-slate-200 px-1.5 md:px-2 py-0.5 rounded bg-slate-50">
                               {previewItem.child.marks} Marks
                             </span>
                           )}
                         </>
                       )}
                       {!viewingAnswer && previewItem.isFullPaper && (
-                        <span className="bg-blue-100 text-blue-800 text-xs px-2 py-0.5 rounded-md font-bold ml-2">
+                        <span className="hidden md:inline-block bg-blue-100 text-blue-800 text-xs px-2 py-0.5 rounded-md font-bold ml-2">
                           Full Paper View
                         </span>
                       )}
@@ -3588,38 +3634,39 @@ export default function AdvancedHistoryArchive() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3">
+                {/* Buttons - visible on mobile but smaller */}
+                <div className="flex flex-wrap items-center gap-1.5 md:gap-3 w-full md:w-auto">
                   <button
                     onClick={() => setShowReportModal(true)}
-                    className="hidden sm:flex px-4 py-2 rounded-lg bg-red-50 text-red-600 border border-red-200 text-sm font-bold hover:bg-red-100 transition-all items-center gap-2"
+                    className="flex px-2 md:px-4 py-1 md:py-2 rounded-lg bg-red-50 text-red-600 border border-red-200 text-[10px] md:text-sm font-bold hover:bg-red-100 transition-all items-center gap-1 md:gap-2"
                   >
-                    <ShieldAlert size={16} /> Report
+                    <ShieldAlert size={12} className="md:w-4 md:h-4" /> <span className="hidden sm:inline">Report</span>
                   </button>
 
                   {!viewingAnswer && previewItem.parent.hasAnswer && (
                     <button
                       onClick={() => { setViewingAnswer(true); setActiveSample(null); }}
-                      className="hidden sm:flex px-4 py-2 rounded-lg bg-green-600 text-white text-sm font-bold hover:bg-green-700 transition-all items-center gap-2"
+                      className="flex px-2 md:px-4 py-1 md:py-2 rounded-lg bg-green-600 text-white text-[10px] md:text-sm font-bold hover:bg-green-700 transition-all items-center gap-1 md:gap-2"
                     >
-                      <BookOpen size={16} /> Show Answer
+                      <BookOpen size={12} className="md:w-4 md:h-4" /> <span className="hidden sm:inline">Answer</span>
                     </button>
                   )}
 
                   {(viewingAnswer || activeSample) && (
                     <button
                       onClick={() => { setViewingAnswer(false); setActiveSample(null); }}
-                      className="hidden sm:flex px-4 py-2 rounded-lg bg-slate-600 text-white text-sm font-bold hover:bg-slate-700 transition-all items-center gap-2"
+                      className="flex px-2 md:px-4 py-1 md:py-2 rounded-lg bg-slate-600 text-white text-[10px] md:text-sm font-bold hover:bg-slate-700 transition-all items-center gap-1 md:gap-2"
                     >
-                      <ArrowLeft size={16} /> Return to Question
+                      <ArrowLeft size={12} className="md:w-4 md:h-4" /> <span className="hidden sm:inline">Back</span>
                     </button>
                   )}
 
                   {user?.isAdmin && (
                     <button
                       onClick={() => handleViewLinkedMarks(previewItem.parent.id, previewItem.parent.title)}
-                      className="hidden sm:flex px-4 py-2 rounded-lg bg-teal-600 text-white text-sm font-bold hover:bg-teal-700 transition-all items-center gap-2"
+                      className="flex px-2 md:px-4 py-1 md:py-2 rounded-lg bg-teal-600 text-white text-[10px] md:text-sm font-bold hover:bg-teal-700 transition-all items-center gap-1 md:gap-2"
                     >
-                      <BarChart2 size={16} /> View Marks
+                      <BarChart2 size={12} className="md:w-4 md:h-4" /> <span className="hidden sm:inline">Marks</span>
                     </button>
                   )}
 
@@ -3629,32 +3676,34 @@ export default function AdvancedHistoryArchive() {
                       target="_blank"
                       rel="noreferrer"
                       onClick={() => handleDownloadTracking(activeSample ? "Student Sample" : (viewingAnswer ? previewItem.parent.title + " Answer" : previewItem.parent.title))}
-                      className="hidden sm:flex px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 transition-all items-center gap-2"
+                      className="flex px-3 md:px-4 py-1.5 md:py-2 rounded-lg bg-blue-600 text-white text-xs md:text-sm font-bold hover:bg-blue-700 transition-all items-center gap-1.5 md:gap-2 shadow-sm"
                     >
-                      <Download size={16} /> {activeSample ? "Download Sample" : (viewingAnswer ? "Download Answer" : "Download PDF")}
+                      <Download size={14} className="md:w-4 md:h-4" />
+                      <span className="md:hidden">View & Download</span>
+                      <span className="hidden md:inline">Download</span>
                     </a>
                   )}
 
                   <button
                     onClick={closePreview}
-                    className="text-slate-400 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 p-2 rounded-full transition-colors"
+                    className="ml-auto md:ml-0 text-slate-400 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 p-1 md:p-2 rounded-full transition-colors"
                   >
-                    <X size={20} />
+                    <X size={16} className="md:w-5 md:h-5" />
                   </button>
                 </div>
               </div>
 
               {/* Preview Body */}
-              <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
+              <div className="flex-1 overflow-y-auto md:overflow-hidden flex flex-col md:flex-row">
 
                 {!viewingAnswer && (
-                  <div className={`${(activeSample || previewItem.parent.hasFile) ? 'md:w-1/3 lg:w-1/4 border-r border-slate-200' : 'w-full'} flex flex-col bg-slate-50`}>
-                    <div className="flex-1 p-6 overflow-y-auto custom-scrollbar">
+                  <div className={`${(activeSample || previewItem.parent.hasFile) ? 'md:w-1/3 lg:w-1/4 md:border-r border-slate-200' : 'w-full'} flex flex-col bg-slate-50 overflow-visible md:overflow-hidden`}>
+                    <div className="flex-1 p-3 md:p-6 overflow-visible md:overflow-y-auto custom-scrollbar">
                       {/* FULL PAPER LEFT PANEL */}
                       {previewItem.isFullPaper ? (
-                        <div className="space-y-6">
+                        <div className="space-y-4 md:space-y-6">
                           {showTags && (
-                            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                            <div className="hidden md:block bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
                               <h3 className="text-sm font-bold text-slate-800 mb-2">Paper Overview</h3>
                               <div className="flex flex-wrap gap-2">
                                 {ensureArray(previewItem.parent.topic).map((t, i) => (
@@ -3666,39 +3715,39 @@ export default function AdvancedHistoryArchive() {
                             </div>
                           )}
 
-                          <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                            <LayoutList size={14} /> All Sub-Questions
+                          <h3 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1 md:gap-2">
+                            <LayoutList size={12} className="md:w-3.5 md:h-3.5" /> All Sub-Questions
                           </h3>
 
                           {previewItem.parent.subQuestions.map((sq, idx) => (
-                            <div key={sq.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                            <div key={sq.id} className="bg-white p-3 md:p-4 rounded-xl border border-slate-200 shadow-sm">
                               <div className="flex justify-between items-start mb-2">
-                                <span className="bg-slate-800 text-white text-xs px-2 py-1 rounded-md font-bold">
+                                <span className="bg-slate-800 text-white text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 md:py-1 rounded-md font-bold">
                                   Q{sq.label}
                                 </span>
                                 {sq.marks && (
-                                  <span className="text-xs text-slate-500 font-normal border border-slate-200 px-1.5 py-0.5 rounded bg-slate-50">
+                                  <span className="text-[10px] md:text-xs text-slate-500 font-normal border border-slate-200 px-1.5 py-0.5 rounded bg-slate-50">
                                     {sq.marks} Marks
                                   </span>
                                 )}
                               </div>
-                              <div className={`leading-relaxed mb-3 ${previewItem.parent.paperType === "Paper 2 (Essay)" && !previewItem.parent.hasFile ? 'text-4xl md:text-5xl font-medium text-slate-800 py-4' : 'text-sm text-slate-700'}`}>
-                                {sq.content || <span className="text-slate-400 italic text-sm">No text content available.</span>}
+                              <div className={`leading-relaxed mb-2 md:mb-3 ${previewItem.parent.paperType === "Paper 2 (Essay)" && !previewItem.parent.hasFile ? 'text-2xl md:text-5xl font-medium text-slate-800 py-2 md:py-4' : 'text-xs md:text-sm text-slate-700'}`}>
+                                {sq.content || <span className="text-slate-400 italic text-xs md:text-sm">No text content available.</span>}
                               </div>
                               {showTags && (
-                                <div className="flex flex-wrap gap-1.5">
+                                <div className="flex flex-wrap gap-1 md:gap-1.5">
                                   {ensureArray(sq.topic).map((t, i) => (
-                                    <span key={`t-${i}`} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px] font-medium border border-blue-100">
+                                    <span key={`t-${i}`} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[9px] md:text-[10px] font-medium border border-blue-100">
                                       {t}
                                     </span>
                                   ))}
                                   {ensureArray(sq.questionType).map((qt, i) => (
-                                    <span key={`qt-${i}`} className="px-1.5 py-0.5 bg-green-50 text-green-700 rounded text-[10px] font-medium border border-green-100">
+                                    <span key={`qt-${i}`} className="px-1.5 py-0.5 bg-green-50 text-green-700 rounded text-[9px] md:text-[10px] font-medium border border-green-100">
                                       {qt}
                                     </span>
                                   ))}
                                   {ensureArray(sq.sourceType).map((st, i) => (
-                                    <span key={`st-${i}`} className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-medium border border-slate-200">
+                                    <span key={`st-${i}`} className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[9px] md:text-[10px] font-medium border border-slate-200">
                                       {st}
                                     </span>
                                   ))}
@@ -3710,31 +3759,31 @@ export default function AdvancedHistoryArchive() {
                       ) : (
                         /* SINGLE SUB-QUESTION LEFT PANEL */
                         <div className="prose max-w-none">
-                          <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
-                            <FileText size={14} /> Question Content
+                          <h3 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1 md:gap-2">
+                            <FileText size={12} className="md:w-3.5 md:h-3.5" /> Question Content
                           </h3>
-                          <div className={`leading-relaxed bg-white p-4 rounded-lg border border-slate-200 shadow-sm ${previewItem.parent.paperType === "Paper 2 (Essay)" && !previewItem.parent.hasFile ? 'text-4xl md:text-5xl font-medium text-slate-900 p-8' : 'text-sm text-slate-800'}`}>
-                            {previewItem.child.content || <span className="text-slate-400 italic text-sm">No text content available. Please refer to the PDF.</span>}
+                          <div className={`leading-relaxed bg-white p-3 md:p-4 rounded-lg border border-slate-200 shadow-sm ${previewItem.parent.paperType === "Paper 2 (Essay)" && !previewItem.parent.hasFile ? 'text-2xl md:text-5xl font-medium text-slate-900 p-4 md:p-8' : 'text-xs md:text-sm text-slate-800'}`}>
+                            {previewItem.child.content || <span className="text-slate-400 italic text-xs md:text-sm">No text content available. Please refer to the PDF.</span>}
                           </div>
 
                           {showTags && (
-                            <div className="mt-6 space-y-4">
+                            <div className="mt-4 md:mt-6 space-y-3 md:space-y-4">
                               <div>
-                                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Topics</h4>
-                                <div className="flex flex-wrap gap-2">
+                                <h4 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5 md:mb-2">Topics</h4>
+                                <div className="flex flex-wrap gap-1.5 md:gap-2">
                                   {[...ensureArray(previewItem.parent.topic), ...ensureArray(previewItem.child.topic)].map((t, i) => (
-                                    <span key={i} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1">
-                                      <Tag size={12} /> {t}
+                                    <span key={i} className="px-1.5 md:px-2 py-0.5 md:py-1 bg-blue-50 text-blue-700 rounded-md text-[9px] md:text-xs font-medium border border-blue-100 flex items-center gap-1">
+                                      <Tag size={10} className="md:w-3 md:h-3" /> {t}
                                     </span>
                                   ))}
                                 </div>
                               </div>
 
                               <div>
-                                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Question Types</h4>
-                                <div className="flex flex-wrap gap-2">
+                                <h4 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5 md:mb-2">Question Types</h4>
+                                <div className="flex flex-wrap gap-1.5 md:gap-2">
                                   {ensureArray(previewItem.child.questionType).map((qt, i) => (
-                                    <span key={i} className="px-2 py-1 bg-green-50 text-green-700 rounded-md text-xs font-medium border border-green-100">
+                                    <span key={i} className="px-1.5 md:px-2 py-0.5 md:py-1 bg-green-50 text-green-700 rounded-md text-[9px] md:text-xs font-medium border border-green-100">
                                       {qt}
                                     </span>
                                   ))}
@@ -3743,11 +3792,11 @@ export default function AdvancedHistoryArchive() {
 
                               {ensureArray(previewItem.child.sourceType).length > 0 && (
                                 <div>
-                                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Source Types</h4>
-                                  <div className="flex flex-wrap gap-2">
+                                  <h4 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5 md:mb-2">Source Types</h4>
+                                  <div className="flex flex-wrap gap-1.5 md:gap-2">
                                     {ensureArray(previewItem.child.sourceType).map((st, i) => (
-                                      <span key={i} className="px-2 py-1 bg-slate-100 text-slate-600 rounded-md text-xs font-medium border border-slate-200 flex items-center gap-1">
-                                        <FileDigit size={12} /> {st}
+                                      <span key={i} className="px-1.5 md:px-2 py-0.5 md:py-1 bg-slate-100 text-slate-600 rounded-md text-[9px] md:text-xs font-medium border border-slate-200 flex items-center gap-1">
+                                        <FileDigit size={10} className="md:w-3 md:h-3" /> {st}
                                       </span>
                                     ))}
                                   </div>
@@ -3889,12 +3938,26 @@ export default function AdvancedHistoryArchive() {
                                       </div>
                                     )}
                                   </div>
-                                  <button
-                                    onClick={() => setActiveSample({ ...sample, currentFileUrl: scoreData.fileUrl })}
-                                    className={`text-xs font-bold px-3 py-1.5 rounded-md transition-colors h-fit ${activeSample?.id === sample.id ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'}`}
-                                  >
-                                    View Sample
-                                  </button>
+                                  <>
+                                    {/* Desktop View Button */}
+                                    <button
+                                      onClick={() => setActiveSample({ ...sample, currentFileUrl: scoreData.fileUrl })}
+                                      className={`hidden md:block text-xs font-bold px-3 py-1.5 rounded-md transition-colors h-fit ${activeSample?.id === sample.id ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'}`}
+                                    >
+                                      View Sample
+                                    </button>
+
+                                    {/* Mobile Direct Download/View Button */}
+                                    <a
+                                      href={getSecurePdfUrl(scoreData.fileUrl)}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      onClick={() => handleDownloadTracking("Student Sample")}
+                                      className="md:hidden text-xs font-bold px-3 py-1.5 rounded-md transition-colors h-fit bg-indigo-600 text-white flex items-center gap-1.5 shadow-sm"
+                                    >
+                                      <Download size={12} /> View PDF
+                                    </a>
+                                  </>
                                 </div>
                               </div>
                             );
@@ -3906,7 +3969,7 @@ export default function AdvancedHistoryArchive() {
                 )}
 
                 {(activeSample || viewingAnswer || previewItem.parent.hasFile) && (
-                  <div className="flex-1 bg-slate-200 flex flex-col h-full relative">
+                  <div className="hidden md:flex flex-1 bg-slate-200 flex-col h-full relative">
                     {activeSample ? (
                       <CustomPDFViewer fileUrl={getSecurePdfUrl(activeSample.currentFileUrl)} />
                     ) : viewingAnswer ? (

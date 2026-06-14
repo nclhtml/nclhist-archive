@@ -374,39 +374,39 @@ export default function List() {
         hasAccess ? (
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <table className="w-full text-left">
-              <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 text-sm uppercase">
+              <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 text-xs sm:text-sm uppercase">
                 <tr>
-                  <th className="p-4 w-24 text-center">Year</th>
-                  <th className="p-4">Paper 1 (DBQ)</th>
-                  <th className="p-4">Paper 2 (Essay)</th>
+                  <th className="p-2 sm:p-4 w-12 sm:w-24 text-center">Year</th>
+                  <th className="p-2 sm:p-4">Paper 1 <span className="hidden sm:inline">(DBQ)</span></th>
+                  <th className="p-2 sm:p-4">Paper 2 <span className="hidden sm:inline">(Essay)</span></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {DSE_YEARS.map(year => (
                   <tr key={year} className="hover:bg-slate-50">
-                    <td className="p-4 text-center font-bold text-slate-700 text-lg border-r border-slate-100">{year}</td>
-                    <td className="p-4">
-                      <div className="flex flex-col gap-2 items-start">
-                        <span className="text-sm font-medium text-slate-600">Combined Q1-Q4</span>
-                        <div className="flex gap-2">
-                          <button onClick={() => handleCombineAndDownload(year, "Paper 1 (DBQ)", 'view')} disabled={isCombining} className="flex items-center gap-1 bg-slate-100 text-slate-700 hover:bg-slate-200 px-3 py-1.5 rounded-lg text-sm font-bold transition-colors disabled:opacity-50">
+                    <td className="p-2 sm:p-4 text-center font-bold text-slate-700 text-sm sm:text-lg border-r border-slate-100">{year}</td>
+                    <td className="p-2 sm:p-4">
+                      <div className="flex flex-col gap-1 sm:gap-2 items-start">
+                        <span className="hidden sm:block text-sm font-medium text-slate-600">Combined Q1-Q4</span>
+                        <div className="flex gap-1 sm:gap-2">
+                          <button onClick={() => handleCombineAndDownload(year, "Paper 1 (DBQ)", 'view')} disabled={isCombining} className="hidden sm:flex items-center gap-1 bg-slate-100 text-slate-700 hover:bg-slate-200 px-3 py-1.5 rounded-lg text-sm font-bold transition-colors disabled:opacity-50">
                             <Eye size={16} /> View
                           </button>
-                          <button onClick={() => handleCombineAndDownload(year, "Paper 1 (DBQ)", 'download')} disabled={isCombining} className="flex items-center gap-1 bg-blue-50 text-blue-700 hover:bg-blue-100 px-3 py-1.5 rounded-lg text-sm font-bold transition-colors disabled:opacity-50">
-                            <Download size={16} /> Download
+                          <button onClick={() => handleCombineAndDownload(year, "Paper 1 (DBQ)", 'download')} disabled={isCombining} className="flex items-center gap-1 bg-blue-50 text-blue-700 hover:bg-blue-100 px-2 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-colors disabled:opacity-50">
+                            <Download size={16} /> <span className="hidden sm:inline">Download</span>
                           </button>
                         </div>
                       </div>
                     </td>
-                    <td className="p-4">
-                      <div className="flex flex-col gap-2 items-start">
-                        <span className="text-sm font-medium text-slate-600">All 7 Sub-questions</span>
-                        <div className="flex gap-2">
-                          <button onClick={() => handleCombineAndDownload(year, "Paper 2 (Essay)", 'view')} disabled={isCombining} className="flex items-center gap-1 bg-slate-100 text-slate-700 hover:bg-slate-200 px-3 py-1.5 rounded-lg text-sm font-bold transition-colors disabled:opacity-50">
+                    <td className="p-2 sm:p-4">
+                      <div className="flex flex-col gap-1 sm:gap-2 items-start">
+                        <span className="hidden sm:block text-sm font-medium text-slate-600">All 7 Sub-questions</span>
+                        <div className="flex gap-1 sm:gap-2">
+                          <button onClick={() => handleCombineAndDownload(year, "Paper 2 (Essay)", 'view')} disabled={isCombining} className="hidden sm:flex items-center gap-1 bg-slate-100 text-slate-700 hover:bg-slate-200 px-3 py-1.5 rounded-lg text-sm font-bold transition-colors disabled:opacity-50">
                             <Eye size={16} /> View
                           </button>
-                          <button onClick={() => handleCombineAndDownload(year, "Paper 2 (Essay)", 'download')} disabled={isCombining} className="flex items-center gap-1 bg-purple-50 text-purple-700 hover:bg-purple-100 px-3 py-1.5 rounded-lg text-sm font-bold transition-colors disabled:opacity-50">
-                            <Download size={16} /> Download
+                          <button onClick={() => handleCombineAndDownload(year, "Paper 2 (Essay)", 'download')} disabled={isCombining} className="flex items-center gap-1 bg-purple-50 text-purple-700 hover:bg-purple-100 px-2 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-colors disabled:opacity-50">
+                            <Download size={16} /> <span className="hidden sm:inline">Download</span>
                           </button>
                         </div>
                       </div>

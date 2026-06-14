@@ -158,6 +158,18 @@ export default function StudentDashboard() {
 
             let fetchedItems = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
+            // Sort items by admin order, then term weight, then date (newest first)
+            fetchedItems.sort((a, b) => {
+                const orderA = a.order !== undefined ? a.order : -1;
+                const orderB = b.order !== undefined ? b.order : -1;
+                if (orderA !== orderB) return orderA - orderB;
+
+                const weightA = getTermWeight(a.term);
+                const weightB = getTermWeight(b.term);
+                if (weightA !== weightB) return weightB - weightA;
+                return new Date(b.date) - new Date(a.date);
+            });
+
             setAllItems(fetchedItems);
         } catch (error) {
             console.error("Error fetching dashboard data:", error);
@@ -390,18 +402,25 @@ export default function StudentDashboard() {
                 )}
             </div>
 
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200">
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 w-full overflow-hidden">
                 <table className="w-full text-left">
-                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 text-sm uppercase">
+                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 text-[9px] md:text-sm uppercase">
                         <tr>
-                            {isEditing && <th className="p-4 w-12 text-center"></th>}
-                            <th className="p-4 w-32 text-center border-r border-slate-200">Term</th>
-                            <th className="p-4 w-16 text-center">No.</th>
-                            <th className="p-4 w-32">Origin</th>
-                            <th className="p-4">Name of Work</th>
-                            <th className="p-4 w-32 text-center">Mark</th>
-                            <th className="p-4 w-40 text-center">Question Set</th>
-                            {isEditing && <th className="p-4 w-24 text-center">Actions</th>}
+                            {isEditing && <th className="p-1 md:p-4 w-6 md:w-12 text-center"></th>}
+                            {/* Mobile Combined Header */}
+                            <th className="p-1 md:hidden w-14 text-center">Info</th>
+                            {/* PC Separate Headers */}
+                            <th className="hidden md:table-cell p-4 w-32 text-center border-r border-slate-200">Term</th>
+                            <th className="hidden md:table-cell p-4 w-16 text-center">No.</th>
+                            <th className="hidden md:table-cell p-4 w-32">Origin</th>
+
+                            <th className="p-1 md:p-4">Name of Work</th>
+                            <th className="p-1 md:p-4 w-12 md:w-32 text-center">Mark</th>
+                            <th className="p-1 md:p-4 w-[72px] md:w-40 text-center">
+                                <span className="md:hidden">Action</span>
+                                <span className="hidden md:inline">Question Set</span>
+                            </th>
+                            {isEditing && <th className="p-1 md:p-4 w-10 md:w-24 text-center">Edit</th>}
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -490,10 +509,16 @@ export default function StudentDashboard() {
                                             if (hasValidMark) {
                                                 const finalTotal = scaledTotal - deduction;
                                                 studentMark = (
-                                                    <div className="flex flex-col items-center justify-center text-sm leading-tight">
-                                                        <span className="font-bold text-blue-700 text-base">{finalTotal.toFixed(1)} / {item.paperFullMark || 100}%</span>
-                                                        <span className="text-xs text-slate-500 font-normal mt-1">{breakdown.join(' | ')}</span>
-                                                        {deduction > 0 && <span className="text-xs text-red-500 mt-0.5">- {deduction} (Deduction)</span>}
+                                                    <div className="flex flex-col items-center justify-center text-[10px] md:text-sm leading-tight">
+                                                        <span className="font-bold text-blue-700 text-[11px] md:text-base mb-0.5 md:mb-0">{finalTotal.toFixed(1)} / {item.paperFullMark || 100}%</span>
+                                                        <div className="flex flex-col md:flex-row md:gap-1 text-[8px] md:text-xs text-slate-500 font-normal mt-0.5 md:mt-1">
+                                                            {breakdown.map((b, i) => (
+                                                                <span key={i} className="whitespace-nowrap">
+                                                                    {b}{i < breakdown.length - 1 ? <span className="hidden md:inline"> |</span> : ''}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                        {deduction > 0 && <span className="text-[8px] md:text-xs text-red-500 mt-0.5">- {deduction} (Deduction)</span>}
                                                     </div>
                                                 );
                                             }
@@ -552,132 +577,139 @@ export default function StudentDashboard() {
                                         onDragEnd={isEditing ? handleDrop : undefined}
                                     >
                                         {isEditing && (
-                                            <td className="p-4 text-center cursor-move text-slate-400 hover:text-slate-600">
-                                                <GripHorizontal size={16} className="mx-auto" />
+                                            <td className="p-1 md:p-4 text-center cursor-move text-slate-400 hover:text-slate-600 align-middle">
+                                                <GripHorizontal size={14} className="mx-auto md:w-4 md:h-4" />
                                             </td>
                                         )}
+                                        {/* Mobile Combined Column */}
+                                        <td className="p-1 md:hidden align-top text-center border-r border-slate-100">
+                                            <div className="text-[9px] font-bold text-slate-700 leading-tight">{item.term || 'Unassigned'}</div>
+                                            <div className="text-[8px] text-slate-500 mt-0.5">#{items.length - index}</div>
+                                            <div className="mt-1 inline-block px-1 py-[2px] bg-indigo-50 text-indigo-700 text-[8px] font-bold rounded tracking-tighter">
+                                                {item.category}
+                                            </div>
+                                        </td>
+                                        {/* PC Separate Columns */}
                                         {showTerm && (
-                                            <td rowSpan={rowSpan} className="p-4 text-center font-bold text-slate-700 bg-slate-50 border-r border-slate-200 align-middle">
+                                            <td rowSpan={rowSpan} className="hidden md:table-cell p-4 text-center font-bold text-slate-700 bg-slate-50 border-r border-slate-200 align-middle">
                                                 {item.term || 'Unassigned'}
                                             </td>
                                         )}
-                                        <td className="p-4 text-center font-medium text-slate-500">{items.length - index}</td>
-                                        <td className="p-4">
+                                        <td className="hidden md:table-cell p-4 text-center font-medium text-slate-500">{items.length - index}</td>
+                                        <td className="hidden md:table-cell p-4">
                                             <span className="px-2 py-1 bg-indigo-50 text-indigo-700 text-xs font-bold rounded-md">
                                                 {item.category}
                                             </span>
                                         </td>
-                                        <td className="p-4 font-medium text-slate-800">
-                                            <div>{item.name}</div>
+
+                                        <td className="p-1.5 md:p-4 font-medium text-slate-800 text-[11px] md:text-base align-top md:align-middle">
+                                            <div className="leading-tight">{item.name}</div>
                                             {smallWording && (
-                                                <div className="text-xs text-slate-400 mt-1 line-clamp-2 italic font-normal">
+                                                <div className="text-[9px] md:text-xs text-slate-400 mt-1 line-clamp-2 italic font-normal">
                                                     {smallWording}
                                                 </div>
                                             )}
                                         </td>
-                                        <td className="p-4 text-center font-bold text-blue-700">
+                                        <td className="p-1 md:p-4 text-center font-bold text-blue-700 text-[9px] md:text-base align-top md:align-middle">
                                             {React.isValidElement(studentMark) ? studentMark : (studentMark !== '-' ? `${studentMark} / ${item.fullMark || 100}` : '-')}
                                         </td>
-                                        <td className="p-4 text-center">
-                                            <div className="flex items-center justify-center gap-3">
+                                        <td className="p-1 md:p-4 text-center align-top md:align-middle">
+                                            <div className="flex flex-col md:flex-row items-center justify-center gap-1 md:gap-3">
                                                 {!isEffectivelyDisclosed && !user?.isAdmin ? (
-                                                    <span className="text-xs text-slate-400 italic">Available after disclosure</span>
+                                                    <span className="text-[8px] md:text-xs text-slate-400 italic">Available after disclosure</span>
                                                 ) : item.sectionsConfig && item.sectionsConfig.some(sec => sec.linkedDocId) ? (
-                                                    <div className="flex flex-col gap-2 items-center">
+                                                    <div className="flex flex-col gap-1 md:gap-2 items-center">
                                                         {item.sectionsConfig.filter(sec => sec.linkedDocId).map(sec => {
                                                             const lDoc = linkableDocs.find(a => a.id === sec.linkedDocId);
                                                             return lDoc ? (
-                                                                <div key={sec.id} className="flex items-center gap-2">
-                                                                    <a href={`/?search=${encodeURIComponent(lDoc.title)}&viewId=${lDoc.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-2 py-1 rounded-md border border-blue-100 shadow-sm">
-                                                                        <FileText size={12} /> {sec.name}
+                                                                <div key={sec.id} className="flex items-center gap-0.5 md:gap-2 flex-wrap justify-center">
+                                                                    <a href={`/?search=${encodeURIComponent(lDoc.title)}&viewId=${lDoc.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-[8px] md:text-xs text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-1 py-0.5 md:px-2 md:py-1 rounded border border-blue-100 shadow-sm">
+                                                                        <FileText size={8} className="md:w-3 md:h-3" /> {sec.name}
                                                                     </a>
                                                                     {!user?.isAdmin && (
-                                                                        <>
+                                                                        <div className="flex gap-0.5">
                                                                             <button
                                                                                 onClick={() => toggleStar(lDoc.id)}
-                                                                                className={`inline-flex items-center justify-center w-6 h-6 rounded-md border transition-colors ${starredItems.includes(lDoc.id) ? 'bg-yellow-100 border-yellow-300 text-yellow-600' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
+                                                                                className={`inline-flex items-center justify-center w-4 h-4 md:w-6 md:h-6 rounded border transition-colors ${starredItems.includes(lDoc.id) ? 'bg-yellow-100 border-yellow-300 text-yellow-600' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
                                                                                 title="Star / To-Do Later"
                                                                             >
-                                                                                <Star size={12} className={starredItems.includes(lDoc.id) ? 'fill-current' : ''} />
+                                                                                <Star size={8} className={`md:w-3 md:h-3 ${starredItems.includes(lDoc.id) ? 'fill-current' : ''}`} />
                                                                             </button>
                                                                             <button
                                                                                 onClick={() => toggleMarkAsDone(lDoc.id)}
-                                                                                className={`inline-flex items-center justify-center w-6 h-6 rounded-md border transition-colors ${doneItems.includes(lDoc.id) ? 'bg-green-100 border-green-300 text-green-700' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
+                                                                                className={`inline-flex items-center justify-center w-4 h-4 md:w-6 md:h-6 rounded border transition-colors ${doneItems.includes(lDoc.id) ? 'bg-green-100 border-green-300 text-green-700' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
                                                                                 title={doneItems.includes(lDoc.id) ? "Done" : "Mark as Done"}
                                                                             >
-                                                                                <Check size={12} className={doneItems.includes(lDoc.id) ? 'opacity-100' : 'opacity-30'} />
+                                                                                <Check size={8} className={`md:w-3 md:h-3 ${doneItems.includes(lDoc.id) ? 'opacity-100' : 'opacity-30'}`} />
                                                                             </button>
-                                                                        </>
+                                                                        </div>
                                                                     )}
                                                                 </div>
                                                             ) : null;
                                                         })}
                                                     </div>
                                                 ) : linkedDoc ? (
-                                                    <div className="flex items-center gap-2">
-                                                        <a href={`/?search=${encodeURIComponent(linkedDoc.title)}&viewId=${linkedDoc.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-2 py-1 rounded-md border border-blue-100 shadow-sm">
-                                                            <FileText size={14} /> View
+                                                    <div className="flex items-center gap-0.5 md:gap-2 flex-wrap justify-center">
+                                                        <a href={`/?search=${encodeURIComponent(linkedDoc.title)}&viewId=${linkedDoc.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-[8px] md:text-sm text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-1 py-0.5 md:px-2 md:py-1 rounded border border-blue-100 shadow-sm">
+                                                            <FileText size={8} className="md:w-3.5 md:h-3.5" /> View
                                                         </a>
                                                         {!user?.isAdmin && (
-                                                            <>
+                                                            <div className="flex gap-0.5">
                                                                 <button
                                                                     onClick={() => toggleStar(linkedDoc.id)}
-                                                                    className={`inline-flex items-center justify-center w-7 h-7 rounded-md border transition-colors ${starredItems.includes(linkedDoc.id) ? 'bg-yellow-100 border-yellow-300 text-yellow-600' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
+                                                                    className={`inline-flex items-center justify-center w-4 h-4 md:w-7 md:h-7 rounded border transition-colors ${starredItems.includes(linkedDoc.id) ? 'bg-yellow-100 border-yellow-300 text-yellow-600' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
                                                                     title="Star / To-Do Later"
                                                                 >
-                                                                    <Star size={14} className={starredItems.includes(linkedDoc.id) ? 'fill-current' : ''} />
+                                                                    <Star size={8} className={`md:w-3.5 md:h-3.5 ${starredItems.includes(linkedDoc.id) ? 'fill-current' : ''}`} />
                                                                 </button>
                                                                 <button
                                                                     onClick={() => toggleMarkAsDone(linkedDoc.id)}
-                                                                    className={`inline-flex items-center justify-center w-7 h-7 rounded-md border transition-colors ${doneItems.includes(linkedDoc.id) ? 'bg-green-100 border-green-300 text-green-700' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
+                                                                    className={`inline-flex items-center justify-center w-4 h-4 md:w-7 md:h-7 rounded border transition-colors ${doneItems.includes(linkedDoc.id) ? 'bg-green-100 border-green-300 text-green-700' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
                                                                     title={doneItems.includes(linkedDoc.id) ? "Done" : "Mark as Done"}
                                                                 >
-                                                                    <Check size={14} className={doneItems.includes(linkedDoc.id) ? 'opacity-100' : 'opacity-30'} />
+                                                                    <Check size={8} className={`md:w-3.5 md:h-3.5 ${doneItems.includes(linkedDoc.id) ? 'opacity-100' : 'opacity-30'}`} />
                                                                 </button>
-                                                            </>
+                                                            </div>
                                                         )}
                                                     </div>
                                                 ) : (
-                                                    <span className="text-xs text-slate-400 italic">No file attached</span>
+                                                    <span className="text-[8px] md:text-xs text-slate-400 italic">No file attached</span>
                                                 )}
 
                                                 {/* Teacher Comment Button */}
                                                 {!user?.isAdmin && currentStudentId && item.marks?.[`${currentStudentId}_comment`] && isEffectivelyDisclosed && (
-                                                    <div className="relative group inline-block">
+                                                    <div className="relative group inline-block mt-1 md:mt-0">
                                                         <button
                                                             onClick={() => setSelectedCommentId(selectedCommentId === item.id ? null : item.id)}
-                                                            className="inline-flex items-center justify-center w-6 h-6 bg-amber-100 text-amber-700 rounded-full font-bold hover:bg-amber-200 transition-colors cursor-pointer"
+                                                            className="inline-flex items-center justify-center w-4 h-4 md:w-6 md:h-6 bg-amber-100 text-amber-700 rounded-full font-bold hover:bg-amber-200 transition-colors cursor-pointer text-[8px] md:text-sm"
                                                         >
                                                             !
                                                         </button>
 
                                                         {/* Custom Tooltip (Hidden when popover is open) */}
                                                         {selectedCommentId !== item.id && (
-                                                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 hidden group-hover:block w-max max-w-xs bg-slate-800 text-white text-sm font-medium px-3 py-2 rounded shadow-lg z-10 pointer-events-none">
+                                                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 md:mb-3 hidden group-hover:block w-max max-w-[200px] md:max-w-xs bg-slate-800 text-white text-[10px] md:text-sm font-medium px-2 py-1 md:px-3 md:py-2 rounded shadow-lg z-10 pointer-events-none">
                                                                 Click to view teacher's comment
                                                                 <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
                                                             </div>
                                                         )}
 
-                                                        {/* Inline Comment Popover (Attached to the right) */}
+                                                        {/* Inline Comment Popover */}
                                                         {selectedCommentId === item.id && (
-                                                            <div className="absolute top-1/2 -translate-y-1/2 left-full ml-4 w-64 bg-white rounded-xl shadow-[0_0_20px_rgba(0,0,0,0.1)] border border-slate-200 p-4 z-40 text-left cursor-default">
+                                                            <div className="absolute top-1/2 -translate-y-1/2 right-full mr-2 md:left-full md:mr-0 md:ml-4 w-48 md:w-64 bg-white rounded-xl shadow-[0_0_20px_rgba(0,0,0,0.1)] border border-slate-200 p-3 md:p-4 z-40 text-left cursor-default">
                                                                 <button
                                                                     onClick={(e) => { e.stopPropagation(); setSelectedCommentId(null); }}
-                                                                    className="absolute top-3 right-3 text-slate-400 hover:text-slate-600 transition-colors"
+                                                                    className="absolute top-2 right-2 md:top-3 md:right-3 text-slate-400 hover:text-slate-600 transition-colors"
                                                                 >
-                                                                    <X size={16} />
+                                                                    <X size={14} className="md:w-4 md:h-4" />
                                                                 </button>
-                                                                <h3 className="text-sm font-bold text-slate-800 mb-2 flex items-center gap-1.5">
-                                                                    <FileText className="text-amber-500" size={16} />
+                                                                <h3 className="text-xs md:text-sm font-bold text-slate-800 mb-1.5 md:mb-2 flex items-center gap-1 md:gap-1.5">
+                                                                    <FileText className="text-amber-500" size={14} className="md:w-4 md:h-4" />
                                                                     Teacher's Comment
                                                                 </h3>
-                                                                <div className="bg-amber-50/50 border border-amber-100 rounded-lg p-3 text-slate-700 text-sm whitespace-pre-wrap leading-relaxed">
+                                                                <div className="bg-amber-50/50 border border-amber-100 rounded-lg p-2 md:p-3 text-slate-700 text-[10px] md:text-sm whitespace-pre-wrap leading-relaxed">
                                                                     {item.marks[`${currentStudentId}_comment`]}
                                                                 </div>
-                                                                {/* Left Arrow pointing to the button */}
-                                                                <div className="absolute top-1/2 -translate-y-1/2 right-full border-[6px] border-transparent border-r-white"></div>
-                                                                <div className="absolute top-1/2 -translate-y-1/2 right-full border-[7px] border-transparent border-r-slate-200 -z-10"></div>
                                                             </div>
                                                         )}
                                                     </div>
@@ -685,9 +717,11 @@ export default function StudentDashboard() {
                                             </div>
                                         </td>
                                         {isEditing && (
-                                            <td className="p-4 text-center flex justify-center gap-2">
-                                                <button onClick={() => openAddModal(item)} className="text-slate-400 hover:text-blue-600"><Edit size={16} /></button>
-                                                <button onClick={() => handleDelete(item.id)} className="text-slate-400 hover:text-red-600"><Trash2 size={16} /></button>
+                                            <td className="p-1 md:p-4 text-center align-middle">
+                                                <div className="flex justify-center gap-1 md:gap-2">
+                                                    <button onClick={() => openAddModal(item)} className="text-slate-400 hover:text-blue-600"><Edit size={12} className="md:w-4 md:h-4" /></button>
+                                                    <button onClick={() => handleDelete(item.id)} className="text-slate-400 hover:text-red-600"><Trash2 size={12} className="md:w-4 md:h-4" /></button>
+                                                </div>
                                             </td>
                                         )}
                                     </tr>

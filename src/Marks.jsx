@@ -146,8 +146,52 @@ export default function Marks() {
   const [isLoadingMarks, setIsLoadingMarks] = useState(false);
   const [currentMarksDocTitle, setCurrentMarksDocTitle] = useState('');
 
+  // Export to Excel State
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportPresetId, setExportPresetId] = useState('');
+  const [exportAssessmentsMap, setExportAssessmentsMap] = useState({});
+
+  // Comparison State
+  const [compareAssessmentsList, setCompareAssessmentsList] = useState([]);
+  const [selectedCompareId, setSelectedCompareId] = useState('');
+
   // Helper to check if current category requires multi-section layout
   const isMultiSectionCategory = ['Uniform Test', 'Exam'].includes(selectedCategory);
+
+  // Fetch Comparison Assessments
+  useEffect(() => {
+    const fetchCompareList = async () => {
+      if (!selectedClass || !isMultiSectionCategory || !selectedAssessment) return;
+      const snap = await getDocs(collection(db, "assessments"));
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .filter(a => {
+          const matchesClass = (a.classes && Array.isArray(a.classes)) ? a.classes.includes(selectedClass) : a.className === selectedClass;
+          return matchesClass && ['Uniform Test', 'Exam'].includes(a.category) && a.id !== selectedAssessment.id;
+        });
+      setCompareAssessmentsList(list);
+    };
+    fetchCompareList();
+  }, [selectedClass, selectedAssessment, isMultiSectionCategory]);
+
+  const handleMoveAssessment = async (index, direction, e) => {
+    e.stopPropagation();
+    const newAssessments = [...assessments];
+    if (direction === 'up' && index > 0) {
+      [newAssessments[index - 1], newAssessments[index]] = [newAssessments[index], newAssessments[index - 1]];
+    } else if (direction === 'down' && index < newAssessments.length - 1) {
+      [newAssessments[index + 1], newAssessments[index]] = [newAssessments[index], newAssessments[index + 1]];
+    } else return;
+
+    newAssessments.forEach((a, i) => a.order = i);
+    setAssessments(newAssessments);
+
+    try {
+      const updates = newAssessments.map(a => updateDoc(doc(db, "assessments", a.id), { order: a.order }));
+      await Promise.all(updates);
+    } catch (err) {
+      console.error("Error updating order", err);
+    }
+  };
 
   // ============================================================================
   // 1. INITIAL DATA FETCH
@@ -332,7 +376,8 @@ export default function Marks() {
             return matchesClass && matchesTerm;
           });
 
-        loadedAssessments.sort((a, b) => new Date(a.date) - new Date(b.date));
+        // Treat items without an order as -1 so they appear at the top, then sort by date (newest to oldest)
+        loadedAssessments.sort((a, b) => (a.order ?? -1) - (b.order ?? -1) || new Date(b.date) - new Date(a.date));
         setAssessments(loadedAssessments);
 
         if (isMultiSectionCategory) {
@@ -1528,8 +1573,173 @@ export default function Marks() {
   };
 
   // ============================================================================
-  // RENDER HELPERS
+  // EXPORT TO EXCEL LOGIC
   // ============================================================================
+  const openExportModal = async () => {
+    if (!selectedClass || !selectedTerm) {
+      alert("Please select a class and term first.");
+      return;
+    }
+
+    // Fetch all assessments for this class and term
+    const q = query(collection(db, "assessments"));
+    const querySnapshot = await getDocs(q);
+    const allTermAssessments = querySnapshot.docs
+      .map(doc => ({ id: doc.id, ...doc.data() }))
+      .filter(a => {
+        const matchesClass = (a.classes && Array.isArray(a.classes))
+          ? a.classes.includes(selectedClass)
+          : a.className === selectedClass;
+        const matchesTerm = a.term === selectedTerm;
+        return matchesClass && matchesTerm;
+      });
+
+    // Sort oldest to newest by default so they appear top-to-bottom in the modal (left-to-right in Excel)
+    allTermAssessments.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    // Group by category
+    const grouped = {
+      'Assignments': [], 'Quizzes': [], 'Others': [], 'Uniform Test': [], 'Exam': []
+    };
+
+    allTermAssessments.forEach(a => {
+      if (grouped[a.category]) {
+        grouped[a.category].push(a);
+      } else if (a.category === 'Others') {
+        grouped['Others'].push(a);
+      }
+    });
+
+    setExportAssessmentsMap(grouped);
+    if (presets.length > 0) setSelectedPresetId(presets[0].id);
+    setShowExportModal(true);
+  };
+
+  const moveExportItem = (category, index, direction) => {
+    const newMap = { ...exportAssessmentsMap };
+    const list = newMap[category];
+    if (direction === 'up' && index > 0) {
+      [list[index - 1], list[index]] = [list[index], list[index - 1]];
+    } else if (direction === 'down' && index < list.length - 1) {
+      [list[index + 1], list[index]] = [list[index], list[index + 1]];
+    }
+    setExportAssessmentsMap(newMap);
+  };
+
+  const generateExcel = () => {
+    if (!exportPresetId) {
+      alert("Please select a calculation preset.");
+      return;
+    }
+
+    const preset = presets.find(p => p.id === exportPresetId);
+    const categoryOrder = ['Assignments', 'Quizzes', 'Others', 'Uniform Test', 'Exam'];
+
+    let html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
+    html += '<head><meta charset="UTF-8"></head><body><table border="1">';
+
+    // Header Row 1: Categories
+    html += '<tr><th rowSpan="2">Class No.</th><th rowSpan="2">English Name</th>';
+    categoryOrder.forEach(cat => {
+      const items = exportAssessmentsMap[cat] || [];
+      const colSpan = items.length + (cat !== 'Exam' ? 1 : 0) + (cat === 'Uniform Test' ? 1 : 0);
+      if (colSpan > 0) {
+        html += `<th colSpan="${colSpan}" style="background-color:#f3f4f6; font-weight:bold; text-align:center;">${cat}</th>`;
+      }
+    });
+    html += '</tr>';
+
+    // Header Row 2: Items
+    html += '<tr>';
+    categoryOrder.forEach(cat => {
+      const items = exportAssessmentsMap[cat] || [];
+      if (items.length === 0 && cat !== 'Exam') return; // Skip empty categories unless it's Exam which might just be empty
+
+      items.forEach(item => {
+        html += `<th>${item.name} (/${item.fullMark || 100})</th>`;
+      });
+
+      if (cat !== 'Exam') {
+        const weight = preset.weights?.[cat] || (preset.name === 'JS Geography' && (cat === 'Assignments' || cat === 'Quizzes') ? 25 : 0);
+        html += `<th style="background-color:#e5e7eb;">${cat} Total (/${weight})</th>`;
+      }
+      if (cat === 'Uniform Test') {
+        html += `<th style="background-color:#dbeafe; font-weight:bold;">Total Term Score</th>`;
+      }
+    });
+    html += '</tr>';
+
+    // Data Rows
+    currentClassStudents.forEach(student => {
+      html += `<tr><td>${student.classNumber}</td><td>${student.englishName}</td>`;
+
+      let totalTermScore = 0;
+
+      categoryOrder.forEach(cat => {
+        const items = exportAssessmentsMap[cat] || [];
+        let catRawTotal = 0;
+        let catFullTotal = 0;
+
+        items.forEach(item => {
+          const marks = item.marks || {};
+          const studentMark = marks[student.id];
+          const deduction = parseFloat(marks[`${student.id}_deduction`]) || 0;
+
+          let finalMark = null;
+          if (item.sectionsConfig && item.sectionsConfig.length > 0) {
+            const scaled = calculateScaledTotal(studentMark, item.sectionsConfig);
+            if (scaled !== null) finalMark = scaled - deduction;
+          } else {
+            const raw = calculateTotal(studentMark);
+            if (raw !== null) finalMark = raw - deduction;
+          }
+
+          if (finalMark !== null) {
+            catRawTotal += finalMark;
+            catFullTotal += (item.fullMark || 100);
+            html += `<td>${finalMark.toFixed(1)}</td>`;
+          } else {
+            html += `<td>-</td>`;
+          }
+        });
+
+        // Category Total Calculation
+        if (cat !== 'Exam') {
+          let catWeight = preset.weights?.[cat] || 0;
+          if (preset.name === 'JS Geography') {
+            if (cat === 'Assignments' || cat === 'Quizzes') catWeight = 25; // 50% combined
+            if (cat === 'Uniform Test') catWeight = 50;
+          }
+
+          let catScore = 0;
+          if (catFullTotal > 0 && catWeight > 0) {
+            catScore = (catRawTotal / catFullTotal) * catWeight;
+            totalTermScore += catScore;
+          }
+          html += `<td style="background-color:#f9fafb;">${catScore.toFixed(1)}</td>`;
+        }
+
+        // Total Term Score Column (After UT)
+        if (cat === 'Uniform Test') {
+          html += `<td style="background-color:#eff6ff; font-weight:bold;">${totalTermScore.toFixed(1)}</td>`;
+        }
+      });
+      html += '</tr>';
+    });
+
+    html += '</table></body></html>';
+
+    // Trigger Download
+    const blob = new Blob([html], { type: 'application/vnd.ms-excel' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${selectedClass}_${selectedTerm}_Marks.xls`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setShowExportModal(false);
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -1688,6 +1898,17 @@ export default function Marks() {
               Globally Disclose All
             </button>
           </div>
+
+          <div className="pt-3 border-t border-gray-100">
+            <button
+              onClick={openExportModal}
+              className="w-full flex items-center justify-center px-4 py-2 text-sm font-bold rounded-md transition-colors border shadow-sm bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border-emerald-200"
+              title="Export all marks to an Excel spreadsheet"
+            >
+              <Download className="w-4 h-4 mr-2" />
+              Export to Excel
+            </button>
+          </div>
         </div>
 
         {/* Categories */}
@@ -1786,13 +2007,17 @@ export default function Marks() {
                             <Calendar className="w-3 h-3 mr-1" /> {item.date} | Full: {item.fullMark || 100}
                           </div>
                         </div>
-                        <button
-                          onClick={(e) => handleDeleteAssessment(item.id, e)}
-                          className="text-gray-400 hover:text-red-500 p-1 flex-shrink-0"
-                          title="Delete Assessment"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        <div className="flex items-center space-x-1 flex-shrink-0">
+                          <button onClick={(e) => handleMoveAssessment(assessments.indexOf(item), 'up', e)} disabled={assessments.indexOf(item) === 0} className={`p-1 ${assessments.indexOf(item) === 0 ? 'text-gray-300' : 'text-gray-400 hover:text-blue-600'}`}><ChevronUp className="w-4 h-4" /></button>
+                          <button onClick={(e) => handleMoveAssessment(assessments.indexOf(item), 'down', e)} disabled={assessments.indexOf(item) === assessments.length - 1} className={`p-1 ${assessments.indexOf(item) === assessments.length - 1 ? 'text-gray-300' : 'text-gray-400 hover:text-blue-600'}`}><ChevronDown className="w-4 h-4" /></button>
+                          <button
+                            onClick={(e) => handleDeleteAssessment(item.id, e)}
+                            className="text-gray-400 hover:text-red-500 p-1"
+                            title="Delete Assessment"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
                     </li>
                   ))}
@@ -2157,7 +2382,24 @@ export default function Marks() {
                       </th>
                     )}
                     <th className="p-3 border-b w-24 text-blue-700 bg-blue-50 font-bold align-top text-center border-l border-gray-200">Final</th>
-                    <th className="p-3 border-b w-28 text-center align-top">
+                    {isMultiSectionCategory && (
+                      <th className="p-3 border-b w-36 text-center align-top border-l border-gray-200">
+                        <div className="flex flex-col items-center justify-center">
+                          <span>Compare</span>
+                          <select
+                            value={selectedCompareId}
+                            onChange={(e) => setSelectedCompareId(e.target.value)}
+                            className="mt-1 w-full border border-gray-300 rounded p-1 text-[10px] outline-none font-normal"
+                          >
+                            <option value="">None</option>
+                            {compareAssessmentsList.map(ca => (
+                              <option key={ca.id} value={ca.id}>{ca.term} {ca.category}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </th>
+                    )}
+                    <th className="p-3 border-b w-28 text-center align-top border-l border-gray-200">
                       <div className="flex flex-col items-center justify-center">
                         <span>Status</span>
                         {!studentView && (
@@ -2319,7 +2561,49 @@ export default function Marks() {
                               {finalTotal === null ? '-' : (studentView ? '***' : finalTotal.toFixed(1))}
                             </td>
 
-                            <td className="p-3 text-center">
+                            {isMultiSectionCategory && (
+                              <td className="p-2 text-center border-l border-gray-200 align-middle">
+                                {(() => {
+                                  if (!selectedCompareId || finalTotal === null || studentView) return <span className="text-gray-300">-</span>;
+                                  const compAss = compareAssessmentsList.find(a => a.id === selectedCompareId);
+                                  if (!compAss) return <span className="text-gray-300">-</span>;
+
+                                  const compMarks = compAss.marks?.[s.id];
+                                  const compDeduct = parseFloat(compAss.marks?.[`${s.id}_deduction`]) || 0;
+                                  const compScaled = calculateScaledTotal(compMarks, compAss.sectionsConfig);
+                                  if (compScaled === null) return <span className="text-gray-300">-</span>;
+
+                                  const compFinal = compScaled - compDeduct;
+                                  const diff = finalTotal - compFinal;
+
+                                  // Determine visual cues
+                                  const isPositive = diff > 0;
+                                  const isNegative = diff < 0;
+                                  const diffText = diff > 0 ? `+${diff.toFixed(1)}` : diff.toFixed(1);
+
+                                  // Background bar width calculation (max 30 diff for full width)
+                                  const absDiff = Math.abs(diff);
+                                  const widthPercent = Math.min(100, (absDiff / 30) * 100);
+
+                                  return (
+                                    <div className="relative w-full h-8 flex items-center justify-center border border-gray-300 bg-white rounded overflow-hidden shadow-sm">
+                                      {diff !== 0 && (
+                                        <div
+                                          className={`absolute top-0 bottom-0 ${isPositive ? 'left-1/2 bg-gradient-to-r from-green-200 to-green-100' : 'right-1/2 bg-gradient-to-l from-red-200 to-red-100'}`}
+                                          style={{ width: `${widthPercent / 2}%` }}
+                                        />
+                                      )}
+                                      <div className="absolute left-1/2 top-0 bottom-0 w-px bg-gray-400 border-dashed border-l"></div>
+                                      <span className={`relative z-10 text-sm font-extrabold tracking-wide ${isPositive ? 'text-green-700' : isNegative ? 'text-red-700' : 'text-gray-600'}`}>
+                                        {diff === 0 ? '0' : diffText}
+                                      </span>
+                                    </div>
+                                  );
+                                })()}
+                              </td>
+                            )}
+
+                            <td className="p-3 text-center border-l border-gray-200">
                               {hasMark ? (
                                 <CheckCircle className="w-5 h-5 text-green-500 mx-auto" />
                               ) : (
@@ -3545,6 +3829,70 @@ export default function Marks() {
                   </table>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Export to Excel Modal */}
+      {showExportModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-lg">
+              <h2 className="text-lg font-bold text-gray-800 flex items-center">
+                <Download className="w-5 h-5 mr-2 text-emerald-600" />
+                Export to Excel - {selectedClass} ({selectedTerm})
+              </h2>
+              <button onClick={() => setShowExportModal(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto flex-1">
+              <div className="mb-6 bg-emerald-50 p-4 rounded-lg border border-emerald-100">
+                <label className="block text-sm font-bold text-emerald-800 mb-2">1. Select Calculation Preset for Term Score</label>
+                <select
+                  value={exportPresetId}
+                  onChange={(e) => setExportPresetId(e.target.value)}
+                  className="w-full border border-emerald-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                >
+                  {presets.length === 0 && <option value="">No presets available</option>}
+                  {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+
+              <label className="block text-sm font-bold text-gray-800 mb-2">2. Arrange Column Order (Top to Bottom = Left to Right)</label>
+              <div className="space-y-6">
+                {['Assignments', 'Quizzes', 'Others', 'Uniform Test', 'Exam'].map(cat => (
+                  <div key={cat} className="border border-gray-200 rounded-lg overflow-hidden">
+                    <div className="bg-gray-100 px-4 py-2 font-bold text-sm text-gray-700 border-b border-gray-200">
+                      {cat}
+                    </div>
+                    <ul className="divide-y divide-gray-100 bg-white">
+                      {(!exportAssessmentsMap[cat] || exportAssessmentsMap[cat].length === 0) ? (
+                        <li className="p-3 text-sm text-gray-400 italic">No items in this category.</li>
+                      ) : (
+                        exportAssessmentsMap[cat].map((item, index) => (
+                          <li key={item.id} className="flex justify-between items-center p-3 hover:bg-gray-50">
+                            <span className="text-sm font-medium text-gray-700">{item.name}</span>
+                            <div className="flex items-center space-x-1">
+                              <button onClick={() => moveExportItem(cat, index, 'up')} disabled={index === 0} className={`p-1 ${index === 0 ? 'text-gray-300' : 'text-gray-500 hover:text-blue-600'}`}><ChevronUp className="w-4 h-4" /></button>
+                              <button onClick={() => moveExportItem(cat, index, 'down')} disabled={index === exportAssessmentsMap[cat].length - 1} className={`p-1 ${index === exportAssessmentsMap[cat].length - 1 ? 'text-gray-300' : 'text-gray-500 hover:text-blue-600'}`}><ChevronDown className="w-4 h-4" /></button>
+                            </div>
+                          </li>
+                        ))
+                      )}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-gray-200 bg-gray-50 rounded-b-lg flex justify-end space-x-3 shrink-0">
+              <button onClick={() => setShowExportModal(false)} className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-md font-medium hover:bg-gray-50">Cancel</button>
+              <button onClick={generateExcel} className="px-6 py-2 bg-emerald-600 text-white rounded-md font-medium hover:bg-emerald-700 shadow-sm flex items-center">
+                <Download className="w-4 h-4 mr-2" /> Download .xls
+              </button>
             </div>
           </div>
         </div>

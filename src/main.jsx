@@ -106,36 +106,36 @@ const AuthProvider = ({ children }) => {
     let isActive = true;
     let sessionStartTime = Date.now();
     let lastActiveTime = Date.now();
+    let logDocId = null;
     let checkInterval;
 
     const logAccess = async () => {
       try {
-        await addDoc(collection(db, "admin_logs"), {
-          type: 'SYSTEM_SUCCESS',
-          message: `<b>Active Viewing:</b> User ${email} is accessing the webpage.`,
-          timestamp: new Date().toISOString(),
-          viewed: false
+        const docRef = await addDoc(collection(db, "login_logs"), {
+          email: email,
+          action: 'Active Viewing',
+          timestamp: new Date().toISOString()
         });
+        logDocId = docRef.id;
       } catch (e) { console.warn("Log access error:", e); }
     };
 
-    const logDuration = async (start, end) => {
-      const durationMs = end - start;
+    const saveDuration = async () => {
+      if (!logDocId) return;
+      const durationMs = Date.now() - sessionStartTime;
       const minutes = Math.floor(durationMs / 60000);
-      if (minutes < 1) return; // Ignore sessions under 1 minute to prevent spam
 
-      const hours = Math.floor(minutes / 60);
-      const mins = minutes % 60;
-      const timeString = hours > 0 ? `${hours} hour(s) ${mins} minutes` : `${minutes} minutes`;
+      if (minutes >= 1) {
+        const hours = Math.floor(minutes / 60);
+        const mins = minutes % 60;
+        const timeString = hours > 0 ? `${hours} hour(s) ${mins} minutes` : `${minutes} minutes`;
 
-      try {
-        await addDoc(collection(db, "admin_logs"), {
-          type: 'SYSTEM_SUCCESS',
-          message: `<b>Session Ended:</b> User ${email} had been online for ${timeString}.`,
-          timestamp: new Date().toISOString(),
-          viewed: false
-        });
-      } catch (e) { console.warn("Log duration error:", e); }
+        try {
+          await updateDoc(doc(db, "login_logs", logDocId), {
+            action: `Active Viewing (${timeString})`
+          });
+        } catch (e) { console.warn("Update duration error:", e); }
+      }
     };
 
     // 1. Log immediately when user mounts/logs in
@@ -145,10 +145,16 @@ const AuthProvider = ({ children }) => {
     const updateActivity = () => {
       lastActiveTime = Date.now();
       if (!isActive) {
-        // User returned after being marked inactive for an hour
         isActive = true;
         sessionStartTime = Date.now();
         logAccess();
+      }
+    };
+
+    // 3. Save duration reliably when user closes tab, switches tabs, or minimizes browser
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden' && isActive) {
+        saveDuration();
       }
     };
 
@@ -156,26 +162,28 @@ const AuthProvider = ({ children }) => {
     window.addEventListener('keydown', updateActivity, { passive: true });
     window.addEventListener('click', updateActivity, { passive: true });
     window.addEventListener('scroll', updateActivity, { passive: true });
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // 3. Check for 1-hour inactivity
+    // 4. Update every 5 minutes (reduced from 1 minute to save Firebase writes)
     checkInterval = setInterval(() => {
-      if (isActive && Date.now() - lastActiveTime > 60 * 60 * 1000) { // 1 hour = 60 * 60 * 1000 ms
-        isActive = false;
-        logDuration(sessionStartTime, lastActiveTime);
+      if (isActive) {
+        saveDuration();
+        // Check for 1-hour inactivity
+        if (Date.now() - lastActiveTime > 60 * 60 * 1000) {
+          isActive = false;
+        }
       }
-    }, 60000); // Check every minute
+    }, 5 * 60000); // 5 minutes
 
     return () => {
       window.removeEventListener('mousemove', updateActivity);
       window.removeEventListener('keydown', updateActivity);
       window.removeEventListener('click', updateActivity);
       window.removeEventListener('scroll', updateActivity);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       clearInterval(checkInterval);
 
-      // If component unmounts (user logs out or closes tab), log their final duration
-      if (isActive) {
-        logDuration(sessionStartTime, lastActiveTime);
-      }
+      if (isActive) saveDuration();
     };
   }, [realUser]);
   // --- END NEW ---
@@ -395,7 +403,8 @@ const Layout = ({ children }) => {
             email: email,
             timestamp: formattedTime,
             role: rolesData[email] || 'No Role',
-            studentName: linkedStudent ? `${linkedStudent.englishName} (${linkedStudent.className})` : null
+            studentName: linkedStudent ? `${linkedStudent.englishName} (${linkedStudent.className})` : null,
+            action: data.action || 'Login'
           });
         }
       });
@@ -589,8 +598,12 @@ const Layout = ({ children }) => {
                                       <tr key={i} className="border-t border-slate-100">
                                         <td className="py-2 text-slate-400 whitespace-nowrap pr-2">{u.timestamp}</td>
                                         <td className="py-2">
-                                          <div className="text-slate-700 font-medium truncate w-40" title={u.email}>{u.email}</div>
-                                          <div className="text-slate-500">{u.studentName ? <span className="text-blue-600">{u.studentName}</span> : <span className="capitalize">{u.role.replace('_', ' ')}</span>}</div>
+                                          <div className="text-slate-700 font-medium truncate w-40" title={u.email}>
+                                            {u.studentName ? <span className="text-blue-600">{u.studentName}</span> : u.email}
+                                          </div>
+                                          <div className="text-slate-500 text-[10px] mt-0.5 capitalize">
+                                            {u.action} {u.action === 'Login' && !u.studentName ? `(${u.role.replace('_', ' ')})` : ''}
+                                          </div>
                                         </td>
                                       </tr>
                                     ))}

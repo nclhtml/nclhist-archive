@@ -17,6 +17,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer
 } from 'recharts';
+import { motion, AnimatePresence } from 'framer-motion';
 
 // Helper to generate unique IDs for sections/subsections
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -97,6 +98,8 @@ export default function Marks() {
 
   // Mark Overview & Graph Modal State
   const [showOverviewModal, setShowOverviewModal] = useState(false);
+  const [revealStep, setRevealStep] = useState(0);
+  const [classPresetsMap, setClassPresetsMap] = useState({});
 
   // All Classes Modal State
   const [showAllClassesModal, setShowAllClassesModal] = useState(false);
@@ -261,6 +264,12 @@ export default function Marks() {
         let loadedPresets = [];
         if (presetsSnap.exists() && presetsSnap.data().list) {
           loadedPresets = presetsSnap.data().list;
+        }
+
+        const classPresetsRef = doc(db, "settings", "classPresets");
+        const classPresetsSnap = await getDoc(classPresetsRef);
+        if (classPresetsSnap.exists() && classPresetsSnap.data().map) {
+          setClassPresetsMap(classPresetsSnap.data().map);
         }
 
         let presetsUpdated = false;
@@ -1812,10 +1821,33 @@ export default function Marks() {
             <select
               value={selectedClass}
               onChange={(e) => setSelectedClass(e.target.value)}
-              className="w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium bg-gray-50"
+              className="w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium bg-gray-50 mb-2"
             >
               {classes.length === 0 && <option value="">No classes</option>}
               {classes.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+
+            <label className="font-semibold text-gray-700 flex items-center mb-1.5 text-xs mt-2">
+              <Calculator className="w-3 h-3 mr-1" /> Default Term Score Method
+            </label>
+            <select
+              value={classPresetsMap[selectedClass] || ''}
+              onChange={async (e) => {
+                const newMap = { ...classPresetsMap, [selectedClass]: e.target.value };
+                setClassPresetsMap(newMap);
+                await setDoc(doc(db, "settings", "classPresets"), { map: newMap }, { merge: true });
+              }}
+              className="w-full border border-gray-300 rounded-md p-1.5 focus:ring-2 focus:ring-blue-500 outline-none text-xs font-medium bg-gray-50"
+            >
+              <option value="" title="All Categories (No Preset)">All Categories (No Preset)</option>
+              {presets.map(p => {
+                let formula = "";
+                if (p.name === 'JS Geography') formula = "50% (Assignments + Quizzes) + 50% UT";
+                else if (p.name === 'Learning Attitude (Homework)') formula = "Sum of Assignments / Total × 5";
+                else if (p.name === 'Learning Attitude (Lesson)') formula = "4 + Bonus - Records/2 (Range 0-5)";
+                else formula = Object.entries(p.weights || {}).filter(([_, w]) => w > 0).map(([c, w]) => `${c}: ${w}%`).join(', ');
+                return <option key={p.id} value={p.id} title={formula}>{p.name}</option>;
+              })}
             </select>
           </div>
 
@@ -1847,6 +1879,7 @@ export default function Marks() {
               onClick={() => {
                 setModalClasses([selectedClass]);
                 setModalTerm(selectedTerm);
+                setSelectedPresetId(classPresetsMap[selectedClass] || (presets.length > 0 ? presets[0].id : ''));
                 setTermScoresData([]);
                 setShowTermScoreModal(true);
               }}
@@ -1940,7 +1973,16 @@ export default function Marks() {
           )}
 
           <ul className="divide-y divide-gray-100 max-h-64 overflow-y-auto">
-            {categories.map(cat => (
+            {categories.filter(cat => {
+              if (cat === 'Exam') return true; // Always show Exam
+              const presetId = classPresetsMap[selectedClass];
+              if (!presetId) return true;
+              const preset = presets.find(p => p.id === presetId);
+              if (!preset) return true;
+              if (preset.name === 'JS Geography') return ['Assignments', 'Quizzes', 'Uniform Test', 'Exam'].includes(cat);
+              if (preset.name.includes('Learning Attitude')) return ['Assignments'].includes(cat);
+              return preset.weights[cat] > 0;
+            }).map(cat => (
               <li key={cat}>
                 <div
                   onClick={() => { setSelectedCategory(cat); setSelectedAssessment(null); }}
@@ -2248,7 +2290,10 @@ export default function Marks() {
                 {isMultiSectionCategory && (
                   <>
                     <button
-                      onClick={() => setShowOverviewModal(true)}
+                      onClick={() => {
+                        setRevealStep(studentView ? 0 : 4);
+                        setShowOverviewModal(true);
+                      }}
                       className="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200"
                     >
                       <BarChart2 className="w-4 h-4 mr-1.5" /> Overview & Graph
@@ -3186,8 +3231,8 @@ export default function Marks() {
       {/* Mark Overview & Graph Combined Modal */}
       {showOverviewModal && selectedAssessment && (
         <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4 sm:p-6">
-          <div className="bg-gray-50 rounded-2xl shadow-2xl w-full max-w-7xl max-h-[90vh] flex flex-col overflow-hidden">
-            <div className="p-5 border-b border-gray-200 flex justify-between items-center bg-white rounded-t-2xl shrink-0">
+          <div className={`bg-gray-50 shadow-2xl flex flex-col overflow-hidden transition-all duration-700 ${revealStep < 4 ? 'w-full h-full max-w-none max-h-none rounded-none' : 'rounded-2xl w-full max-w-7xl max-h-[90vh]'}`}>
+            <div className="p-5 border-b border-gray-200 flex justify-between items-center bg-white shrink-0">
               <h2 className="text-2xl font-bold text-gray-800 flex items-center">
                 <BarChart2 className="w-7 h-7 mr-3 text-indigo-600" />
                 Analytics Overview - {selectedAssessment.name}
@@ -3199,46 +3244,185 @@ export default function Marks() {
                 <X className="w-7 h-7" />
               </button>
             </div>
-            <div className="p-6 overflow-y-auto flex-1 flex flex-col lg:flex-row gap-8">
 
-              {/* Left Side: Mark Overview */}
-              <div className="w-full lg:w-1/2 space-y-6">
-                <h3 className="text-lg font-bold text-gray-700 border-b border-gray-200 pb-2">Component Statistics</h3>
-                {renderStatCard("Overall Total", getStats(statsData.final.marks, statsData.final.fullMark), statsData.final.fullMark, true)}
+            {revealStep < 4 ? (
+              <div className="flex-1 flex flex-col items-center justify-center p-10 bg-gradient-to-br from-indigo-50 to-blue-100 text-center overflow-hidden">
+                <AnimatePresence mode="wait">
+                  {revealStep === 0 && (
+                    <motion.div
+                      key="step0"
+                      initial={{ opacity: 0, scale: 0.8 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 1.1 }}
+                      transition={{ duration: 0.8 }}
+                    >
+                      <h3 className="text-6xl font-bold text-indigo-800 mb-12">Ready to Reveal Class Performance?</h3>
+                      <button
+                        onClick={() => setRevealStep(1)}
+                        className="px-12 py-6 bg-indigo-600 text-white text-2xl font-bold rounded-full shadow-2xl hover:bg-indigo-700 transition-all hover:scale-110 animate-pulse"
+                      >
+                        Reveal Mean & Pass Rate
+                      </button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
-                {selectedAssessment.sectionsConfig?.map(sec => (
-                  <div key={sec.id} className="space-y-4">
-                    {sec.hasSubSections ? (
-                      <>
-                        {sec.subSections.map(sub => (
-                          renderStatCard(`${sec.name} - ${sub.name}`, getStats(statsData[sub.id].marks, statsData[sub.id].fullMark), sub.fullMark)
-                        ))}
-                        {renderStatCard(`${sec.name} (Total)`, getStats(statsData[`sec_${sec.id}`].marks, statsData[`sec_${sec.id}`].fullMark), statsData[`sec_${sec.id}`].fullMark, false, true)}
-                      </>
-                    ) : (
-                      renderStatCard(sec.name, getStats(statsData[sec.id].marks, statsData[sec.id].fullMark), sec.fullMark)
-                    )}
-                  </div>
-                ))}
+                {revealStep >= 1 && (
+                  <motion.div
+                    key="step1"
+                    initial={{ opacity: 0, y: 50 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.8, delay: 0.8 }} // Waits for step 0 to exit
+                    className="mb-12 w-full flex flex-col items-center"
+                  >
+                    <h3 className="text-5xl font-bold text-indigo-800 mb-8">Class Performance</h3>
+                    <div className="flex gap-16 justify-center">
+                      <motion.div
+                        initial={{ opacity: 0, x: -50 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ duration: 0.8, delay: 1.2 }}
+                        className="bg-white p-10 rounded-3xl shadow-2xl border border-indigo-100 min-w-[300px]"
+                      >
+                        <p className="text-xl text-gray-500 uppercase tracking-wider font-bold">Mean Score</p>
+                        <p className="text-[6rem] leading-none font-extrabold text-blue-600 mt-6 flex items-baseline justify-center">
+                          {String(getStats(statsData.final.marks, statsData.final.fullMark)?.mean || '-').split('').map((char, i) => (
+                            <motion.span key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 1.8 + (i * 0.8) }}>
+                              {char}
+                            </motion.span>
+                          ))}
+                          <span className="text-4xl text-gray-400 ml-2 font-bold">
+                            / {statsData.final.fullMark}
+                          </span>
+                        </p>
+                      </motion.div>
+                      <motion.div
+                        initial={{ opacity: 0, x: 50 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ duration: 0.8, delay: 4.5 }} // Waits for mean score to finish
+                        className="bg-white p-10 rounded-3xl shadow-2xl border border-indigo-100 min-w-[300px]"
+                      >
+                        <p className="text-xl text-gray-500 uppercase tracking-wider font-bold">Pass Rate</p>
+                        <p className="text-[6rem] leading-none font-extrabold text-green-600 mt-6 flex items-baseline justify-center">
+                          {String(getStats(statsData.final.marks, statsData.final.fullMark)?.passCount || 0).split('').map((char, i) => (
+                            <motion.span key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 5.3 + (i * 0.8) }}>
+                              {char}
+                            </motion.span>
+                          ))}
+                          <span className="text-5xl text-gray-400 ml-2 font-bold">
+                            / {getStats(statsData.final.marks, statsData.final.fullMark)?.total || 0}
+                          </span>
+                        </p>
+                      </motion.div>
+                    </div>
+                  </motion.div>
+                )}
+
+                {revealStep >= 2 && (() => {
+                  const sortedTotals = currentClassStudents.map(s => {
+                    const scaled = hasSections ? calculateScaledTotal(marksData[s.id], selectedAssessment.sectionsConfig) : calculateTotal(marksData[s.id]);
+                    const deduction = parseFloat(marksData[`${s.id}_deduction`]) || 0;
+                    return { student: s, total: scaled !== null ? scaled - deduction : null };
+                  }).filter(s => s.total !== null).sort((a, b) => b.total - a.total);
+
+                  if (sortedTotals.length < 2) return null;
+
+                  return (
+                    <div className="flex gap-16 mt-4 items-end">
+                      <motion.div
+                        initial={{ opacity: 0, y: 100 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 1, delay: 0.5 }}
+                        className="bg-white p-10 rounded-3xl shadow-2xl border-4 border-slate-300 transform scale-95 min-w-[350px]"
+                      >
+                        <p className="text-xl text-slate-500 uppercase tracking-wider font-bold">2nd Highest</p>
+                        <div className="mt-6 flex flex-col items-center">
+                          <p className="text-4xl font-bold text-slate-700 text-center">{sortedTotals[1].student.englishName}</p>
+                          <p className="text-2xl font-medium text-slate-500 mt-2">{sortedTotals[1].student.chineseName}</p>
+                        </div>
+                        <p className="text-[5rem] leading-none font-extrabold text-slate-600 mt-6 flex items-baseline justify-center">
+                          {sortedTotals[1].total.toFixed(1)}
+                          <span className="text-3xl text-slate-400 ml-2 font-bold">
+                            / {statsData.final.fullMark}
+                          </span>
+                        </p>
+                      </motion.div>
+
+                      {revealStep >= 3 && (
+                        <motion.div
+                          initial={{ opacity: 0, scale: 0.5, y: 150 }}
+                          animate={{ opacity: 1, scale: 1.1, y: 0 }}
+                          transition={{ duration: 1.2, delay: 0.8, type: "spring", bounce: 0.4 }}
+                          className="bg-gradient-to-b from-yellow-100 to-yellow-50 p-12 rounded-3xl shadow-2xl border-4 border-yellow-400 z-10 min-w-[400px]"
+                        >
+                          <p className="text-2xl text-yellow-600 uppercase tracking-wider font-bold flex justify-center items-center gap-3 animate-bounce">🏆 Top Scorer 🏆</p>
+                          <div className="mt-6 flex flex-col items-center">
+                            <p className="text-5xl font-bold text-yellow-800 text-center">{sortedTotals[0].student.englishName}</p>
+                            <p className="text-3xl font-medium text-yellow-600 mt-2">{sortedTotals[0].student.chineseName}</p>
+                          </div>
+                          <p className="text-[7rem] leading-none font-extrabold text-yellow-600 mt-8 drop-shadow-lg flex items-baseline justify-center">
+                            {sortedTotals[0].total.toFixed(1)}
+                            <span className="text-4xl text-yellow-700/60 ml-2 font-bold">
+                              / {statsData.final.fullMark}
+                            </span>
+                          </p>
+                        </motion.div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {revealStep >= 1 && (
+                  <motion.button
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ duration: 1, delay: revealStep === 1 ? 7.5 : 1.5 }} // Delayed to appear after the slow numbering
+                    onClick={() => setRevealStep(prev => prev + 1)}
+                    className="mt-16 px-12 py-5 bg-indigo-600 text-white text-2xl font-bold rounded-full shadow-2xl hover:bg-indigo-700 transition-all hover:scale-110"
+                  >
+                    {revealStep === 1 ? "Reveal Top Students" : revealStep === 2 ? "Reveal Top Scorer" : "Show Full Statistics"}
+                  </motion.button>
+                )}
               </div>
+            ) : (
+              <div className="p-6 overflow-y-auto flex-1 flex flex-col lg:flex-row gap-8 animate-in fade-in duration-500">
+                {/* Left Side: Mark Overview */}
+                <div className="w-full lg:w-1/2 space-y-6">
+                  <h3 className="text-lg font-bold text-gray-700 border-b border-gray-200 pb-2">Component Statistics</h3>
+                  {renderStatCard("Overall Total", getStats(statsData.final.marks, statsData.final.fullMark), statsData.final.fullMark, true)}
 
-              {/* Right Side: SD Graph */}
-              <div className="w-full lg:w-1/2 flex flex-col">
-                <h3 className="text-lg font-bold text-gray-700 border-b border-gray-200 pb-2 mb-4">Score Distribution</h3>
-                <div className="flex-1 min-h-[400px] bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={getGraphData()}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="name" />
-                      <YAxis allowDecimals={false} />
-                      <Tooltip />
-                      <Bar dataKey="count" fill="#8b5cf6" name="Number of Students" />
-                    </BarChart>
-                  </ResponsiveContainer>
+                  {selectedAssessment.sectionsConfig?.map(sec => (
+                    <div key={sec.id} className="space-y-4">
+                      {sec.hasSubSections ? (
+                        <>
+                          {sec.subSections.map(sub => (
+                            renderStatCard(`${sec.name} - ${sub.name}`, getStats(statsData[sub.id].marks, statsData[sub.id].fullMark), sub.fullMark)
+                          ))}
+                          {renderStatCard(`${sec.name} (Total)`, getStats(statsData[`sec_${sec.id}`].marks, statsData[`sec_${sec.id}`].fullMark), statsData[`sec_${sec.id}`].fullMark, false, true)}
+                        </>
+                      ) : (
+                        renderStatCard(sec.name, getStats(statsData[sec.id].marks, statsData[sec.id].fullMark), sec.fullMark)
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Right Side: SD Graph */}
+                <div className="w-full lg:w-1/2 flex flex-col">
+                  <h3 className="text-lg font-bold text-gray-700 border-b border-gray-200 pb-2 mb-4">Score Distribution</h3>
+                  <div className="flex-1 min-h-[400px] bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={getGraphData()}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="name" />
+                        <YAxis allowDecimals={false} />
+                        <Tooltip />
+                        <Bar dataKey="count" fill="#8b5cf6" name="Number of Students" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
                 </div>
               </div>
-
-            </div>
+            )}
           </div>
         </div>
       )}

@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
 import { doc, getDoc, collection, getDocs, addDoc, query, orderBy, limit, updateDoc, setDoc, onSnapshot } from "firebase/firestore";
-import { Loader2, ShieldAlert, Users, X, Bell, Bug, ChevronDown } from 'lucide-react';
+import { Loader2, ShieldAlert, Users, X, Bell, Bug, ChevronDown, Globe } from 'lucide-react';
 
 // Import your components and firebase
 import App from './App.jsx';
@@ -13,6 +13,7 @@ import Record from './Record.jsx';
 import Marks from './Marks.jsx'; // <-- IMPORT THE NEW MARKS COMPONENT
 import StudentDashboard from './StudentDashboard.jsx'; // <-- ADD THIS IMPORT
 import List from './List.jsx'; // <-- ADD THIS IMPORT
+import { LanguageProvider, useLanguage } from './LanguageContext.jsx'; // <-- NEW IMPORT
 import { auth, db, googleProvider } from './firebase.js';
 import './index.css';
 
@@ -263,6 +264,7 @@ const Layout = ({ children }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, realUser, loginWithGoogle, logout, impersonatedEmail, setImpersonatedEmail } = useAuth();
+  const { language, setLanguage, t } = useLanguage(); // <-- ADDED HOOK
 
   const [showUsersModal, setShowUsersModal] = useState(false);
   const [showDebugModal, setShowDebugModal] = useState(false);
@@ -433,7 +435,17 @@ const Layout = ({ children }) => {
       <div className="bg-white border-b border-slate-200 sticky top-0 z-50 px-4 md:px-8 pt-4 shadow-sm">
         <div className="max-w-7xl mx-auto">
           <div className="flex justify-between items-center mb-4">
-            <h1 className="font-bold text-xl text-slate-800 tracking-tight">HISTORY ARCHIVE</h1>
+            <div className="flex items-center gap-4">
+              <h1 className="font-bold text-xl text-slate-800 tracking-tight">{t("HISTORY ARCHIVE")}</h1>
+              <button
+                onClick={() => setLanguage(language === 'en' ? 'zh' : 'en')}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-3 py-1.5 rounded-md transition-all shadow-sm border border-blue-700 active:scale-95"
+                title="Change Language"
+              >
+                <Globe size={14} />
+                {language === 'en' ? '繁體中文' : 'English'}
+              </button>
+            </div>
 
             {/* User Profile / Login */}
             <div>
@@ -621,12 +633,12 @@ const Layout = ({ children }) => {
                     <div className="text-xs text-slate-500 capitalize">{user.role ? user.role.replace('_', ' ') : 'Unauthorized'}</div>
                   </div>
                   <button onClick={logout} className="text-sm text-slate-500 hover:text-red-600 font-medium transition-colors">
-                    Sign Out
+                    {t("Sign Out")}
                   </button>
                 </div>
               ) : (
                 <button onClick={loginWithGoogle} className="flex items-center gap-2 bg-white border border-slate-300 text-slate-700 px-4 py-1.5 rounded-lg text-sm font-bold hover:bg-slate-50 transition-colors shadow-sm">
-                  Sign in
+                  {t("Sign in")}
                 </button>
               )}
             </div>
@@ -634,30 +646,29 @@ const Layout = ({ children }) => {
 
           <div className="flex gap-8 overflow-x-auto">
             <Link to="/" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isSearch ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-              Search Engine
+              {t("Search Engine")}
             </Link>
             <Link to="/trend" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isTrend ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-              DSE Trend Analysis
+              {t("DSE Trend Analysis")}
             </Link>
-            {/* ADD THIS NEW LINK HERE */}
             <Link to="/dashboard" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isDashboard ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-              Student Dashboard
+              {t("Student Dashboard")}
             </Link>
             <Link to="/list" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isList ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-              Saved Lists
+              {t("Saved Lists")}
             </Link>
 
             {/* ONLY SHOW TABS IF ADMIN */}
             {user?.isAdmin && (
               <>
                 <Link to="/pdf" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isPdf ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                  PDF Tools
+                  {t("PDF Tools")}
                 </Link>
                 <Link to="/record" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isRecord ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                  Record Management
+                  {t("Record Management")}
                 </Link>
                 <Link to="/marks" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isMarks ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                  Marks Management
+                  {t("Marks Management")}
                 </Link>
               </>
             )}
@@ -678,32 +689,34 @@ const Layout = ({ children }) => {
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <AuthProvider>
-      <BrowserRouter>
-        <Layout>
-          <Routes>
-            <Route path="/" element={<App />} />
-            <Route path="/trend" element={<DseTrend />} />
-            <Route path="/pdf" element={
-              <ProtectedAdminRoute>
-                <PdfTool />
-              </ProtectedAdminRoute>
-            } />
-            <Route path="/record" element={
-              <ProtectedAdminRoute>
-                <Record />
-              </ProtectedAdminRoute>
-            } />
-            {/* PROTECTED ROUTE FOR MARKS (ADMIN ONLY) */}
-            <Route path="/marks" element={
-              <ProtectedAdminRoute>
-                <Marks />
-              </ProtectedAdminRoute>
-            } />
-            <Route path="/dashboard" element={<StudentDashboard />} />
-            <Route path="/list" element={<List />} />
-          </Routes>
-        </Layout>
-      </BrowserRouter>
+      <LanguageProvider>
+        <BrowserRouter>
+          <Layout>
+            <Routes>
+              <Route path="/" element={<App />} />
+              <Route path="/trend" element={<DseTrend />} />
+              <Route path="/pdf" element={
+                <ProtectedAdminRoute>
+                  <PdfTool />
+                </ProtectedAdminRoute>
+              } />
+              <Route path="/record" element={
+                <ProtectedAdminRoute>
+                  <Record />
+                </ProtectedAdminRoute>
+              } />
+              {/* PROTECTED ROUTE FOR MARKS (ADMIN ONLY) */}
+              <Route path="/marks" element={
+                <ProtectedAdminRoute>
+                  <Marks />
+                </ProtectedAdminRoute>
+              } />
+              <Route path="/dashboard" element={<StudentDashboard />} />
+              <Route path="/list" element={<List />} />
+            </Routes>
+          </Layout>
+        </BrowserRouter>
+      </LanguageProvider>
     </AuthProvider>
   </React.StrictMode>,
 );

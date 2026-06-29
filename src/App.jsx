@@ -34,6 +34,7 @@ import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage
 
 // --- IMPORT UPDATE CONTENT ---
 import { UpdateContent, updateVersion } from './UpdateContent.jsx';
+import { useLanguage } from './LanguageContext.jsx';
 
 // --- APP CONSTANTS ---
 const ORIGINS = ["DSE Pastpaper", "Internal School Exam", "Mock Examination", "Quiz", "Exercise"];
@@ -100,7 +101,8 @@ const parsePages = (pageStr, maxPages) => {
 };
 
 // --- REUSABLE COMPONENT: GRID CHECKBOX GROUP (No Scroll) ---
-const CheckboxGroup = ({ options, selectedValues, onChange }) => {
+const CheckboxGroup = ({ options, selectedValues, onChange, tagTranslations = {}, language = 'en' }) => {
+  const { t } = useLanguage();
   const toggleValue = (val) => {
     if (selectedValues.includes(val)) {
       onChange(selectedValues.filter(v => v !== val));
@@ -128,12 +130,12 @@ const CheckboxGroup = ({ options, selectedValues, onChange }) => {
               }
             `}
           >
-            {label}
+            {language === 'zh' && tagTranslations[value] ? tagTranslations[value] : (typeof label === 'string' ? t(label) : label)}
           </div>
         );
       })}
       {options.length === 0 && (
-        <div className="col-span-full text-[10px] md:text-xs text-slate-400 italic p-1 md:p-2 text-center">No options available</div>
+        <div className="col-span-full text-[10px] md:text-xs text-slate-400 italic p-1 md:p-2 text-center">{t("No options available")}</div>
       )}
     </div>
   );
@@ -141,6 +143,7 @@ const CheckboxGroup = ({ options, selectedValues, onChange }) => {
 
 // --- REUSABLE COMPONENT: FILTER ACCORDION ---
 const FilterAccordion = ({ title, isOpen, onToggle, count, children, disabled, helperText }) => {
+  const { t } = useLanguage();
   return (
     <div className={`border border-slate-200 rounded-lg md:rounded-xl bg-white overflow-hidden ${disabled ? 'opacity-60 grayscale' : 'shadow-sm'}`}>
       <button
@@ -149,10 +152,10 @@ const FilterAccordion = ({ title, isOpen, onToggle, count, children, disabled, h
       >
         <div className="flex flex-col items-start">
           <div className="flex items-center gap-2 md:gap-3">
-            {title}
-            {count > 0 && <span className="bg-blue-600 text-white text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 rounded-full">{count} Selected</span>}
+            {typeof title === 'string' ? t(title) : title}
+            {count > 0 && <span className="bg-blue-600 text-white text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 rounded-full">{count} {t("Selected")}</span>}
           </div>
-          {helperText && <span className="text-[10px] md:text-xs text-slate-400 font-normal mt-0.5 md:mt-1">{helperText}</span>}
+          {helperText && <span className="text-[10px] md:text-xs text-slate-400 font-normal mt-0.5 md:mt-1">{typeof helperText === 'string' ? t(helperText) : helperText}</span>}
         </div>
         <div className={`p-0.5 md:p-1 rounded-full bg-slate-100 transition-transform duration-300 ${isOpen ? 'rotate-180 bg-blue-100 text-blue-600' : 'text-slate-400'}`}>
           <ChevronDown size={16} className="md:w-5 md:h-5" />
@@ -188,6 +191,7 @@ const CreatableSelect = ({
   icon: Icon,
   isMulti = false
 }) => {
+  const { t } = useLanguage();
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
   const wrapperRef = useRef(null);
@@ -269,7 +273,7 @@ const CreatableSelect = ({
         <input
           type="text"
           className={`w-full ${Icon ? 'pl-9' : 'pl-3'} pr-8 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all ${disabled ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : ''}`}
-          placeholder={isMulti && selectedValues.length > 0 ? "Add another..." : placeholder}
+          placeholder={isMulti && selectedValues.length > 0 ? t("Add another...") : (placeholder ? t(placeholder) : '')}
           value={search}
           disabled={disabled}
           onChange={(e) => {
@@ -308,7 +312,7 @@ const CreatableSelect = ({
               ))
             ) : (
               <div className="px-4 py-2 text-xs text-slate-400 italic">
-                {search ? "No matches found" : "Start typing to search"}
+                {search ? t("No matches found") : t("Start typing to search")}
               </div>
             )}
 
@@ -319,7 +323,7 @@ const CreatableSelect = ({
                 className="w-full text-left px-4 py-2 text-sm bg-blue-50 text-blue-700 hover:bg-blue-100 font-medium border-t border-blue-100 flex items-center gap-2"
               >
                 <Plus size={14} />
-                Add "{search}"
+                {t("Add")} "{search}"
               </button>
             )}
           </motion.div>
@@ -331,6 +335,7 @@ const CreatableSelect = ({
 
 // --- REUSABLE COMPONENT: PAGINATION CONTROLS ---
 const PaginationControls = ({ currentPage, totalPages, onPageChange, itemsPerPage, setItemsPerPage, className = "" }) => {
+  const { t } = useLanguage();
   const getPageNumbers = () => {
     const pages = [];
     if (totalPages <= 7) {
@@ -386,7 +391,7 @@ const PaginationControls = ({ currentPage, totalPages, onPageChange, itemsPerPag
       </div>
 
       <div className="flex items-center gap-1 md:gap-2 text-[10px] md:text-sm text-slate-600">
-        <span className="hidden sm:inline">Show</span>
+        <span className="hidden sm:inline">{t("Show")}</span>
         <select
           value={itemsPerPage}
           onChange={(e) => setItemsPerPage(Number(e.target.value))}
@@ -396,7 +401,7 @@ const PaginationControls = ({ currentPage, totalPages, onPageChange, itemsPerPag
           <option value={20}>20</option>
           <option value={50}>50</option>
         </select>
-        <span className="hidden sm:inline">results per page</span>
+        <span className="hidden sm:inline">{t("results per page")}</span>
       </div>
     </div>
   );
@@ -464,6 +469,13 @@ export default function AdvancedHistoryArchive() {
   const navigate = useNavigate(); // <-- ADD THIS
   // --- GRAB GLOBAL AUTH STATE ---
   const { user, authLoading, loginWithGoogle, logout } = useAuth();
+  const { t, language } = useLanguage();
+
+  // Helper to translate tags
+  const getTranslatedTag = (tag) => {
+    if (language === 'zh' && tagTranslations[tag]) return tagTranslations[tag];
+    return tag;
+  };
 
   // --- UPDATE NOTIFICATION STATE ---
   const [showUpdateModal, setShowUpdateModal] = useState(false);
@@ -566,6 +578,8 @@ export default function AdvancedHistoryArchive() {
   const [editingId, setEditingId] = useState(null);
   const [pendingToolFile, setPendingToolFile] = useState(null);
   const [showToolLinkModal, setShowToolLinkModal] = useState(false);
+  const [tagTranslations, setTagTranslations] = useState({});
+  const [uploadLangTab, setUploadLangTab] = useState('en'); // 'en' or 'zh'
   const [uploadForm, setUploadForm] = useState({
     title: '',
     origin: '',
@@ -573,17 +587,21 @@ export default function AdvancedHistoryArchive() {
     paperType: '',
     topic: [],
     tier: '10',
-    subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' }]
+    subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', contentChi: '', topic: [], sourceType: [], marks: '', candidatePerformance: '', candidatePerformanceChi: '' }]
   });
   const [selectedFile, setSelectedFile] = useState(null);
   const [selectedAnswerFile, setSelectedAnswerFile] = useState(null);
+  const [selectedFileChi, setSelectedFileChi] = useState(null);
+  const [selectedAnswerFileChi, setSelectedAnswerFileChi] = useState(null);
 
   // Batch Exam Form State
+  const [batchLangTab, setBatchLangTab] = useState('en'); // 'en' or 'zh'
   const [batchForm, setBatchForm] = useState({
     title: '', origin: '', year: new Date().getFullYear().toString(), tier: '10',
     questions: [
       {
         id: Date.now(), paperType: 'Paper 1 (DBQ)', topic: [], pagesStr: '', ansPagesStr: '', ansSource: 'answer',
+        pagesStrChi: '', ansPagesStrChi: '', ansSourceChi: 'answer', hasFile: false, hasAnswer: false, fileUrlChi: '', answerFileUrlChi: '',
         subQuestions: [{ id: Date.now() + 1, label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' }]
       }
     ]
@@ -594,6 +612,14 @@ export default function AdvancedHistoryArchive() {
   const [batchLoadedAnsPdf, setBatchLoadedAnsPdf] = useState(null);
   const [batchPdfPreviewUrl, setBatchPdfPreviewUrl] = useState('');
   const [batchAnsPdfPreviewUrl, setBatchAnsPdfPreviewUrl] = useState('');
+
+  const [batchPdfFileChi, setBatchPdfFileChi] = useState(null);
+  const [batchAnsPdfFileChi, setBatchAnsPdfFileChi] = useState(null);
+  const [batchLoadedPdfChi, setBatchLoadedPdfChi] = useState(null);
+  const [batchLoadedAnsPdfChi, setBatchLoadedAnsPdfChi] = useState(null);
+  const [batchPdfPreviewUrlChi, setBatchPdfPreviewUrlChi] = useState('');
+  const [batchAnsPdfPreviewUrlChi, setBatchAnsPdfPreviewUrlChi] = useState('');
+
   const [batchPreviewMode, setBatchPreviewMode] = useState('question'); // 'question' | 'answer'
 
   // Student Sample Form State
@@ -1450,8 +1476,13 @@ export default function AdvancedHistoryArchive() {
           specificTag = `${parent.title} Q1${child.label}`;
         }
 
-        const searchString = `${parent.title} ${specificTag} ${parentTopicsStr} ${childTopicsStr} ${qTypesStr} ${sTypesStr} ${child.content}`.toLowerCase();
-        const matchSearch = searchTerm === '' || searchString.includes(searchTerm.toLowerCase());
+        const cleanContentChi = (child.contentChi || '').replace(/\s+/g, '');
+        const searchString = `${parent.title} ${specificTag} ${parentTopicsStr} ${childTopicsStr} ${qTypesStr} ${sTypesStr} ${child.content || ''} ${cleanContentChi}`.toLowerCase();
+
+        // Match exact search term, OR match search term with spaces removed (useful for Chinese queries)
+        const matchSearch = searchTerm === '' ||
+          searchString.includes(searchTerm.toLowerCase()) ||
+          searchString.includes(searchTerm.toLowerCase().replace(/\s+/g, ''));
 
         if (matchQuestionType && matchSourceType && matchMarks && matchSearch && matchTopic) {
           // Identify if it's Extra Practice: Tier < 10, unlocked naturally, NOT via dashboard link
@@ -1526,11 +1557,16 @@ export default function AdvancedHistoryArchive() {
       // Tertiary sort: User selected option
       switch (sortOption) {
         case 'year_desc':
-          return b.parent.year - a.parent.year;
+          if (b.parent.year !== a.parent.year) return b.parent.year - a.parent.year;
+          if (a.parent.title !== b.parent.title) return a.parent.title.localeCompare(b.parent.title, undefined, { numeric: true });
+          return a.child && b.child ? a.child.label.localeCompare(b.child.label, undefined, { numeric: true }) : 0;
         case 'year_asc':
-          return a.parent.year - b.parent.year;
+          if (a.parent.year !== b.parent.year) return a.parent.year - b.parent.year;
+          if (a.parent.title !== b.parent.title) return a.parent.title.localeCompare(b.parent.title, undefined, { numeric: true });
+          return a.child && b.child ? a.child.label.localeCompare(b.child.label, undefined, { numeric: true }) : 0;
         case 'title_asc':
-          return a.parent.title.localeCompare(b.parent.title);
+          if (a.parent.title !== b.parent.title) return a.parent.title.localeCompare(b.parent.title, undefined, { numeric: true });
+          return a.child && b.child ? a.child.label.localeCompare(b.child.label, undefined, { numeric: true }) : 0;
         case 'added_desc':
           const dateA = a.parent.updatedAt ? new Date(a.parent.updatedAt).getTime() : 0;
           const dateB = b.parent.updatedAt ? new Date(b.parent.updatedAt).getTime() : 0;
@@ -1706,27 +1742,110 @@ export default function AdvancedHistoryArchive() {
     }
   };
 
+  // --- FETCH TAG TRANSLATIONS ON LOAD ---
+  useEffect(() => {
+    const fetchTranslations = async () => {
+      try {
+        const docRef = doc(db, "system_settings", "translations");
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          setTagTranslations(docSnap.data().tags || {});
+        }
+      } catch (error) {
+        console.error("Error fetching translations:", error);
+      }
+    };
+    fetchTranslations();
+  }, []);
+
+  // --- SAVE TAG TRANSLATIONS TO FIREBASE ---
+  const handleSaveTranslations = async () => {
+    if (!user?.isAdmin) return;
+    try {
+      await setDoc(doc(db, "system_settings", "translations"), {
+        tags: tagTranslations
+      }, { merge: true });
+      setIsManageFiltersOpen(false);
+      alert("Tag translations saved successfully!");
+    } catch (error) {
+      console.error("Error saving translations:", error);
+      alert("Failed to save translations.");
+    }
+  };
+
   // --- MODAL HANDLERS ---
 
   const handleEditClick = (e, parentItem) => {
     e.stopPropagation();
     if (!user?.isAdmin) return;
-    setEditingId(parentItem.id);
-    setUploadSelection('question');
 
-    const itemData = JSON.parse(JSON.stringify(parentItem));
-    itemData.topic = ensureArray(itemData.topic);
-    itemData.tier = itemData.tier || '10'; // <-- Ensure tier exists when editing
-    itemData.subQuestions = itemData.subQuestions.map(sq => ({
-      ...sq,
-      questionType: ensureArray(sq.questionType),
-      topic: ensureArray(sq.topic),
-      sourceType: ensureArray(sq.sourceType)
+    // Auto-reconstruct batch based on title prefix (e.g., "2024 MidtermD Q1" -> "2024 Midterm")
+    const baseTitleMatch = parentItem.title.match(/^(.*?)(?:D Q\d+|E| - Q\d+)$/);
+    const baseTitle = baseTitleMatch ? baseTitleMatch[1].trim() : parentItem.title;
+
+    let relatedDocs = archives.filter(a => a.title.startsWith(baseTitle) && a.year === parentItem.year);
+
+    // Sort related docs to strictly enforce D Q1, D Q2... E order
+    relatedDocs.sort((a, b) => {
+      const getOrder = (title) => {
+        if (title.endsWith('E')) return 9999; // Force Paper 2 (Essay) to the very end
+        const match = title.match(/Q(\d+)/);
+        return match ? parseInt(match[1], 10) : 0; // Sort DBQs by their number
+      };
+      return getOrder(a.title) - getOrder(b.title);
+    });
+
+    const reconstructedQuestions = relatedDocs.map(doc => ({
+      id: doc.id, // existing ID to allow updating
+      paperType: doc.paperType,
+      topic: ensureArray(doc.topic),
+      pagesStr: '',
+      ansPagesStr: '',
+      ansSource: 'answer',
+      pagesStrChi: '',
+      ansPagesStrChi: '',
+      ansSourceChi: 'answer',
+      hasFile: doc.hasFile,
+      hasAnswer: doc.hasAnswer,
+      fileUrl: doc.fileUrl,
+      answerFileUrl: doc.answerFileUrl,
+      fileUrlChi: doc.fileUrlChi,
+      answerFileUrlChi: doc.answerFileUrlChi,
+      subQuestions: doc.subQuestions.map(sq => ({
+        ...sq,
+        questionType: ensureArray(sq.questionType),
+        topic: ensureArray(sq.topic),
+        sourceType: ensureArray(sq.sourceType)
+      }))
     }));
 
-    setUploadForm(itemData);
+    setBatchForm({
+      title: baseTitle,
+      origin: parentItem.origin,
+      year: parentItem.year,
+      tier: parentItem.tier || '10',
+      questions: reconstructedQuestions.length > 0 ? reconstructedQuestions : [{
+        id: parentItem.id,
+        paperType: parentItem.paperType,
+        topic: ensureArray(parentItem.topic),
+        pagesStr: '',
+        ansPagesStr: '',
+        ansSource: 'answer',
+        pagesStrChi: '',
+        ansPagesStrChi: '',
+        ansSourceChi: 'answer',
+        hasFile: parentItem.hasFile,
+        hasAnswer: parentItem.hasAnswer,
+        fileUrl: parentItem.fileUrl,
+        answerFileUrl: parentItem.answerFileUrl,
+        fileUrlChi: parentItem.fileUrlChi,
+        answerFileUrlChi: parentItem.answerFileUrlChi,
+        subQuestions: parentItem.subQuestions
+      }]
+    });
+    setEditingId(parentItem.id);
+    setUploadSelection('batch'); // Open batch interface instead of single question
     setDeleteConfirm(false);
-
     setIsUploadModalOpen(true);
   };
 
@@ -1828,7 +1947,28 @@ export default function AdvancedHistoryArchive() {
         answerFileUrl = await getDownloadURL(ansRef);
       }
 
+      let fileUrlChi = uploadForm.fileUrlChi || '';
+      let answerFileUrlChi = uploadForm.answerFileUrlChi || '';
+
+      if (selectedFileChi) {
+        const fileExtension = selectedFileChi.name.split('.').pop();
+        const newFileName = `${safeTitle}-chi.${fileExtension}`;
+        const storageRef = ref(storage, `pdfs/${safeOrigin}/${newFileName}`);
+        await uploadBytes(storageRef, selectedFileChi, { contentType: 'application/pdf' });
+        fileUrlChi = await getDownloadURL(storageRef);
+      }
+
+      if (selectedAnswerFileChi) {
+        const ansExtension = selectedAnswerFileChi.name.split('.').pop();
+        const ansFileName = `${safeTitle}-chi answer.${ansExtension}`;
+        const ansRef = ref(storage, `pdfs/${safeOrigin}/answer/${ansFileName}`);
+        await uploadBytes(ansRef, selectedAnswerFileChi, { contentType: 'application/pdf' });
+        answerFileUrlChi = await getDownloadURL(ansRef);
+      }
+
       const payload = JSON.parse(JSON.stringify({
+        fileUrlChi,
+        answerFileUrlChi,
         title: uploadForm.title,
         origin: uploadForm.origin,
         year: uploadForm.year,
@@ -1873,23 +2013,28 @@ export default function AdvancedHistoryArchive() {
   const handleBatchSubmit = async (e) => {
     e.preventDefault();
     if (!user?.isAdmin) return;
-    if (!batchForm.title || !batchLoadedPdf) return alert("Please provide a title and main PDF.");
+    if (!batchForm.title || (!batchLoadedPdf && !batchLoadedPdfChi && !editingId)) return alert("Please provide a title and main PDF.");
     setIsLoading(true);
 
     try {
       const safeTitle = batchForm.title.replace(/[^a-zA-Z0-9\s\-_]/g, '').trim();
       const safeOrigin = (batchForm.origin || 'Uncategorized').replace(/[^a-zA-Z0-9\s\-_]/g, '_');
-      const pdfPageCount = batchLoadedPdf.getPageCount();
+      const pdfPageCount = batchLoadedPdf ? batchLoadedPdf.getPageCount() : 0;
       const ansPageCount = batchLoadedAnsPdf ? batchLoadedAnsPdf.getPageCount() : pdfPageCount;
+
+      const pdfPageCountChi = batchLoadedPdfChi ? batchLoadedPdfChi.getPageCount() : 0;
+      const ansPageCountChi = batchLoadedAnsPdfChi ? batchLoadedAnsPdfChi.getPageCount() : pdfPageCountChi;
 
       for (let i = 0; i < batchForm.questions.length; i++) {
         const q = batchForm.questions[i];
-        let qFileUrl = '';
-        let qAnsFileUrl = '';
+        let qFileUrl = q.fileUrl || '';
+        let qAnsFileUrl = q.answerFileUrl || '';
+        let qFileUrlChi = q.fileUrlChi || '';
+        let qAnsFileUrlChi = q.answerFileUrlChi || '';
 
-        // Split Main PDF for Question
+        // Split Main PDF for Question (English)
         const qPages = parsePages(q.pagesStr, pdfPageCount);
-        if (qPages.length > 0) {
+        if (qPages.length > 0 && batchLoadedPdf) {
           const splitPdf = await PDFDocument.create();
           const copiedPages = await splitPdf.copyPages(batchLoadedPdf, qPages);
           copiedPages.forEach(p => splitPdf.addPage(p));
@@ -1912,6 +2057,31 @@ export default function AdvancedHistoryArchive() {
           qAnsFileUrl = await getDownloadURL(splitAnsRef);
         }
 
+        // Split Main PDF for Question (Chinese)
+        const qPagesChi = parsePages(q.pagesStrChi, pdfPageCountChi);
+        if (qPagesChi.length > 0 && batchLoadedPdfChi) {
+          const splitPdfChi = await PDFDocument.create();
+          const copiedPagesChi = await splitPdfChi.copyPages(batchLoadedPdfChi, qPagesChi);
+          copiedPagesChi.forEach(p => splitPdfChi.addPage(p));
+          const splitBytesChi = await splitPdfChi.save();
+          const splitRefChi = ref(storage, `pdfs/${safeOrigin}/${safeTitle}-chi_Q${i + 1}_${Date.now()}.pdf`);
+          await uploadBytes(splitRefChi, splitBytesChi, { contentType: 'application/pdf' });
+          qFileUrlChi = await getDownloadURL(splitRefChi);
+        }
+
+        // Split Answer PDF (Chinese)
+        const ansPagesChi = parsePages(q.ansPagesStrChi, ansPageCountChi);
+        if (ansPagesChi.length > 0 && (batchLoadedAnsPdfChi || batchLoadedPdfChi)) {
+          const sourceAnsPdfChi = (q.ansSourceChi === 'main') ? batchLoadedPdfChi : (batchLoadedAnsPdfChi || batchLoadedPdfChi);
+          const splitAnsPdfChi = await PDFDocument.create();
+          const copiedAnsPagesChi = await splitAnsPdfChi.copyPages(sourceAnsPdfChi, ansPagesChi);
+          copiedAnsPagesChi.forEach(p => splitAnsPdfChi.addPage(p));
+          const splitAnsBytesChi = await splitAnsPdfChi.save();
+          const splitAnsRefChi = ref(storage, `pdfs/${safeOrigin}/answer/${safeTitle}-chi_Q${i + 1}_ans_${Date.now()}.pdf`);
+          await uploadBytes(splitAnsRefChi, splitAnsBytesChi, { contentType: 'application/pdf' });
+          qAnsFileUrlChi = await getDownloadURL(splitAnsRefChi);
+        }
+
         const payload = {
           title: q.paperType === 'Paper 1 (DBQ)'
             ? `${batchForm.title}D Q${i + 1}`
@@ -1924,16 +2094,24 @@ export default function AdvancedHistoryArchive() {
           topic: q.topic,
           tier: batchForm.tier,
           subQuestions: q.subQuestions,
-          fileUrl: qFileUrl,
-          answerFileUrl: qAnsFileUrl,
-          hasFile: !!qFileUrl,
-          hasAnswer: !!qAnsFileUrl,
+          // Only overwrite URLs if new ones were generated during this edit
+          ...(qFileUrl && { fileUrl: qFileUrl, hasFile: true }),
+          ...(qAnsFileUrl && { answerFileUrl: qAnsFileUrl, hasAnswer: true }),
+          ...(qFileUrlChi && { fileUrlChi: qFileUrlChi }),
+          ...(qAnsFileUrlChi && { answerFileUrlChi: qAnsFileUrlChi }),
           updatedAt: new Date().toISOString(),
           updatedBy: user.email
         };
 
-        const docRef = await addDoc(collection(db, "archives"), payload);
-        setArchives(prev => [{ id: docRef.id, ...payload }, ...prev]);
+        if (typeof q.id === 'string' && q.id.length > 10) {
+          // Existing document update
+          await updateDoc(doc(db, "archives", q.id), payload);
+          setArchives(prev => prev.map(item => item.id === q.id ? { ...item, ...payload } : item));
+        } else {
+          // New document
+          const docRef = await addDoc(collection(db, "archives"), payload);
+          setArchives(prev => [{ id: docRef.id, ...payload }, ...prev]);
+        }
 
         ensureArray(payload.topic).forEach(t => handleCreateTopic(t));
         payload.subQuestions.forEach(sq => {
@@ -1952,26 +2130,41 @@ export default function AdvancedHistoryArchive() {
     }
   };
 
-  const handleBatchPdfChange = async (e, isAnswer = false) => {
+  const handleBatchPdfChange = async (e, isAnswer = false, isChinese = false) => {
     const file = e.target.files[0];
     if (!file) return;
     setIsLoading(true);
     try {
       const fileBytes = await file.arrayBuffer();
       const pdfDoc = await PDFDocument.load(fileBytes);
-      if (isAnswer) {
-        setBatchAnsPdfFile(file);
-        setBatchLoadedAnsPdf(pdfDoc);
-        if (batchAnsPdfPreviewUrl) URL.revokeObjectURL(batchAnsPdfPreviewUrl);
-        setBatchAnsPdfPreviewUrl(URL.createObjectURL(file));
-        setBatchPreviewMode('answer');
+      const fileUrl = URL.createObjectURL(file);
+
+      if (isChinese) {
+        if (isAnswer) {
+          setBatchAnsPdfFileChi(file);
+          setBatchLoadedAnsPdfChi(pdfDoc);
+          if (batchAnsPdfPreviewUrlChi) URL.revokeObjectURL(batchAnsPdfPreviewUrlChi);
+          setBatchAnsPdfPreviewUrlChi(fileUrl);
+        } else {
+          setBatchPdfFileChi(file);
+          setBatchLoadedPdfChi(pdfDoc);
+          if (batchPdfPreviewUrlChi) URL.revokeObjectURL(batchPdfPreviewUrlChi);
+          setBatchPdfPreviewUrlChi(fileUrl);
+        }
       } else {
-        setBatchPdfFile(file);
-        setBatchLoadedPdf(pdfDoc);
-        if (batchPdfPreviewUrl) URL.revokeObjectURL(batchPdfPreviewUrl);
-        setBatchPdfPreviewUrl(URL.createObjectURL(file));
-        setBatchPreviewMode('question');
+        if (isAnswer) {
+          setBatchAnsPdfFile(file);
+          setBatchLoadedAnsPdf(pdfDoc);
+          if (batchAnsPdfPreviewUrl) URL.revokeObjectURL(batchAnsPdfPreviewUrl);
+          setBatchAnsPdfPreviewUrl(fileUrl);
+        } else {
+          setBatchPdfFile(file);
+          setBatchLoadedPdf(pdfDoc);
+          if (batchPdfPreviewUrl) URL.revokeObjectURL(batchPdfPreviewUrl);
+          setBatchPdfPreviewUrl(fileUrl);
+        }
       }
+      setBatchPreviewMode(isAnswer ? 'answer' : 'question');
     } catch (error) {
       console.error("Error loading PDF:", error);
       alert("Failed to load PDF.");
@@ -2184,7 +2377,7 @@ export default function AdvancedHistoryArchive() {
       setDeleteConfirm(false);
       setUploadForm({
         title: '', origin: '', year: new Date().getFullYear().toString(), paperType: '', topic: [], tier: '10',
-        subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' }]
+        subQuestions: [{ id: Date.now(), label: 'a', questionType: [], content: '', contentChi: '', topic: [], sourceType: [], marks: '', candidatePerformance: '', candidatePerformanceChi: '' }]
       });
       setSelectedFile(null);
       setSelectedAnswerFile(null);
@@ -2285,7 +2478,7 @@ export default function AdvancedHistoryArchive() {
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
         <div className="flex flex-col items-center gap-4">
           <Loader2 className="animate-spin text-blue-600" size={40} />
-          <p className="text-slate-500 font-medium">Verifying Access...</p>
+          <p className="text-slate-500 font-medium">{t("Verifying Access...")}</p>
         </div>
       </div>
     );
@@ -2306,20 +2499,20 @@ export default function AdvancedHistoryArchive() {
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2 md:gap-4 mb-3 md:mb-6">
           <div className="flex-1 flex flex-row md:flex-col items-center md:items-start justify-between w-full md:w-auto">
             <h1 className="text-sm md:text-3xl font-bold text-slate-800 flex items-center gap-2 md:gap-3">
-              <span className="hidden md:inline">History Archive</span>
+              <span className="hidden md:inline">{t("HISTORY ARCHIVE")}</span>
               {user && user.isAdmin && (
-                <span className="text-[10px] md:text-xs bg-purple-600 text-white px-1.5 md:px-2 py-0.5 md:py-1 rounded-md uppercase tracking-wider font-bold">Admin Mode</span>
+                <span className="text-[10px] md:text-xs bg-purple-600 text-white px-1.5 md:px-2 py-0.5 md:py-1 rounded-md uppercase tracking-wider font-bold">{t("Admin Mode")}</span>
               )}
               {user && user.isAuthorized && !user.isAdmin && (
-                <span className="text-[10px] md:text-xs bg-green-600 text-white px-1.5 md:px-2 py-0.5 md:py-1 rounded-md uppercase tracking-wider font-bold">Viewer Mode</span>
+                <span className="text-[10px] md:text-xs bg-green-600 text-white px-1.5 md:px-2 py-0.5 md:py-1 rounded-md uppercase tracking-wider font-bold">{t("Viewer Mode")}</span>
               )}
             </h1>
 
             <div className="flex items-center gap-4 mt-0 md:mt-3">
               <p className="text-slate-500 text-xs md:text-sm">
                 {user && user.isAuthorized
-                  ? `Found ${filteredResults.length} ${displayMode === 'subquestion' ? 'sub-questions' : 'papers'}`
-                  : 'Secure Database Access'
+                  ? `${t("Found")} ${filteredResults.length} ${displayMode === 'subquestion' ? t('sub-questions') : t('papers')}`
+                  : t('Secure Database Access')
                 }
               </p>
 
@@ -2329,7 +2522,7 @@ export default function AdvancedHistoryArchive() {
                   <User size={12} />
                   <span className="truncate w-32">{user.email}</span>
                   <button onClick={logout} className="text-red-500 hover:text-red-700 hover:underline ml-1">
-                    Sign Out
+                    {t("Sign Out")}
                   </button>
                 </div>
               )}
@@ -2342,13 +2535,13 @@ export default function AdvancedHistoryArchive() {
                 onClick={() => setIsUserManagementOpen(true)}
                 className="btn-secondary flex-1 md:flex-none hover:bg-purple-50 hover:text-purple-700 hover:border-purple-200 text-[10px] md:text-sm px-2 py-1.5 md:px-4 md:py-2"
               >
-                <Users className="w-3.5 h-3.5 md:w-[18px] md:h-[18px]" /> <span className="whitespace-nowrap">Access</span>
+                <Users className="w-3.5 h-3.5 md:w-[18px] md:h-[18px]" /> <span className="whitespace-nowrap">{t("Access")}</span>
               </button>
               <button onClick={openManageSamplesModal} className="btn-secondary flex-1 md:flex-none hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 text-[10px] md:text-sm px-2 py-1.5 md:px-4 md:py-2">
-                <FolderOpen className="w-3.5 h-3.5 md:w-[18px] md:h-[18px]" /> <span className="whitespace-nowrap">Samples</span>
+                <FolderOpen className="w-3.5 h-3.5 md:w-[18px] md:h-[18px]" /> <span className="whitespace-nowrap">{t("Samples")}</span>
               </button>
               <button onClick={() => setIsUploadModalOpen(true)} className="btn-primary flex-1 md:flex-none text-[10px] md:text-sm px-2 py-1.5 md:px-4 md:py-2">
-                <Upload className="w-3.5 h-3.5 md:w-[18px] md:h-[18px]" /> <span className="whitespace-nowrap">Upload</span>
+                <Upload className="w-3.5 h-3.5 md:w-[18px] md:h-[18px]" /> <span className="whitespace-nowrap">{t("Upload")}</span>
               </button>
             </div>
           )}
@@ -2359,12 +2552,12 @@ export default function AdvancedHistoryArchive() {
         {!user && (
           <div className="flex flex-col items-center justify-center py-20 text-slate-400 bg-white rounded-xl border border-slate-200 border-dashed">
             <Lock size={48} className="mb-4 text-slate-300" />
-            <h3 className="text-lg font-semibold text-slate-600">Access Restricted</h3>
+            <h3 className="text-lg font-semibold text-slate-600">{t("Access Restricted")}</h3>
             <p className="text-sm max-w-xs text-center mt-2 mb-6">
-              You must be logged in to view the archive contents.
+              {t("You must be logged in to view the archive contents.")}
             </p>
             <button onClick={loginWithGoogle} className="btn-primary">
-              <LogIn size={16} /> Login with Google
+              <LogIn size={16} /> {t("Login with Google")}
             </button>
           </div>
         )}
@@ -2372,10 +2565,10 @@ export default function AdvancedHistoryArchive() {
         {user && !user.isAuthorized && (
           <div className="flex flex-col items-center justify-center py-20 text-slate-400 bg-red-50 rounded-xl border border-red-100">
             <ShieldAlert size={48} className="mb-4 text-red-300" />
-            <h3 className="text-lg font-semibold text-red-700">Unauthorized Access</h3>
+            <h3 className="text-lg font-semibold text-red-700">{t("Unauthorized Access")}</h3>
             <p className="text-sm max-w-md text-center mt-2 text-red-600">
-              Your account ({user.email}) does not have permission to view these documents.
-              Please contact the administrator to request access.
+              {t("Your account")} ({user.email}) {t("does not have permission to view these documents.")}
+              {' '}{t("Please contact the administrator to request access.")}
             </p>
           </div>
         )}
@@ -2388,7 +2581,7 @@ export default function AdvancedHistoryArchive() {
               <div className="bg-slate-50 border border-slate-200 rounded-lg md:rounded-xl p-2.5 md:p-4 shadow-inner w-full md:w-72 lg:w-80">
                 <div className="flex justify-between items-center mb-0 md:mb-4">
                   <h3 className="text-xs md:text-sm font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 md:gap-2">
-                    <Filter size={14} className="w-3.5 h-3.5 md:w-4 md:h-4" /> Active Filters
+                    <Filter size={14} className="w-3.5 h-3.5 md:w-4 md:h-4" /> {t("Active Filters")}
                   </h3>
                   <div className="flex gap-2 items-center">
                     {/* Mobile Toggle Button */}
@@ -2396,21 +2589,21 @@ export default function AdvancedHistoryArchive() {
                       onClick={() => setShowFilters(!showFilters)}
                       className="md:hidden text-[10px] flex items-center gap-1 bg-blue-100 text-blue-700 px-2 py-1 rounded font-bold"
                     >
-                      {showFilters ? 'Hide Filters' : 'Show Filters'}
+                      {showFilters ? t('Hide Filters') : t('Show Filters')}
                     </button>
                     {user.isAdmin && (
                       <button
                         onClick={() => setIsManageFiltersOpen(true)}
                         className="hidden md:flex text-xs items-center gap-1 text-slate-500 hover:text-slate-800 px-2 py-1 rounded hover:bg-slate-200 transition-colors"
                       >
-                        <Settings size={12} /> Manage Tags
+                        <Settings size={12} /> {t("Manage Tags")}
                       </button>
                     )}
                     <button
                       onClick={() => setFilters({ origin: [], year: [], paperType: [], questionType: [], sourceType: [], marks: [], topic: [], tier: [] })}
                       className="hidden md:block text-xs text-red-500 hover:text-red-700 font-medium px-2 py-1 rounded hover:bg-red-50 transition-colors"
                     >
-                      Reset All
+                      {t("Reset All")}
                     </button>
                   </div>
                 </div>
@@ -2419,137 +2612,57 @@ export default function AdvancedHistoryArchive() {
                 <div className={`flex-col gap-2 mt-2 md:mt-0 ${showFilters ? 'flex' : 'hidden md:flex'}`}>
                   {/* Tier (Admin Only) */}
                   {user.isAdmin && (
-                    <FilterAccordion
-                      title="Tier Level (Admin Only)"
-                      isOpen={expandedSections['tier']}
-                      onToggle={() => toggleAccordion('tier')}
-                      count={filters.tier.length}
-                    >
-                      <CheckboxGroup
-                        options={systemTiers.map(t => ({ label: t.name, value: t.id }))}
-                        selectedValues={filters.tier}
-                        onChange={(vals) => setFilters({ ...filters, tier: vals })}
-                      />
+                    <FilterAccordion title="Tier Level (Admin Only)" isOpen={expandedSections['tier']} onToggle={() => toggleAccordion('tier')} count={filters.tier.length}>
+                      <CheckboxGroup options={systemTiers.map(t => ({ label: t.name, value: t.id }))} selectedValues={filters.tier} onChange={(vals) => setFilters({ ...filters, tier: vals })} language={language} tagTranslations={tagTranslations} />
                     </FilterAccordion>
                   )}
 
                   {/* Origin */}
-                  <FilterAccordion
-                    title="Origin"
-                    isOpen={expandedSections['origin']}
-                    onToggle={() => toggleAccordion('origin')}
-                    count={filters.origin.length}
-                  >
-                    <CheckboxGroup
-                      options={ORIGINS}
-                      selectedValues={filters.origin}
-                      onChange={(vals) => setFilters({ ...filters, origin: vals })}
-                    />
+                  <FilterAccordion title="Origin" isOpen={expandedSections['origin']} onToggle={() => toggleAccordion('origin')} count={filters.origin.length}>
+                    <CheckboxGroup options={ORIGINS} selectedValues={filters.origin} onChange={(vals) => setFilters({ ...filters, origin: vals })} language={language} tagTranslations={tagTranslations} />
                   </FilterAccordion>
 
                   {/* Year */}
-                  <FilterAccordion
-                    title="Year"
-                    isOpen={expandedSections['year']}
-                    onToggle={() => toggleAccordion('year')}
-                    count={filters.year.length}
-                  >
-                    <CheckboxGroup
-                      options={availableYears}
-                      selectedValues={filters.year}
-                      onChange={(vals) => setFilters({ ...filters, year: vals })}
-                    />
+                  <FilterAccordion title="Year" isOpen={expandedSections['year']} onToggle={() => toggleAccordion('year')} count={filters.year.length}>
+                    <CheckboxGroup options={availableYears} selectedValues={filters.year} onChange={(vals) => setFilters({ ...filters, year: vals })} language={language} tagTranslations={tagTranslations} />
                   </FilterAccordion>
 
                   {/* Paper Type */}
-                  <FilterAccordion
-                    title="Paper Type"
-                    isOpen={expandedSections['paperType']}
-                    onToggle={() => toggleAccordion('paperType')}
-                    count={filters.paperType.length}
-                  >
-                    <CheckboxGroup
-                      options={PAPER_TYPES}
-                      selectedValues={filters.paperType}
-                      onChange={(vals) => setFilters({ ...filters, paperType: vals })}
-                    />
+                  <FilterAccordion title="Paper Type" isOpen={expandedSections['paperType']} onToggle={() => toggleAccordion('paperType')} count={filters.paperType.length}>
+                    <CheckboxGroup options={PAPER_TYPES} selectedValues={filters.paperType} onChange={(vals) => setFilters({ ...filters, paperType: vals })} language={language} tagTranslations={tagTranslations} />
                   </FilterAccordion>
 
                   {/* Question Type (Conditional) */}
-                  <FilterAccordion
-                    title="Question Type"
-                    isOpen={expandedSections['questionType']}
-                    onToggle={() => toggleAccordion('questionType')}
-                    count={filters.questionType.length}
-                    disabled={filters.paperType.length === 0}
-                    helperText={filters.paperType.length === 0 ? "Select Paper Type first" : null}
-                  >
+                  <FilterAccordion title="Question Type" isOpen={expandedSections['questionType']} onToggle={() => toggleAccordion('questionType')} count={filters.questionType.length} disabled={filters.paperType.length === 0} helperText={filters.paperType.length === 0 ? t("Select Paper Type first") : null}>
                     <div className="space-y-4">
                       {filters.paperType.includes("Paper 1 (DBQ)") && (
                         <div>
-                          <h4 className="text-xs font-bold text-slate-400 mb-2 uppercase">Paper 1 (DBQ)</h4>
-                          <CheckboxGroup
-                            options={availableQuestionTypes["Paper 1 (DBQ)"]}
-                            selectedValues={filters.questionType}
-                            onChange={(vals) => setFilters({ ...filters, questionType: vals })}
-                          />
+                          <h4 className="text-xs font-bold text-slate-400 mb-2 uppercase">{t("Paper 1 (DBQ)")}</h4>
+                          <CheckboxGroup options={availableQuestionTypes["Paper 1 (DBQ)"]} selectedValues={filters.questionType} onChange={(vals) => setFilters({ ...filters, questionType: vals })} language={language} tagTranslations={tagTranslations} />
                         </div>
                       )}
                       {filters.paperType.includes("Paper 2 (Essay)") && (
                         <div>
-                          <h4 className="text-xs font-bold text-slate-400 mb-2 uppercase">Paper 2 (Essay)</h4>
-                          <CheckboxGroup
-                            options={availableQuestionTypes["Paper 2 (Essay)"]}
-                            selectedValues={filters.questionType}
-                            onChange={(vals) => setFilters({ ...filters, questionType: vals })}
-                          />
+                          <h4 className="text-xs font-bold text-slate-400 mb-2 uppercase">{t("Paper 2 (Essay)")}</h4>
+                          <CheckboxGroup options={availableQuestionTypes["Paper 2 (Essay)"]} selectedValues={filters.questionType} onChange={(vals) => setFilters({ ...filters, questionType: vals })} language={language} tagTranslations={tagTranslations} />
                         </div>
                       )}
                     </div>
                   </FilterAccordion>
 
                   {/* Source Type (Conditional - DBQ Only) */}
-                  <FilterAccordion
-                    title="Source Type"
-                    isOpen={expandedSections['sourceType']}
-                    onToggle={() => toggleAccordion('sourceType')}
-                    count={filters.sourceType.length}
-                    disabled={!filters.paperType.includes("Paper 1 (DBQ)")}
-                    helperText={!filters.paperType.includes("Paper 1 (DBQ)") ? "Only available for Paper 1" : null}
-                  >
-                    <CheckboxGroup
-                      options={availableSourceTypes}
-                      selectedValues={filters.sourceType}
-                      onChange={(vals) => setFilters({ ...filters, sourceType: vals })}
-                    />
+                  <FilterAccordion title="Source Type" isOpen={expandedSections['sourceType']} onToggle={() => toggleAccordion('sourceType')} count={filters.sourceType.length} disabled={!filters.paperType.includes("Paper 1 (DBQ)")} helperText={!filters.paperType.includes("Paper 1 (DBQ)") ? t("Only available for Paper 1") : null}>
+                    <CheckboxGroup options={availableSourceTypes} selectedValues={filters.sourceType} onChange={(vals) => setFilters({ ...filters, sourceType: vals })} language={language} tagTranslations={tagTranslations} />
                   </FilterAccordion>
 
                   {/* Topics */}
-                  <FilterAccordion
-                    title="Topics"
-                    isOpen={expandedSections['topic']}
-                    onToggle={() => toggleAccordion('topic')}
-                    count={filters.topic.length}
-                  >
-                    <CheckboxGroup
-                      options={availableTopics}
-                      selectedValues={filters.topic}
-                      onChange={(vals) => setFilters({ ...filters, topic: vals })}
-                    />
+                  <FilterAccordion title="Topics" isOpen={expandedSections['topic']} onToggle={() => toggleAccordion('topic')} count={filters.topic.length}>
+                    <CheckboxGroup options={availableTopics} selectedValues={filters.topic} onChange={(vals) => setFilters({ ...filters, topic: vals })} language={language} tagTranslations={tagTranslations} />
                   </FilterAccordion>
 
                   {/* Marks */}
-                  <FilterAccordion
-                    title="Marks"
-                    isOpen={expandedSections['marks']}
-                    onToggle={() => toggleAccordion('marks')}
-                    count={filters.marks.length}
-                  >
-                    <CheckboxGroup
-                      options={MARK_OPTIONS}
-                      selectedValues={filters.marks}
-                      onChange={(vals) => setFilters({ ...filters, marks: vals })}
-                    />
+                  <FilterAccordion title="Marks" isOpen={expandedSections['marks']} onToggle={() => toggleAccordion('marks')} count={filters.marks.length}>
+                    <CheckboxGroup options={MARK_OPTIONS} selectedValues={filters.marks} onChange={(vals) => setFilters({ ...filters, marks: vals })} language={language} tagTranslations={tagTranslations} />
                   </FilterAccordion>
                 </div>
               </div>
@@ -2563,7 +2676,7 @@ export default function AdvancedHistoryArchive() {
                   <Search className="absolute left-3 md:left-4 top-2 md:top-3.5 text-slate-400 w-4 h-4 md:w-5 md:h-5" />
                   <input
                     type="text"
-                    placeholder="Search topics, types..."
+                    placeholder={t("Search topics, types...")}
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="w-full pl-9 md:pl-12 pr-3 md:pr-4 py-1.5 md:py-3 text-xs md:text-base bg-white border border-slate-200 rounded-lg md:rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500 outline-none"
@@ -2580,7 +2693,7 @@ export default function AdvancedHistoryArchive() {
                     className="w-full pl-7 md:pl-10 pr-6 md:pr-8 py-1.5 md:py-3 bg-white border border-slate-200 rounded-lg md:rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500 outline-none appearance-none cursor-pointer text-[10px] md:text-sm font-medium text-slate-700"
                   >
                     {SORT_OPTIONS.map(opt => (
-                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      <option key={opt.value} value={opt.value}>{t(opt.label)}</option>
                     ))}
                   </select>
                   <div className="absolute right-2 md:right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
@@ -2606,6 +2719,7 @@ export default function AdvancedHistoryArchive() {
                 <AnimatePresence>
                   {paginatedResults.map((item) => {
                     const { uniqueId, parent, child, isFullPaper, matchedChildrenCount } = item;
+                    const isMissingChi = user?.email === 'clng@ktls.edu.hk' && !parent.fileUrlChi;
 
                     if (isFullPaper) {
                       // --- FULL PAPER RENDER ---
@@ -2620,21 +2734,21 @@ export default function AdvancedHistoryArchive() {
                           initial={{ opacity: 0, y: 10 }}
                           animate={{ opacity: 1, y: 0 }}
                           exit={{ opacity: 0, scale: 0.95 }}
-                          className="bg-white rounded-xl border border-slate-200 p-0 shadow-sm hover:shadow-lg hover:border-blue-300 transition-all overflow-hidden group"
+                          className={`rounded-xl border p-0 shadow-sm hover:shadow-lg transition-all overflow-hidden group ${isMissingChi ? 'bg-yellow-50 border-yellow-400 hover:border-yellow-500' : 'bg-white border-slate-200 hover:border-blue-300'}`}
                         >
                           <div className="flex flex-col md:flex-row relative">
                             <div className="flex-1 p-3 md:p-5 border-b md:border-b-0 md:border-r border-slate-100 relative cursor-pointer" onClick={() => setPreviewItem(item)}>
                               <div className="flex items-center justify-between gap-2 mb-1.5">
                                 <div className="flex flex-wrap items-center gap-1.5 md:gap-2">
                                   <span className="text-[10px] md:text-xs font-bold text-slate-500 uppercase tracking-wider">
-                                    {parent.year} • {parent.origin}
+                                    {parent.year} • {t(parent.origin)}
                                   </span>
                                   <span className={`text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 rounded font-medium ${parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
-                                    {parent.paperType}
+                                    {t(parent.paperType)}
                                   </span>
                                   {user.isAdmin && (
                                     <span className="text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 rounded font-medium bg-indigo-100 text-indigo-700 flex items-center gap-1">
-                                      <Layers size={10} /> <span className="hidden sm:inline">{systemTiers.find(t => t.id === (parent.tier || '10'))?.name || `Tier ${parent.tier || '10'}`}</span>
+                                      <Layers size={10} /> <span className="hidden sm:inline">{systemTiers.find(tier => tier.id === (parent.tier || '10'))?.name || `${t("Tier")} ${parent.tier || '10'}`}</span>
                                     </span>
                                   )}
                                 </div>
@@ -2642,7 +2756,7 @@ export default function AdvancedHistoryArchive() {
                                   <button
                                     onClick={(e) => toggleStar(e, uniqueId)}
                                     className={`flex items-center justify-center p-1 md:p-1.5 rounded-lg transition-colors border ${starredItems.includes(uniqueId) ? 'bg-yellow-100 border-yellow-300 text-yellow-600' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
-                                    title="Star / To-Do Later"
+                                    title={t("Star / To-Do Later")}
                                   >
                                     <Star size={14} className={`md:w-4 md:h-4 ${starredItems.includes(uniqueId) ? 'fill-current' : ''}`} />
                                   </button>
@@ -2651,7 +2765,7 @@ export default function AdvancedHistoryArchive() {
                                     className={`flex items-center gap-1 px-2 md:px-3 py-1 md:py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-colors border ${doneItems.includes(uniqueId) ? 'bg-green-100 border-green-300 text-green-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
                                   >
                                     <Check size={14} className={doneItems.includes(uniqueId) ? 'opacity-100' : 'opacity-30'} />
-                                    <span className="hidden sm:inline">{doneItems.includes(uniqueId) ? 'Done' : 'Mark as Done'}</span>
+                                    <span className="hidden sm:inline">{doneItems.includes(uniqueId) ? t('Done') : t('Mark as Done')}</span>
                                   </button>
                                 </div>
                               </div>
@@ -2665,19 +2779,19 @@ export default function AdvancedHistoryArchive() {
                                   }}
                                   className="absolute top-2 right-2 md:top-4 md:right-4 bg-red-100 text-red-600 px-2 md:px-3 py-0.5 md:py-1 rounded-full text-[10px] md:text-xs font-bold flex items-center gap-1 hover:bg-red-200 animate-pulse shadow-sm"
                                 >
-                                  <ShieldAlert size={12} /> <span className="hidden sm:inline">Reports Attached</span>
+                                  <ShieldAlert size={12} /> <span className="hidden sm:inline">{t("Reports Attached")}</span>
                                 </button>
                               )}
 
                               <h3 className="text-base md:text-xl font-bold text-slate-800 flex flex-wrap items-center gap-1.5 md:gap-2 group-hover:text-blue-600 transition-colors leading-tight">
-                                {item.isExtraPractice && <span className="text-red-600 font-bold text-sm md:text-base">[Extra Practice]</span>}
+                                {item.isExtraPractice && <span className="text-red-600 font-bold text-sm md:text-base">{t("[Extra Practice]")}</span>}
                                 {parent.title}
                               </h3>
 
                               <div className="mt-2 md:mt-3 text-slate-600 text-xs md:text-sm flex items-center justify-between bg-slate-50 p-2 md:p-3 rounded-lg border border-slate-100">
                                 <div>
-                                  Contains <span className="font-bold">{parent.subQuestions.length}</span> sub-questions
-                                  {hasSearch && <span> (<span className="font-bold text-blue-600">{matchedChildrenCount}</span> matched).</span>}
+                                  {t("Contains")} <span className="font-bold">{parent.subQuestions.length}</span> {t("sub-questions")}
+                                  {hasSearch && <span> (<span className="font-bold text-blue-600">{matchedChildrenCount}</span> {t("matched")}).</span>}
                                 </div>
                                 {!hasSearch && (
                                   <button
@@ -2687,8 +2801,8 @@ export default function AdvancedHistoryArchive() {
                                     }}
                                     className="flex items-center gap-1 text-blue-600 hover:text-blue-800 font-medium bg-blue-100 px-2 py-1 md:px-3 md:py-1.5 rounded-lg transition-colors text-[10px] md:text-xs"
                                   >
-                                    <span className="hidden sm:inline">{isExpanded ? 'Hide Questions' : 'Show Questions'}</span>
-                                    <span className="sm:hidden">{isExpanded ? 'Hide' : 'Show'}</span>
+                                    <span className="hidden sm:inline">{isExpanded ? t('Hide Questions') : t('Show Questions')}</span>
+                                    <span className="sm:hidden">{isExpanded ? t('Hide') : t('Show')}</span>
                                     <ChevronDown size={12} className={`md:w-3.5 md:h-3.5 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                                   </button>
                                 )}
@@ -2710,28 +2824,34 @@ export default function AdvancedHistoryArchive() {
                                           </span>
                                           {child.marks && (
                                             <span className="text-[10px] md:text-xs text-slate-500 font-normal border border-slate-200 px-1.5 py-0.5 rounded bg-slate-50">
-                                              {child.marks} Marks
+                                              {t(`${child.marks} Marks`)}
                                             </span>
                                           )}
                                         </div>
                                         <div className="text-xs md:text-sm text-slate-700 italic line-clamp-3 mb-2 md:mb-3">
-                                          {child.content ? highlightText(child.content, searchTerm) : "No text content provided."}
+                                          {(() => {
+                                            const isUsingChi = language === 'zh' && child.contentChi;
+                                            const text = isUsingChi ? child.contentChi : child.content;
+                                            if (!text) return t("No text content provided.");
+                                            const isChinese = /[\u4e00-\u9fa5]/.test(text);
+                                            return isChinese ? highlightText(text.replace(/\s+/g, ''), searchTerm.replace(/\s+/g, '')) : highlightText(text, searchTerm);
+                                          })()}
                                         </div>
                                         {showTags && (
                                           <div className="flex flex-wrap gap-1 md:gap-1.5">
                                             {ensureArray(child.topic).map((t, i) => (
                                               <span key={`ct-${i}`} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[9px] md:text-[10px] font-medium border border-blue-100">
-                                                {t}
+                                                {getTranslatedTag(t)}
                                               </span>
                                             ))}
                                             {ensureArray(child.questionType).map((qt, i) => (
                                               <span key={`qt-${i}`} className="px-1.5 py-0.5 bg-green-50 text-green-700 rounded text-[9px] md:text-[10px] font-medium border border-green-100">
-                                                {qt}
+                                                {getTranslatedTag(qt)}
                                               </span>
                                             ))}
                                             {ensureArray(child.sourceType).map((st, i) => (
                                               <span key={`st-${i}`} className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[9px] md:text-[10px] font-medium border border-slate-200">
-                                                {st}
+                                                {getTranslatedTag(st)}
                                               </span>
                                             ))}
                                           </div>
@@ -2746,7 +2866,7 @@ export default function AdvancedHistoryArchive() {
                                 <div className="mt-3 md:mt-4 flex flex-wrap gap-1.5 md:gap-2">
                                   {ensureArray(parent.topic).map((t, i) => (
                                     <div key={`pt-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1 text-[10px] md:text-xs">
-                                      <Tag size={10} className="md:w-3 md:h-3" /> {t}
+                                      <Tag size={10} className="md:w-3 md:h-3" /> {getTranslatedTag(t)}
                                     </div>
                                   ))}
                                 </div>
@@ -2754,16 +2874,16 @@ export default function AdvancedHistoryArchive() {
 
                               <div className="md:hidden mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
                                 <div className="flex items-center gap-2">
-                                  {parent.hasFile && <span className="text-[10px] text-slate-500 flex items-center gap-1"><FileText size={10} /> PDF</span>}
-                                  {parent.hasAnswer && <span className="text-[10px] text-green-600 flex items-center gap-1"><BookOpen size={10} /> Ans</span>}
+                                  {parent.hasFile && <span className="text-[10px] text-slate-500 flex items-center gap-1"><FileText size={10} /> {t("PDF")}</span>}
+                                  {parent.hasAnswer && <span className="text-[10px] text-green-600 flex items-center gap-1"><BookOpen size={10} /> {t("Ans")}</span>}
                                 </div>
                                 {user?.isAdmin && (
                                   <div className="flex items-center gap-1.5">
                                     <button onClick={(e) => { e.stopPropagation(); handleViewLinkedMarks(parent.id, parent.title); }} className="bg-teal-100 text-teal-800 px-2 py-1 rounded text-[10px] font-medium flex items-center gap-1">
-                                      <BarChart2 size={10} /> Marks
+                                      <BarChart2 size={10} /> {t("Marks")}
                                     </button>
                                     <button onClick={(e) => handleEditClick(e, parent)} className="bg-slate-200 text-slate-700 px-2 py-1 rounded text-[10px] font-medium flex items-center gap-1">
-                                      <Edit size={10} /> Edit
+                                      <Edit size={10} /> {t("Edit")}
                                     </button>
                                   </div>
                                 )}
@@ -2775,20 +2895,20 @@ export default function AdvancedHistoryArchive() {
                                 ID: {parent.id}
                               </div>
                               <div className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-md opacity-0 group-hover:opacity-100 transition-all transform translate-y-2 group-hover:translate-y-0">
-                                <Eye size={16} /> View Full Paper
+                                <Eye size={16} /> {t("View Full Paper")}
                               </div>
                               {parent.hasFile ? (
                                 <div className="text-center text-slate-500 text-xs flex items-center gap-1">
-                                  <FileText size={12} /> PDF Attached
+                                  <FileText size={12} /> {t("PDF Attached")}
                                 </div>
                               ) : (
                                 <div className="text-center text-slate-400 text-sm italic px-4">
-                                  No PDF attached
+                                  {t("No PDF attached")}
                                 </div>
                               )}
                               {parent.hasAnswer && (
                                 <div className="text-center text-green-600 text-xs flex items-center gap-1 font-medium mt-1">
-                                  <BookOpen size={12} /> Answer Key Available
+                                  <BookOpen size={12} /> {t("Answer Key Available")}
                                 </div>
                               )}
                               {user?.isAdmin && (
@@ -2796,7 +2916,7 @@ export default function AdvancedHistoryArchive() {
                                   onClick={(e) => { e.stopPropagation(); handleViewLinkedMarks(parent.id, parent.title); }}
                                   className="w-full flex items-center justify-center gap-2 bg-teal-100 hover:bg-teal-200 text-teal-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
                                 >
-                                  <BarChart2 size={16} /> View Marks
+                                  <BarChart2 size={16} /> {t("View Marks")}
                                 </button>
                               )}
                               {user.isAdmin && (
@@ -2804,7 +2924,7 @@ export default function AdvancedHistoryArchive() {
                                   onClick={(e) => handleEditClick(e, parent)}
                                   className="w-full flex items-center justify-center gap-2 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                                 >
-                                  <Edit size={16} /> Edit Parent
+                                  <Edit size={16} /> {t("Edit Parent")}
                                 </button>
                               )}
                             </div>
@@ -2821,21 +2941,21 @@ export default function AdvancedHistoryArchive() {
                           animate={{ opacity: 1, y: 0 }}
                           exit={{ opacity: 0, scale: 0.95 }}
                           onClick={() => setPreviewItem(item)}
-                          className="bg-white rounded-xl border border-slate-200 p-0 shadow-sm hover:shadow-lg hover:border-blue-300 cursor-pointer transition-all overflow-hidden group"
+                          className={`rounded-xl border p-0 shadow-sm hover:shadow-lg cursor-pointer transition-all overflow-hidden group ${isMissingChi ? 'bg-yellow-50 border-yellow-400 hover:border-yellow-500' : 'bg-white border-slate-200 hover:border-blue-300'}`}
                         >
                           <div className="flex flex-col md:flex-row relative">
                             <div className="flex-1 p-3 md:p-5 border-b md:border-b-0 md:border-r border-slate-100 relative">
                               <div className="flex items-center justify-between gap-2 mb-1.5">
                                 <div className="flex flex-wrap items-center gap-1.5 md:gap-2">
                                   <span className="text-[10px] md:text-xs font-bold text-slate-500 uppercase tracking-wider">
-                                    {parent.year} • {parent.origin}
+                                    {parent.year} • {t(parent.origin)}
                                   </span>
                                   <span className={`text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 rounded font-medium ${parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
-                                    {parent.paperType}
+                                    {t(parent.paperType)}
                                   </span>
                                   {user.isAdmin && (
                                     <span className="text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 rounded font-medium bg-indigo-100 text-indigo-700 flex items-center gap-1">
-                                      <Layers size={10} /> <span className="hidden sm:inline">{systemTiers.find(t => t.id === (parent.tier || '10'))?.name || `Tier ${parent.tier || '10'}`}</span>
+                                      <Layers size={10} /> <span className="hidden sm:inline">{systemTiers.find(tier => tier.id === (parent.tier || '10'))?.name || `${t("Tier")} ${parent.tier || '10'}`}</span>
                                     </span>
                                   )}
                                 </div>
@@ -2843,7 +2963,7 @@ export default function AdvancedHistoryArchive() {
                                   <button
                                     onClick={(e) => toggleStar(e, uniqueId)}
                                     className={`flex items-center justify-center p-1 md:p-1.5 rounded-lg transition-colors border ${starredItems.includes(uniqueId) ? 'bg-yellow-100 border-yellow-300 text-yellow-600' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
-                                    title="Star / To-Do Later"
+                                    title={t("Star / To-Do Later")}
                                   >
                                     <Star size={14} className={`md:w-4 md:h-4 ${starredItems.includes(uniqueId) ? 'fill-current' : ''}`} />
                                   </button>
@@ -2852,7 +2972,7 @@ export default function AdvancedHistoryArchive() {
                                     className={`flex items-center gap-1 px-2 md:px-3 py-1 md:py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-colors border ${doneItems.includes(uniqueId) ? 'bg-green-100 border-green-300 text-green-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
                                   >
                                     <Check size={14} className={doneItems.includes(uniqueId) ? 'opacity-100' : 'opacity-30'} />
-                                    <span className="hidden sm:inline">{doneItems.includes(uniqueId) ? 'Done' : 'Mark as Done'}</span>
+                                    <span className="hidden sm:inline">{doneItems.includes(uniqueId) ? t('Done') : t('Mark as Done')}</span>
                                   </button>
                                 </div>
                               </div>
@@ -2868,47 +2988,53 @@ export default function AdvancedHistoryArchive() {
                                     }}
                                     className="absolute top-2 right-2 md:top-4 md:right-4 bg-red-100 text-red-600 px-2 md:px-3 py-0.5 md:py-1 rounded-full text-[10px] md:text-xs font-bold flex items-center gap-1 hover:bg-red-200 animate-pulse shadow-sm"
                                   >
-                                    <ShieldAlert size={12} /> <span className="hidden sm:inline">Reports Attached</span>
+                                    <ShieldAlert size={12} /> <span className="hidden sm:inline">{t("Reports Attached")}</span>
                                   </button>
                                 )}
 
                               <h3 className="text-sm md:text-lg font-bold text-slate-800 flex flex-wrap items-center gap-1.5 md:gap-2 group-hover:text-blue-600 transition-colors leading-tight">
-                                {item.isExtraPractice && <span className="text-red-600 font-bold text-sm md:text-base">[Extra Practice]</span>}
+                                {item.isExtraPractice && <span className="text-red-600 font-bold text-sm md:text-base">{t("[Extra Practice]")}</span>}
                                 {parent.title}
                                 <span className="bg-slate-800 text-white text-[10px] md:text-sm px-1.5 md:px-2 py-0.5 rounded-md">
                                   Q{child.label}
                                 </span>
                                 {child.marks && (
                                   <span className="text-[10px] md:text-xs text-slate-400 font-normal border border-slate-200 px-1.5 py-0.5 rounded">
-                                    {child.marks} Marks
+                                    {t(`${child.marks} Marks`)}
                                   </span>
                                 )}
                               </h3>
 
                               <div className="mt-2 md:mt-3 text-slate-600 text-xs md:text-sm line-clamp-3 bg-slate-50 p-2 md:p-3 rounded-lg border border-slate-100 italic">
-                                {child.content ? highlightText(child.content, searchTerm) : "No text content provided."}
+                                {(() => {
+                                  const isUsingChi = language === 'zh' && child.contentChi;
+                                  const text = isUsingChi ? child.contentChi : child.content;
+                                  if (!text) return t("No text content provided.");
+                                  const isChinese = /[\u4e00-\u9fa5]/.test(text);
+                                  return isChinese ? highlightText(text.replace(/\s+/g, ''), searchTerm.replace(/\s+/g, '')) : highlightText(text, searchTerm);
+                                })()}
                               </div>
 
                               {showTags && (
                                 <div className="mt-3 md:mt-4 flex flex-wrap gap-1.5 md:gap-2">
                                   {ensureArray(parent.topic).map((t, i) => (
                                     <div key={`pt-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1 text-[10px] md:text-xs">
-                                      <Tag size={10} className="md:w-3 md:h-3" /> {t}
+                                      <Tag size={10} className="md:w-3 md:h-3" /> {getTranslatedTag(t)}
                                     </div>
                                   ))}
                                   {ensureArray(child.topic).map((t, i) => (
                                     <div key={`ct-${i}`} className="badge bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1 text-[10px] md:text-xs">
-                                      <Tag size={10} className="md:w-3 md:h-3" /> {t}
+                                      <Tag size={10} className="md:w-3 md:h-3" /> {getTranslatedTag(t)}
                                     </div>
                                   ))}
                                   {ensureArray(child.questionType).map((qt, i) => (
                                     <div key={`qt-${i}`} className="badge bg-green-50 text-green-700 border-green-100 text-[10px] md:text-xs">
-                                      {qt}
+                                      {getTranslatedTag(qt)}
                                     </div>
                                   ))}
                                   {ensureArray(child.sourceType).map((st, i) => (
                                     <div key={`st-${i}`} className="badge bg-slate-100 text-slate-600 border-slate-200 flex items-center gap-1 text-[10px] md:text-xs">
-                                      <FileDigit size={10} className="md:w-3 md:h-3" /> {st}
+                                      <FileDigit size={10} className="md:w-3 md:h-3" /> {getTranslatedTag(st)}
                                     </div>
                                   ))}
                                 </div>
@@ -2916,16 +3042,16 @@ export default function AdvancedHistoryArchive() {
 
                               <div className="md:hidden mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
                                 <div className="flex items-center gap-2">
-                                  {parent.hasFile && <span className="text-[10px] text-slate-500 flex items-center gap-1"><FileText size={10} /> PDF</span>}
-                                  {parent.hasAnswer && <span className="text-[10px] text-green-600 flex items-center gap-1"><BookOpen size={10} /> Ans</span>}
+                                  {parent.hasFile && <span className="text-[10px] text-slate-500 flex items-center gap-1"><FileText size={10} /> {t("PDF")}</span>}
+                                  {parent.hasAnswer && <span className="text-[10px] text-green-600 flex items-center gap-1"><BookOpen size={10} /> {t("Ans")}</span>}
                                 </div>
                                 {user?.isAdmin && (
                                   <div className="flex items-center gap-1.5">
                                     <button onClick={(e) => { e.stopPropagation(); handleViewLinkedMarks(parent.id, parent.title); }} className="bg-teal-100 text-teal-800 px-2 py-1 rounded text-[10px] font-medium flex items-center gap-1">
-                                      <BarChart2 size={10} /> Marks
+                                      <BarChart2 size={10} /> {t("Marks")}
                                     </button>
                                     <button onClick={(e) => handleEditClick(e, parent)} className="bg-slate-200 text-slate-700 px-2 py-1 rounded text-[10px] font-medium flex items-center gap-1">
-                                      <Edit size={10} /> Edit
+                                      <Edit size={10} /> {t("Edit")}
                                     </button>
                                   </div>
                                 )}
@@ -2937,20 +3063,20 @@ export default function AdvancedHistoryArchive() {
                                 ID: {parent.id}
                               </div>
                               <div className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-md opacity-0 group-hover:opacity-100 transition-all transform translate-y-2 group-hover:translate-y-0">
-                                <Eye size={16} /> View Details
+                                <Eye size={16} /> {t("View Details")}
                               </div>
                               {parent.hasFile ? (
                                 <div className="text-center text-slate-500 text-xs flex items-center gap-1">
-                                  <FileText size={12} /> PDF Attached
+                                  <FileText size={12} /> {t("PDF Attached")}
                                 </div>
                               ) : (
                                 <div className="text-center text-slate-400 text-sm italic px-4">
-                                  No PDF attached
+                                  {t("No PDF attached")}
                                 </div>
                               )}
                               {parent.hasAnswer && (
                                 <div className="text-center text-green-600 text-xs flex items-center gap-1 font-medium mt-1">
-                                  <BookOpen size={12} /> Answer Key Available
+                                  <BookOpen size={12} /> {t("Answer Key Available")}
                                 </div>
                               )}
                               {user?.isAdmin && (
@@ -2958,7 +3084,7 @@ export default function AdvancedHistoryArchive() {
                                   onClick={(e) => { e.stopPropagation(); handleViewLinkedMarks(parent.id, parent.title); }}
                                   className="w-full flex items-center justify-center gap-2 bg-teal-100 hover:bg-teal-200 text-teal-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-auto"
                                 >
-                                  <BarChart2 size={16} /> View Marks
+                                  <BarChart2 size={16} /> {t("View Marks")}
                                 </button>
                               )}
                               {user.isAdmin && (
@@ -2966,7 +3092,7 @@ export default function AdvancedHistoryArchive() {
                                   onClick={(e) => handleEditClick(e, parent)}
                                   className="w-full flex items-center justify-center gap-2 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                                 >
-                                  <Edit size={16} /> Edit Parent
+                                  <Edit size={16} /> {t("Edit Parent")}
                                 </button>
                               )}
                             </div>
@@ -2979,7 +3105,7 @@ export default function AdvancedHistoryArchive() {
 
                 {filteredResults.length === 0 && (
                   <div className="text-center py-20 text-slate-500">
-                    No questions found matching your criteria.
+                    {t("No questions found matching your criteria.")}
                   </div>
                 )}
 
@@ -2997,15 +3123,16 @@ export default function AdvancedHistoryArchive() {
               </div>
             </div> {/* <-- Closes the Main Content Area wrapper */}
           </div>
-        )}
+        )
+        }
         <AnimatePresence>
           {isManageSamplesModalOpen && user?.isAdmin && (
             <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
               <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
                 <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
                   <div>
-                    <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">Manage Student Samples</h2>
-                    <p className="text-xs text-slate-500 mt-1">View or delete uploaded student samples organized by year.</p>
+                    <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">{t("Manage Student Samples")}</h2>
+                    <p className="text-xs text-slate-500 mt-1">{t("View or delete uploaded student samples organized by year.")}</p>
                   </div>
                   <button onClick={() => { setIsManageSamplesModalOpen(false); setHighlightedSampleId(null); }} className="text-slate-400 hover:text-slate-800"><X size={20} /></button>
                 </div>
@@ -3033,8 +3160,8 @@ export default function AdvancedHistoryArchive() {
                                     <div key={sample.id} id={`sample-${sample.id}`} className={`flex flex-col p-3 rounded-lg border transition-all duration-500 ${isHighlighted ? 'bg-yellow-100 border-yellow-400 shadow-md ring-2 ring-yellow-400' : 'bg-slate-50 border-slate-200'}`}>
                                       <div className="flex justify-between items-start">
                                         <div>
-                                          <div className="text-sm font-bold text-slate-800">[{sample.language}] Grade: {sample.overallGrade}</div>
-                                          <div className="text-xs text-slate-500 mt-1">Tags: {sample.questionTags?.join(', ')}</div>
+                                          <div className="text-sm font-bold text-slate-800">[{sample.language}] {t("Grade:")} {sample.overallGrade}</div>
+                                          <div className="text-xs text-slate-500 mt-1">{t("Tags:")} {sample.questionTags?.join(', ')}</div>
                                         </div>
                                         <div className="flex gap-2">
                                           <button onClick={() => handleEditSample(sample)} className="p-2 text-blue-500 hover:bg-blue-50 rounded-lg"><Edit size={16} /></button>
@@ -3048,7 +3175,7 @@ export default function AdvancedHistoryArchive() {
                                           {sampleReports.map(r => (
                                             <div key={r.id} className="bg-red-50 border border-red-200 p-3 rounded-lg text-sm flex flex-col gap-2">
                                               <div className="flex items-center gap-2 text-red-700 font-bold">
-                                                <ShieldAlert size={16} /> Reported Issue
+                                                <ShieldAlert size={16} /> {t("Reported Issue")}
                                               </div>
                                               {/* This renders the same HTML message as the Super Admin Log */}
                                               <div dangerouslySetInnerHTML={{ __html: r.message }} className="text-red-800 text-xs leading-relaxed"></div>
@@ -3056,7 +3183,7 @@ export default function AdvancedHistoryArchive() {
                                                 onClick={() => handleClearReport(r.id)}
                                                 className="self-start mt-1 px-3 py-1.5 bg-green-600 text-white rounded-md text-xs font-bold hover:bg-green-700 transition-colors shadow-sm flex items-center gap-1"
                                               >
-                                                <Check size={14} /> Clear this Report
+                                                <Check size={14} /> {t("Clear this Report")}
                                               </button>
                                             </div>
                                           ))}
@@ -3090,7 +3217,7 @@ export default function AdvancedHistoryArchive() {
               >
                 <div className="p-5 border-b border-blue-100 bg-blue-50 flex justify-between items-center">
                   <h2 className="text-lg font-bold text-blue-800 flex items-center gap-2">
-                    <Sparkles size={20} className="text-blue-600" /> System Update
+                    <Sparkles size={20} className="text-blue-600" /> {t("System Update")}
                   </h2>
                   <button onClick={handleCloseUpdateModal} className="text-blue-400 hover:text-blue-800">
                     <X size={20} />
@@ -3109,13 +3236,13 @@ export default function AdvancedHistoryArchive() {
                       onChange={(e) => setDontShowAgain(e.target.checked)}
                       className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer"
                     />
-                    <span className="text-sm font-medium text-slate-600 select-none">Don't show this again</span>
+                    <span className="text-sm font-medium text-slate-600 select-none">{t("Don't show this again")}</span>
                   </label>
                   <button
                     onClick={handleCloseUpdateModal}
                     className="w-full py-2.5 bg-blue-600 text-white font-bold rounded-lg text-sm hover:bg-blue-700 transition-colors shadow-sm"
                   >
-                    OK, Got it!
+                    {t("OK, Got it!")}
                   </button>
                 </div>
               </motion.div>
@@ -3123,10 +3250,10 @@ export default function AdvancedHistoryArchive() {
           )}
         </AnimatePresence>
 
-      </main>
+      </main >
 
       {/* --- USER MANAGEMENT MODAL (ADMIN ONLY) --- */}
-      <AnimatePresence>
+      < AnimatePresence >
         {isUserManagementOpen && user?.isAdmin && (
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <motion.div
@@ -3138,9 +3265,9 @@ export default function AdvancedHistoryArchive() {
               <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
                 <div>
                   <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                    <Shield size={20} className="text-purple-600" /> Manage Access & Roles
+                    <Shield size={20} className="text-purple-600" /> {t("Manage Access & Roles")}
                   </h2>
-                  <p className="text-xs text-slate-500 mt-1">Configure users, roles, and automated tier unlocking.</p>
+                  <p className="text-xs text-slate-500 mt-1">{t("Configure users, roles, and automated tier unlocking.")}</p>
                 </div>
                 <button onClick={() => setIsUserManagementOpen(false)} className="text-slate-400 hover:text-slate-800">
                   <X size={20} />
@@ -3153,13 +3280,13 @@ export default function AdvancedHistoryArchive() {
                   onClick={() => setManageTab('users')}
                   className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${manageTab === 'users' ? 'border-purple-600 text-purple-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
                 >
-                  <Users size={16} className="inline mr-2" /> Users & Roles
+                  <Users size={16} className="inline mr-2" /> {t("Users & Roles")}
                 </button>
                 <button
                   onClick={() => setManageTab('tiers')}
                   className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${manageTab === 'tiers' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
                 >
-                  <Clock size={16} className="inline mr-2" /> Tier Access Control
+                  <Clock size={16} className="inline mr-2" /> {t("Tier Access Control")}
                 </button>
               </div>
 
@@ -3173,7 +3300,7 @@ export default function AdvancedHistoryArchive() {
                       {/* Add User Form */}
                       <form onSubmit={handleAddUser} className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row gap-4 items-end">
                         <div className="flex-1 w-full">
-                          <label className="text-xs font-bold text-slate-500 mb-1 block">Google Email Address</label>
+                          <label className="text-xs font-bold text-slate-500 mb-1 block">{t("Google Email Address")}</label>
                           <input
                             type="email"
                             required
@@ -3184,7 +3311,7 @@ export default function AdvancedHistoryArchive() {
                           />
                         </div>
                         <div className="w-full sm:w-48">
-                          <label className="text-xs font-bold text-slate-500 mb-1 block">Role</label>
+                          <label className="text-xs font-bold text-slate-500 mb-1 block">{t("Role")}</label>
                           <select
                             value={newUserRole}
                             onChange={(e) => setNewUserRole(e.target.value)}
@@ -3201,7 +3328,7 @@ export default function AdvancedHistoryArchive() {
                           className="w-full sm:w-auto px-6 py-2 bg-purple-600 text-white font-bold rounded-lg text-sm hover:bg-purple-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
                         >
                           {isManagingUsers ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
-                          Add User
+                          {t("Add User")}
                         </button>
                       </form>
 
@@ -3210,14 +3337,14 @@ export default function AdvancedHistoryArchive() {
                         <table className="w-full text-left text-sm">
                           <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase text-xs font-bold">
                             <tr>
-                              <th className="px-6 py-3">Email Address</th>
-                              <th className="px-6 py-3">Role</th>
-                              <th className="px-6 py-3 text-right">Actions</th>
+                              <th className="px-6 py-3">{t("Email Address")}</th>
+                              <th className="px-6 py-3">{t("Role")}</th>
+                              <th className="px-6 py-3 text-right">{t("Actions")}</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100">
                             {managedUsers.length === 0 ? (
-                              <tr><td colSpan="3" className="px-6 py-8 text-center text-slate-400 italic">No users found.</td></tr>
+                              <tr><td colSpan="3" className="px-6 py-8 text-center text-slate-400 italic">{t("No users found.")}</td></tr>
                             ) : (
                               managedUsers.map((u) => (
                                 <tr key={u.id} className="hover:bg-slate-50 transition-colors">
@@ -3250,7 +3377,7 @@ export default function AdvancedHistoryArchive() {
                       {/* Manage Roles */}
                       <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
                         <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2 mb-3">
-                          <Users size={16} className="text-blue-500" /> Custom Roles
+                          <Users size={16} className="text-blue-500" /> {t("Custom Roles")}
                         </h3>
                         <div className="space-y-2 mb-4">
                           {systemRoles.map(role => (
@@ -3287,7 +3414,7 @@ export default function AdvancedHistoryArchive() {
                         <div className="flex gap-2">
                           <input
                             type="text"
-                            placeholder="New role name..."
+                            placeholder={t("New role name...")}
                             value={newRoleInput}
                             onChange={(e) => setNewRoleInput(e.target.value)}
                             className="flex-1 p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
@@ -3310,9 +3437,9 @@ export default function AdvancedHistoryArchive() {
                       {/* Manage Tiers */}
                       <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex-1 flex flex-col">
                         <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2 mb-1">
-                          <Layers size={16} className="text-indigo-500" /> Rename Tiers
+                          <Layers size={16} className="text-indigo-500" /> {t("Rename Tiers")}
                         </h3>
-                        <p className="text-xs text-slate-400 mb-4">You can rename tiers here. Ordered 10 (Highest) to 1.</p>
+                        <p className="text-xs text-slate-400 mb-4">{t("You can rename tiers here. Ordered 10 (Highest) to 1.")}</p>
 
                         <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-2 max-h-64">
                           {systemTiers.map(tier => (
@@ -3338,19 +3465,19 @@ export default function AdvancedHistoryArchive() {
                   <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
                     <div className="mb-6">
                       <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 mb-2">
-                        <Calendar size={20} className="text-indigo-600" /> Automated Tier Unlocking
+                        <Calendar size={20} className="text-indigo-600" /> {t("Automated Tier Unlocking")}
                       </h3>
                       <p className="text-sm text-slate-500">
-                        Select a user role below, then configure the specific date when each tier becomes visible to them.
-                        You can also check "Immediate Access" to grant access right away.
-                        <br /><span className="font-bold text-indigo-600">Note: Access is cumulative!</span> Unlocking a higher tier (e.g., Tier 5) automatically grants access to all lower tiers (1-4).
+                        {t("Select a user role below, then configure the specific date when each tier becomes visible to them.")}
+                        {t('You can also check "Immediate Access" to grant access right away.')}
+                        <br /><span className="font-bold text-indigo-600">{t("Note: Access is cumulative!")}</span> {t("Unlocking a higher tier (e.g., Tier 5) automatically grants access to all lower tiers (1-4).")}
                       </p>
                     </div>
 
                     <div className="flex flex-col md:flex-row gap-8">
                       {/* Role Selector */}
                       <div className="w-full md:w-64">
-                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">Select Role</label>
+                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">{t("Select Role")}</label>
                         <div className="space-y-2">
                           {systemRoles.filter(r => r !== 'admin').map(role => (
                             <button
@@ -3358,7 +3485,7 @@ export default function AdvancedHistoryArchive() {
                               onClick={() => setSelectedRoleForAccess(role)}
                               className={`w-full text-left px-4 py-3 rounded-lg border text-sm font-bold transition-all ${selectedRoleForAccess === role ? 'bg-indigo-50 border-indigo-200 text-indigo-700 shadow-sm' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}
                             >
-                              {role.charAt(0).toUpperCase() + role.slice(1)} Group
+                              {role.charAt(0).toUpperCase() + role.slice(1)} {t("Group")}
                             </button>
                           ))}
                         </div>
@@ -3368,7 +3495,7 @@ export default function AdvancedHistoryArchive() {
                       <div className="flex-1">
                         <div className="bg-slate-50 rounded-xl border border-slate-200 p-5">
                           <h4 className="text-sm font-bold text-slate-700 mb-4 uppercase tracking-wider flex items-center justify-between">
-                            <span>Unlock Dates for: <span className="text-indigo-600">{selectedRoleForAccess}</span></span>
+                            <span>{t("Unlock Dates for:")} <span className="text-indigo-600">{selectedRoleForAccess}</span></span>
                           </h4>
 
                           <div className="space-y-3">
@@ -3396,7 +3523,7 @@ export default function AdvancedHistoryArchive() {
                                         onChange={(e) => handleTierAccessChange(selectedRoleForAccess, tier.id, 'immediate', e.target.checked)}
                                         className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
                                       />
-                                      <span className="text-xs font-bold text-slate-600">Immediate Access</span>
+                                      <span className="text-xs font-bold text-slate-600">{t("Immediate Access")}</span>
                                     </label>
 
                                     {/* Date Picker */}
@@ -3412,7 +3539,7 @@ export default function AdvancedHistoryArchive() {
                                         <button
                                           onClick={() => handleTierAccessChange(selectedRoleForAccess, tier.id, 'date', '')}
                                           className="text-slate-400 hover:text-red-500 ml-1"
-                                          title="Clear Date"
+                                          title={t("Clear Date")}
                                         >
                                           <X size={16} />
                                         </button>
@@ -3430,10 +3557,10 @@ export default function AdvancedHistoryArchive() {
                     {/* BULK OVERRIDE SECTION */}
                     <div className="mt-8 pt-6 border-t border-slate-200">
                       <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2 mb-2">
-                        <Layers size={16} className="text-red-500" /> Bulk Update Document Tiers
+                        <Layers size={16} className="text-red-500" /> {t("Bulk Update Document Tiers")}
                       </h3>
                       <p className="text-xs text-slate-500 mb-3">
-                        Force all existing documents in the archive to a specific tier (e.g., your S6 DSE tier).
+                        {t("Force all existing documents in the archive to a specific tier (e.g., your S6 DSE tier).")}
                       </p>
                       <div className="flex items-center gap-3">
                         <select
@@ -3451,7 +3578,7 @@ export default function AdvancedHistoryArchive() {
                           className="px-4 py-2 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700 font-bold rounded-lg text-sm transition-colors flex items-center gap-2 border border-red-200 disabled:opacity-50"
                         >
                           {isBulking ? <Loader2 size={16} className="animate-spin" /> : <ShieldAlert size={16} />}
-                          Apply to All Documents
+                          {t("Apply to All Documents")}
                         </button>
                       </div>
                     </div>
@@ -3468,16 +3595,16 @@ export default function AdvancedHistoryArchive() {
                   className="px-6 py-2 bg-indigo-600 text-white font-bold rounded-lg text-sm hover:bg-indigo-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-2 shadow-md"
                 >
                   {isSavingSettings ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                  Save All Settings & Access
+                  {t("Save All Settings & Access")}
                 </button>
               </div>
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+      </AnimatePresence >
 
       {/* --- MANAGE FILTERS MODAL (ADMIN ONLY) --- */}
-      <AnimatePresence>
+      < AnimatePresence >
         {isManageFiltersOpen && user?.isAdmin && (
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <motion.div
@@ -3488,7 +3615,7 @@ export default function AdvancedHistoryArchive() {
             >
               <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-xl">
                 <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                  <Settings size={18} /> Manage Filter Tags
+                  <Settings size={18} /> {t("Manage Filter Tags")}
                 </h2>
                 <button onClick={() => setIsManageFiltersOpen(false)} className="text-slate-400 hover:text-slate-800">
                   <X size={20} />
@@ -3497,18 +3624,25 @@ export default function AdvancedHistoryArchive() {
 
               <div className="flex-1 overflow-y-auto p-6 space-y-8">
                 <div className="text-sm text-slate-500 bg-blue-50 p-3 rounded-lg border border-blue-100">
-                  <span className="font-bold">Note:</span> Deleting a tag here removes it from the filter list for this session. To permanently delete a tag, you must edit the questions that contain it.
+                  <span className="font-bold">{t("Note:")}</span> {t("Deleting a tag here removes it from the filter list for this session. To permanently delete a tag, you must edit the questions that contain it.")}
                 </div>
 
                 {/* Topics */}
                 <div>
-                  <h3 className="text-sm font-bold text-slate-700 mb-2">Topics</h3>
-                  <div className="flex flex-wrap gap-2">
-                    {availableTopics.map(t => (
-                      <div key={t} className="flex items-center gap-1 bg-slate-100 px-2 py-1 rounded text-sm text-slate-700 border border-slate-200">
-                        {t}
-                        <button onClick={() => handleDeleteFilterTag('topic', t)} className="text-slate-400 hover:text-red-500">
-                          <X size={12} />
+                  <h3 className="text-sm font-bold text-slate-700 mb-2">{t("Topics")} (Add Chinese Translation)</h3>
+                  <div className="flex flex-col gap-2">
+                    {availableTopics.map(tag => (
+                      <div key={tag} className="flex items-center gap-3 bg-slate-50 p-2 rounded text-sm text-slate-700 border border-slate-200">
+                        <span className="w-1/3 font-medium">{tag}</span>
+                        <input
+                          type="text"
+                          placeholder="中文翻譯..."
+                          value={tagTranslations[tag] || ''}
+                          onChange={(e) => setTagTranslations({ ...tagTranslations, [tag]: e.target.value })}
+                          className="flex-1 p-1.5 border border-slate-200 rounded text-sm outline-none focus:border-blue-500"
+                        />
+                        <button onClick={() => handleDeleteFilterTag('topic', tag)} className="text-slate-400 hover:text-red-500 p-1">
+                          <Trash2 size={16} />
                         </button>
                       </div>
                     ))}
@@ -3517,13 +3651,20 @@ export default function AdvancedHistoryArchive() {
 
                 {/* Source Types */}
                 <div>
-                  <h3 className="text-sm font-bold text-slate-700 mb-2">Source Types</h3>
-                  <div className="flex flex-wrap gap-2">
-                    {availableSourceTypes.map(t => (
-                      <div key={t} className="flex items-center gap-1 bg-slate-100 px-2 py-1 rounded text-sm text-slate-700 border border-slate-200">
-                        {t}
-                        <button onClick={() => handleDeleteFilterTag('sourceType', t)} className="text-slate-400 hover:text-red-500">
-                          <X size={12} />
+                  <h3 className="text-sm font-bold text-slate-700 mb-2">{t("Source Types")} (Add Chinese Translation)</h3>
+                  <div className="flex flex-col gap-2">
+                    {availableSourceTypes.map(tag => (
+                      <div key={tag} className="flex items-center gap-3 bg-slate-50 p-2 rounded text-sm text-slate-700 border border-slate-200">
+                        <span className="w-1/3 font-medium">{tag}</span>
+                        <input
+                          type="text"
+                          placeholder="中文翻譯..."
+                          value={tagTranslations[tag] || ''}
+                          onChange={(e) => setTagTranslations({ ...tagTranslations, [tag]: e.target.value })}
+                          className="flex-1 p-1.5 border border-slate-200 rounded text-sm outline-none focus:border-blue-500"
+                        />
+                        <button onClick={() => handleDeleteFilterTag('sourceType', tag)} className="text-slate-400 hover:text-red-500 p-1">
+                          <Trash2 size={16} />
                         </button>
                       </div>
                     ))}
@@ -3532,13 +3673,20 @@ export default function AdvancedHistoryArchive() {
 
                 {/* Question Types (DBQ) */}
                 <div>
-                  <h3 className="text-sm font-bold text-slate-700 mb-2">Question Types (DBQ)</h3>
-                  <div className="flex flex-wrap gap-2">
-                    {availableQuestionTypes["Paper 1 (DBQ)"].map(t => (
-                      <div key={t} className="flex items-center gap-1 bg-slate-100 px-2 py-1 rounded text-sm text-slate-700 border border-slate-200">
-                        {t}
-                        <button onClick={() => handleDeleteFilterTag('qTypeDBQ', t)} className="text-slate-400 hover:text-red-500">
-                          <X size={12} />
+                  <h3 className="text-sm font-bold text-slate-700 mb-2">{t("Question Types (DBQ)")} (Add Chinese Translation)</h3>
+                  <div className="flex flex-col gap-2">
+                    {availableQuestionTypes["Paper 1 (DBQ)"].map(tag => (
+                      <div key={tag} className="flex items-center gap-3 bg-slate-50 p-2 rounded text-sm text-slate-700 border border-slate-200">
+                        <span className="w-1/3 font-medium">{tag}</span>
+                        <input
+                          type="text"
+                          placeholder="中文翻譯..."
+                          value={tagTranslations[tag] || ''}
+                          onChange={(e) => setTagTranslations({ ...tagTranslations, [tag]: e.target.value })}
+                          className="flex-1 p-1.5 border border-slate-200 rounded text-sm outline-none focus:border-blue-500"
+                        />
+                        <button onClick={() => handleDeleteFilterTag('qTypeDBQ', tag)} className="text-slate-400 hover:text-red-500 p-1">
+                          <Trash2 size={16} />
                         </button>
                       </div>
                     ))}
@@ -3547,13 +3695,20 @@ export default function AdvancedHistoryArchive() {
 
                 {/* Question Types (Essay) */}
                 <div>
-                  <h3 className="text-sm font-bold text-slate-700 mb-2">Question Types (Essay)</h3>
-                  <div className="flex flex-wrap gap-2">
-                    {availableQuestionTypes["Paper 2 (Essay)"].map(t => (
-                      <div key={t} className="flex items-center gap-1 bg-slate-100 px-2 py-1 rounded text-sm text-slate-700 border border-slate-200">
-                        {t}
-                        <button onClick={() => handleDeleteFilterTag('qTypeEssay', t)} className="text-slate-400 hover:text-red-500">
-                          <X size={12} />
+                  <h3 className="text-sm font-bold text-slate-700 mb-2">{t("Question Types (Essay)")} (Add Chinese Translation)</h3>
+                  <div className="flex flex-col gap-2">
+                    {availableQuestionTypes["Paper 2 (Essay)"].map(tag => (
+                      <div key={tag} className="flex items-center gap-3 bg-slate-50 p-2 rounded text-sm text-slate-700 border border-slate-200">
+                        <span className="w-1/3 font-medium">{tag}</span>
+                        <input
+                          type="text"
+                          placeholder="中文翻譯..."
+                          value={tagTranslations[tag] || ''}
+                          onChange={(e) => setTagTranslations({ ...tagTranslations, [tag]: e.target.value })}
+                          className="flex-1 p-1.5 border border-slate-200 rounded text-sm outline-none focus:border-blue-500"
+                        />
+                        <button onClick={() => handleDeleteFilterTag('qTypeEssay', tag)} className="text-slate-400 hover:text-red-500 p-1">
+                          <Trash2 size={16} />
                         </button>
                       </div>
                     ))}
@@ -3563,19 +3718,19 @@ export default function AdvancedHistoryArchive() {
 
               <div className="p-5 border-t border-slate-100 bg-slate-50 rounded-b-xl text-right">
                 <button
-                  onClick={() => setIsManageFiltersOpen(false)}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
+                  onClick={handleSaveTranslations}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 flex items-center gap-2 ml-auto"
                 >
-                  Done
+                  <Save size={16} /> {t("Save & Close")}
                 </button>
               </div>
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+      </AnimatePresence >
 
       {/* --- PREVIEW MODAL --- */}
-      <AnimatePresence>
+      < AnimatePresence >
         {previewItem && (
           <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4">
             <motion.div
@@ -3592,27 +3747,27 @@ export default function AdvancedHistoryArchive() {
                     {/* Tags row above title */}
                     <div className="flex flex-wrap items-center gap-1 md:gap-2 mb-1">
                       <span className="text-[9px] md:text-xs font-bold text-slate-500 uppercase tracking-wider">
-                        {previewItem.parent.year} • {previewItem.parent.origin}
+                        {previewItem.parent.year} • {t(previewItem.parent.origin)}
                       </span>
                       <span className={`text-[9px] md:text-xs px-1.5 md:px-2 py-0.5 rounded font-medium ${previewItem.parent.paperType.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
-                        {previewItem.parent.paperType}
+                        {t(previewItem.parent.paperType)}
                       </span>
                       {user.isAdmin && (
                         <span className="text-[9px] md:text-xs px-1.5 md:px-2 py-0.5 rounded font-medium bg-indigo-100 text-indigo-700 flex items-center gap-1">
-                          <Layers size={10} /> {systemTiers.find(t => t.id === (previewItem.parent.tier || '10'))?.name || `Tier ${previewItem.parent.tier || '10'}`}
+                          <Layers size={10} /> {systemTiers.find(tier => tier.id === (previewItem.parent.tier || '10'))?.name || `${t("Tier")} ${previewItem.parent.tier || '10'}`}
                         </span>
                       )}
                       {/* Mobile-only topics (Paper Overview replacement) */}
                       <div className="flex md:hidden flex-wrap gap-1">
-                        {ensureArray(previewItem.parent.topic).map((t, i) => (
+                        {ensureArray(previewItem.parent.topic).map((topic, i) => (
                           <span key={i} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded-md text-[9px] font-medium border border-blue-100 flex items-center gap-1">
-                            <Tag size={8} /> {t}
+                            <Tag size={8} /> {getTranslatedTag(topic)}
                           </span>
                         ))}
                       </div>
                     </div>
                     <h2 className="text-sm md:text-lg font-bold text-slate-800 flex flex-wrap items-center gap-1 md:gap-2 leading-tight">
-                      {viewingAnswer ? "Answer Key: " : ""}{previewItem.parent.title}
+                      {viewingAnswer ? t("Answer Key: ") : ""}{previewItem.parent.title}
                       {!viewingAnswer && !previewItem.isFullPaper && (
                         <>
                           <span className="bg-slate-800 text-white text-[10px] md:text-sm px-1.5 md:px-2 py-0.5 rounded-md">
@@ -3620,14 +3775,14 @@ export default function AdvancedHistoryArchive() {
                           </span>
                           {previewItem.child.marks && (
                             <span className="text-[10px] md:text-xs text-slate-500 font-normal border border-slate-200 px-1.5 md:px-2 py-0.5 rounded bg-slate-50">
-                              {previewItem.child.marks} Marks
+                              {t(`${previewItem.child.marks} Marks`)}
                             </span>
                           )}
                         </>
                       )}
                       {!viewingAnswer && previewItem.isFullPaper && (
                         <span className="hidden md:inline-block bg-blue-100 text-blue-800 text-xs px-2 py-0.5 rounded-md font-bold ml-2">
-                          Full Paper View
+                          {t("Full Paper View")}
                         </span>
                       )}
                     </h2>
@@ -3640,7 +3795,7 @@ export default function AdvancedHistoryArchive() {
                     onClick={() => setShowReportModal(true)}
                     className="flex px-2 md:px-4 py-1 md:py-2 rounded-lg bg-red-50 text-red-600 border border-red-200 text-[10px] md:text-sm font-bold hover:bg-red-100 transition-all items-center gap-1 md:gap-2"
                   >
-                    <ShieldAlert size={12} className="md:w-4 md:h-4" /> <span className="hidden sm:inline">Report</span>
+                    <ShieldAlert size={12} className="md:w-4 md:h-4" /> <span className="hidden sm:inline">{t("Report")}</span>
                   </button>
 
                   {!viewingAnswer && previewItem.parent.hasAnswer && (
@@ -3648,7 +3803,7 @@ export default function AdvancedHistoryArchive() {
                       onClick={() => { setViewingAnswer(true); setActiveSample(null); }}
                       className="flex px-2 md:px-4 py-1 md:py-2 rounded-lg bg-green-600 text-white text-[10px] md:text-sm font-bold hover:bg-green-700 transition-all items-center gap-1 md:gap-2"
                     >
-                      <BookOpen size={12} className="md:w-4 md:h-4" /> <span className="hidden sm:inline">Answer</span>
+                      <BookOpen size={12} className="md:w-4 md:h-4" /> <span className="hidden sm:inline">{t("Answer")}</span>
                     </button>
                   )}
 
@@ -3657,7 +3812,7 @@ export default function AdvancedHistoryArchive() {
                       onClick={() => { setViewingAnswer(false); setActiveSample(null); }}
                       className="flex px-2 md:px-4 py-1 md:py-2 rounded-lg bg-slate-600 text-white text-[10px] md:text-sm font-bold hover:bg-slate-700 transition-all items-center gap-1 md:gap-2"
                     >
-                      <ArrowLeft size={12} className="md:w-4 md:h-4" /> <span className="hidden sm:inline">Back</span>
+                      <ArrowLeft size={12} className="md:w-4 md:h-4" /> <span className="hidden sm:inline">{t("Back")}</span>
                     </button>
                   )}
 
@@ -3666,7 +3821,7 @@ export default function AdvancedHistoryArchive() {
                       onClick={() => handleViewLinkedMarks(previewItem.parent.id, previewItem.parent.title)}
                       className="flex px-2 md:px-4 py-1 md:py-2 rounded-lg bg-teal-600 text-white text-[10px] md:text-sm font-bold hover:bg-teal-700 transition-all items-center gap-1 md:gap-2"
                     >
-                      <BarChart2 size={12} className="md:w-4 md:h-4" /> <span className="hidden sm:inline">Marks</span>
+                      <BarChart2 size={12} className="md:w-4 md:h-4" /> <span className="hidden sm:inline">{t("Marks")}</span>
                     </button>
                   )}
 
@@ -3679,8 +3834,8 @@ export default function AdvancedHistoryArchive() {
                       className="flex px-3 md:px-4 py-1.5 md:py-2 rounded-lg bg-blue-600 text-white text-xs md:text-sm font-bold hover:bg-blue-700 transition-all items-center gap-1.5 md:gap-2 shadow-sm"
                     >
                       <Download size={14} className="md:w-4 md:h-4" />
-                      <span className="md:hidden">View & Download</span>
-                      <span className="hidden md:inline">Download</span>
+                      <span className="md:hidden">{t("View & Download")}</span>
+                      <span className="hidden md:inline">{t("Download")}</span>
                     </a>
                   )}
 
@@ -3696,115 +3851,170 @@ export default function AdvancedHistoryArchive() {
               {/* Preview Body */}
               <div className="flex-1 overflow-y-auto md:overflow-hidden flex flex-col md:flex-row">
 
-                {!viewingAnswer && (
-                  <div className={`${(activeSample || previewItem.parent.hasFile) ? 'md:w-1/3 lg:w-1/4 md:border-r border-slate-200' : 'w-full'} flex flex-col bg-slate-50 overflow-visible md:overflow-hidden`}>
+                {(!viewingAnswer || (viewingAnswer && (previewItem.isFullPaper ? previewItem.parent.subQuestions.some(sq => sq.candidatePerformance || sq.candidatePerformanceChi) : (previewItem.child.candidatePerformance || previewItem.child.candidatePerformanceChi)))) && (
+                  <div className={`${(activeSample || previewItem.parent.hasFile || (viewingAnswer && previewItem.parent.hasAnswer)) ? 'md:w-1/3 lg:w-1/4 md:border-r border-slate-200' : 'w-full'} flex flex-col bg-slate-50 overflow-visible md:overflow-hidden`}>
                     <div className="flex-1 p-3 md:p-6 overflow-visible md:overflow-y-auto custom-scrollbar">
-                      {/* FULL PAPER LEFT PANEL */}
-                      {previewItem.isFullPaper ? (
+                      {viewingAnswer ? (
                         <div className="space-y-4 md:space-y-6">
-                          {showTags && (
-                            <div className="hidden md:block bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                              <h3 className="text-sm font-bold text-slate-800 mb-2">Paper Overview</h3>
-                              <div className="flex flex-wrap gap-2">
-                                {ensureArray(previewItem.parent.topic).map((t, i) => (
-                                  <span key={i} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1">
-                                    <Tag size={12} /> {t}
+                          <h3 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1 md:gap-2">
+                            <FileText size={12} className="md:w-3.5 md:h-3.5" /> {t("Candidate Performance")}
+                          </h3>
+                          {previewItem.isFullPaper ? (
+                            previewItem.parent.subQuestions.filter(sq => sq.candidatePerformance || sq.candidatePerformanceChi).map(sq => (
+                              <div key={sq.id} className="bg-white p-3 md:p-4 rounded-xl border border-slate-200 shadow-sm">
+                                <div className="mb-2">
+                                  <span className="bg-slate-800 text-white text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 md:py-1 rounded-md font-bold">
+                                    Q{sq.label}
                                   </span>
-                                ))}
+                                </div>
+                                <div className="leading-relaxed text-xs md:text-sm text-slate-800 whitespace-pre-wrap">
+                                  {(() => {
+                                    const isUsingChi = language === 'zh' && sq.candidatePerformanceChi;
+                                    const text = isUsingChi ? sq.candidatePerformanceChi : sq.candidatePerformance;
+                                    if (!text) return null;
+                                    return /[\u4e00-\u9fa5]/.test(text) ? text.replace(/\s+/g, '') : text;
+                                  })()}
+                                </div>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="bg-white p-3 md:p-4 rounded-xl border border-slate-200 shadow-sm">
+                              <div className="mb-2">
+                                <span className="bg-slate-800 text-white text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 md:py-1 rounded-md font-bold">
+                                  Q{previewItem.child.label}
+                                </span>
+                              </div>
+                              <div className="leading-relaxed text-xs md:text-sm text-slate-800 whitespace-pre-wrap">
+                                {(() => {
+                                  const isUsingChi = language === 'zh' && previewItem.child.candidatePerformanceChi;
+                                  const text = isUsingChi ? previewItem.child.candidatePerformanceChi : previewItem.child.candidatePerformance;
+                                  if (!text) return null;
+                                  return /[\u4e00-\u9fa5]/.test(text) ? text.replace(/\s+/g, '') : text;
+                                })()}
                               </div>
                             </div>
                           )}
-
-                          <h3 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1 md:gap-2">
-                            <LayoutList size={12} className="md:w-3.5 md:h-3.5" /> All Sub-Questions
-                          </h3>
-
-                          {previewItem.parent.subQuestions.map((sq, idx) => (
-                            <div key={sq.id} className="bg-white p-3 md:p-4 rounded-xl border border-slate-200 shadow-sm">
-                              <div className="flex justify-between items-start mb-2">
-                                <span className="bg-slate-800 text-white text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 md:py-1 rounded-md font-bold">
-                                  Q{sq.label}
-                                </span>
-                                {sq.marks && (
-                                  <span className="text-[10px] md:text-xs text-slate-500 font-normal border border-slate-200 px-1.5 py-0.5 rounded bg-slate-50">
-                                    {sq.marks} Marks
-                                  </span>
-                                )}
-                              </div>
-                              <div className={`leading-relaxed mb-2 md:mb-3 ${previewItem.parent.paperType === "Paper 2 (Essay)" && !previewItem.parent.hasFile ? 'text-2xl md:text-5xl font-medium text-slate-800 py-2 md:py-4' : 'text-xs md:text-sm text-slate-700'}`}>
-                                {sq.content || <span className="text-slate-400 italic text-xs md:text-sm">No text content available.</span>}
-                              </div>
-                              {showTags && (
-                                <div className="flex flex-wrap gap-1 md:gap-1.5">
-                                  {ensureArray(sq.topic).map((t, i) => (
-                                    <span key={`t-${i}`} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[9px] md:text-[10px] font-medium border border-blue-100">
-                                      {t}
-                                    </span>
-                                  ))}
-                                  {ensureArray(sq.questionType).map((qt, i) => (
-                                    <span key={`qt-${i}`} className="px-1.5 py-0.5 bg-green-50 text-green-700 rounded text-[9px] md:text-[10px] font-medium border border-green-100">
-                                      {qt}
-                                    </span>
-                                  ))}
-                                  {ensureArray(sq.sourceType).map((st, i) => (
-                                    <span key={`st-${i}`} className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[9px] md:text-[10px] font-medium border border-slate-200">
-                                      {st}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          ))}
                         </div>
                       ) : (
-                        /* SINGLE SUB-QUESTION LEFT PANEL */
-                        <div className="prose max-w-none">
-                          <h3 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1 md:gap-2">
-                            <FileText size={12} className="md:w-3.5 md:h-3.5" /> Question Content
-                          </h3>
-                          <div className={`leading-relaxed bg-white p-3 md:p-4 rounded-lg border border-slate-200 shadow-sm ${previewItem.parent.paperType === "Paper 2 (Essay)" && !previewItem.parent.hasFile ? 'text-2xl md:text-5xl font-medium text-slate-900 p-4 md:p-8' : 'text-xs md:text-sm text-slate-800'}`}>
-                            {previewItem.child.content || <span className="text-slate-400 italic text-xs md:text-sm">No text content available. Please refer to the PDF.</span>}
-                          </div>
-
-                          {showTags && (
-                            <div className="mt-4 md:mt-6 space-y-3 md:space-y-4">
-                              <div>
-                                <h4 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5 md:mb-2">Topics</h4>
-                                <div className="flex flex-wrap gap-1.5 md:gap-2">
-                                  {[...ensureArray(previewItem.parent.topic), ...ensureArray(previewItem.child.topic)].map((t, i) => (
-                                    <span key={i} className="px-1.5 md:px-2 py-0.5 md:py-1 bg-blue-50 text-blue-700 rounded-md text-[9px] md:text-xs font-medium border border-blue-100 flex items-center gap-1">
-                                      <Tag size={10} className="md:w-3 md:h-3" /> {t}
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
-
-                              <div>
-                                <h4 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5 md:mb-2">Question Types</h4>
-                                <div className="flex flex-wrap gap-1.5 md:gap-2">
-                                  {ensureArray(previewItem.child.questionType).map((qt, i) => (
-                                    <span key={i} className="px-1.5 md:px-2 py-0.5 md:py-1 bg-green-50 text-green-700 rounded-md text-[9px] md:text-xs font-medium border border-green-100">
-                                      {qt}
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
-
-                              {ensureArray(previewItem.child.sourceType).length > 0 && (
-                                <div>
-                                  <h4 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5 md:mb-2">Source Types</h4>
-                                  <div className="flex flex-wrap gap-1.5 md:gap-2">
-                                    {ensureArray(previewItem.child.sourceType).map((st, i) => (
-                                      <span key={i} className="px-1.5 md:px-2 py-0.5 md:py-1 bg-slate-100 text-slate-600 rounded-md text-[9px] md:text-xs font-medium border border-slate-200 flex items-center gap-1">
-                                        <FileDigit size={10} className="md:w-3 md:h-3" /> {st}
+                        <>
+                          {/* FULL PAPER LEFT PANEL */}
+                          {previewItem.isFullPaper ? (
+                            <div className="space-y-4 md:space-y-6">
+                              {showTags && (
+                                <div className="hidden md:block bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                                  <h3 className="text-sm font-bold text-slate-800 mb-2">{t("Paper Overview")}</h3>
+                                  <div className="flex flex-wrap gap-2">
+                                    {ensureArray(previewItem.parent.topic).map((t, i) => (
+                                      <span key={i} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1">
+                                        <Tag size={12} /> {getTranslatedTag(t)}
                                       </span>
                                     ))}
                                   </div>
                                 </div>
                               )}
+
+                              <h3 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1 md:gap-2">
+                                <LayoutList size={12} className="md:w-3.5 md:h-3.5" /> {t("All Sub-Questions")}
+                              </h3>
+
+                              {previewItem.parent.subQuestions.map((sq, idx) => (
+                                <div key={sq.id} className="bg-white p-3 md:p-4 rounded-xl border border-slate-200 shadow-sm">
+                                  <div className="flex justify-between items-start mb-2">
+                                    <span className="bg-slate-800 text-white text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 md:py-1 rounded-md font-bold">
+                                      Q{sq.label}
+                                    </span>
+                                    {sq.marks && (
+                                      <span className="text-[10px] md:text-xs text-slate-500 font-normal border border-slate-200 px-1.5 py-0.5 rounded bg-slate-50">
+                                        {t(`${sq.marks} Marks`)}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className={`leading-relaxed mb-2 md:mb-3 ${previewItem.parent.paperType === "Paper 2 (Essay)" && !previewItem.parent.hasFile ? 'text-2xl md:text-5xl font-medium text-slate-800 py-2 md:py-4' : 'text-xs md:text-sm text-slate-700'}`}>
+                                    {(() => {
+                                      const isUsingChi = language === 'zh' && sq.contentChi;
+                                      const text = isUsingChi ? sq.contentChi : sq.content;
+                                      if (!text) return <span className="text-slate-400 italic text-xs md:text-sm">{t("No text content available.")}</span>;
+                                      return /[\u4e00-\u9fa5]/.test(text) ? text.replace(/\s+/g, '') : text;
+                                    })()}
+                                  </div>
+                                  {showTags && (
+                                    <div className="flex flex-wrap gap-1 md:gap-1.5">
+                                      {ensureArray(sq.topic).map((t, i) => (
+                                        <span key={`t-${i}`} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[9px] md:text-[10px] font-medium border border-blue-100">
+                                          {getTranslatedTag(t)}
+                                        </span>
+                                      ))}
+                                      {ensureArray(sq.questionType).map((qt, i) => (
+                                        <span key={`qt-${i}`} className="px-1.5 py-0.5 bg-green-50 text-green-700 rounded text-[9px] md:text-[10px] font-medium border border-green-100">
+                                          {getTranslatedTag(qt)}
+                                        </span>
+                                      ))}
+                                      {ensureArray(sq.sourceType).map((st, i) => (
+                                        <span key={`st-${i}`} className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[9px] md:text-[10px] font-medium border border-slate-200">
+                                          {getTranslatedTag(st)}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            /* SINGLE SUB-QUESTION LEFT PANEL */
+                            <div className="prose max-w-none">
+                              <h3 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1 md:gap-2">
+                                <FileText size={12} className="md:w-3.5 md:h-3.5" /> {t("Question Content")}
+                              </h3>
+                              <div className={`leading-relaxed bg-white p-3 md:p-4 rounded-lg border border-slate-200 shadow-sm ${previewItem.parent.paperType === "Paper 2 (Essay)" && !previewItem.parent.hasFile ? 'text-2xl md:text-5xl font-medium text-slate-900 p-4 md:p-8' : 'text-xs md:text-sm text-slate-800'}`}>
+                                {(() => {
+                                  const isUsingChi = language === 'zh' && previewItem.child.contentChi;
+                                  const text = isUsingChi ? previewItem.child.contentChi : previewItem.child.content;
+                                  if (!text) return <span className="text-slate-400 italic text-xs md:text-sm">{t("No text content available. Please refer to the PDF.")}</span>;
+                                  return /[\u4e00-\u9fa5]/.test(text) ? text.replace(/\s+/g, '') : text;
+                                })()}
+                              </div>
+
+                              {showTags && (
+                                <div className="mt-4 md:mt-6 space-y-3 md:space-y-4">
+                                  <div>
+                                    <h4 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5 md:mb-2">{t("Topics")}</h4>
+                                    <div className="flex flex-wrap gap-1.5 md:gap-2">
+                                      {[...ensureArray(previewItem.parent.topic), ...ensureArray(previewItem.child.topic)].map((t, i) => (
+                                        <span key={i} className="px-1.5 md:px-2 py-0.5 md:py-1 bg-blue-50 text-blue-700 rounded-md text-[9px] md:text-xs font-medium border border-blue-100 flex items-center gap-1">
+                                          <Tag size={10} className="md:w-3 md:h-3" /> {getTranslatedTag(t)}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+
+                                  <div>
+                                    <h4 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5 md:mb-2">{t("Question Types")}</h4>
+                                    <div className="flex flex-wrap gap-1.5 md:gap-2">
+                                      {ensureArray(previewItem.child.questionType).map((qt, i) => (
+                                        <span key={i} className="px-1.5 md:px-2 py-0.5 md:py-1 bg-green-50 text-green-700 rounded-md text-[9px] md:text-xs font-medium border border-green-100">
+                                          {getTranslatedTag(qt)}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+
+                                  {ensureArray(previewItem.child.sourceType).length > 0 && (
+                                    <div>
+                                      <h4 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5 md:mb-2">{t("Source Types")}</h4>
+                                      <div className="flex flex-wrap gap-1.5 md:gap-2">
+                                        {ensureArray(previewItem.child.sourceType).map((st, i) => (
+                                          <span key={i} className="px-1.5 md:px-2 py-0.5 md:py-1 bg-slate-100 text-slate-600 rounded-md text-[9px] md:text-xs font-medium border border-slate-200 flex items-center gap-1">
+                                            <FileDigit size={10} className="md:w-3 md:h-3" /> {getTranslatedTag(st)}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           )}
-                        </div>
+                        </>
                       )}
                     </div>
 
@@ -3814,7 +4024,7 @@ export default function AdvancedHistoryArchive() {
                         onClick={() => setShowStudentSamples(!showStudentSamples)}
                         className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2 hover:text-indigo-600 transition-colors"
                       >
-                        <GraduationCap size={14} /> Student Samples ({previewSamples.length})
+                        <GraduationCap size={14} /> {t("Student Samples")} ({previewSamples.length})
                         <ChevronDown size={14} className={`transition-transform ${showStudentSamples ? 'rotate-180' : ''}`} />
                       </button>
 
@@ -3824,9 +4034,9 @@ export default function AdvancedHistoryArchive() {
                           onChange={(e) => setSampleSortOption(e.target.value)}
                           className="text-xs border border-slate-200 rounded p-1 outline-none focus:border-indigo-500"
                         >
-                          <option value="mark_desc">Mark (High to Low)</option>
-                          <option value="lang_en_ch">Language (EN to CH)</option>
-                          <option value="both">Both (Lang then Mark)</option>
+                          <option value="mark_desc">{t("Mark (High to Low)")}</option>
+                          <option value="lang_en_ch">{t("Language (EN to CH)")}</option>
+                          <option value="both">{t("Both (Lang then Mark)")}</option>
                         </select>
                       )}
                     </div>
@@ -3841,7 +4051,7 @@ export default function AdvancedHistoryArchive() {
                         >
                           {previewSamples.length === 0 ? (
                             <div className="text-sm text-slate-500 italic p-4 text-center border border-slate-200 rounded-lg bg-slate-50">
-                              There is currently no sample available.
+                              {t("There is currently no sample available.")}
                             </div>
                           ) : previewSamples.sort((a, b) => {
                             // Helper to get marks for sorting
@@ -3917,13 +4127,13 @@ export default function AdvancedHistoryArchive() {
                               <div key={sample.id} className={`p-3 border rounded-lg transition-colors ${activeSample?.id === sample.id ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-slate-200 hover:border-indigo-300'}`}>
                                 <div className="flex justify-between items-start mb-2">
                                   <div className="text-xs font-medium text-slate-700">
-                                    <span className="font-bold text-slate-900">[{sample.language}]</span> Overall grade: <span className="font-bold text-indigo-600">{sample.overallGrade}</span>
+                                    <span className="font-bold text-slate-900">[{sample.language}]</span> {t("Overall grade:")} <span className="font-bold text-indigo-600">{sample.overallGrade}</span>
                                   </div>
                                 </div>
                                 <div className="flex justify-between items-end">
                                   <div className="flex flex-col gap-1">
                                     <div className="text-xs text-slate-600">
-                                      {previewItem.isFullPaper ? `Mark (${displayTag}): ` : `Mark (this question): `}
+                                      {previewItem.isFullPaper ? `${t("Mark")} (${displayTag}): ` : `${t("Mark (this question)")}: `}
                                       <span className="font-bold text-slate-900">{scoreData?.mark}</span>
                                     </div>
                                     {scoreData?.subMarks && Object.keys(scoreData.subMarks).length > 0 && (
@@ -3944,7 +4154,7 @@ export default function AdvancedHistoryArchive() {
                                       onClick={() => setActiveSample({ ...sample, currentFileUrl: scoreData.fileUrl })}
                                       className={`hidden md:block text-xs font-bold px-3 py-1.5 rounded-md transition-colors h-fit ${activeSample?.id === sample.id ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'}`}
                                     >
-                                      View Sample
+                                      {t("View Sample")}
                                     </button>
 
                                     {/* Mobile Direct Download/View Button */}
@@ -3955,7 +4165,7 @@ export default function AdvancedHistoryArchive() {
                                       onClick={() => handleDownloadTracking("Student Sample")}
                                       className="md:hidden text-xs font-bold px-3 py-1.5 rounded-md transition-colors h-fit bg-indigo-600 text-white flex items-center gap-1.5 shadow-sm"
                                     >
-                                      <Download size={12} /> View PDF
+                                      <Download size={12} /> {t("View PDF")}
                                     </a>
                                   </>
                                 </div>
@@ -3973,13 +4183,15 @@ export default function AdvancedHistoryArchive() {
                     {activeSample ? (
                       <CustomPDFViewer fileUrl={getSecurePdfUrl(activeSample.currentFileUrl)} />
                     ) : viewingAnswer ? (
-                      previewItem.parent.hasAnswer ? (
+                      (language === 'zh' && previewItem.parent.answerFileUrlChi) ? (
+                        <CustomPDFViewer fileUrl={getSecurePdfUrl(previewItem.parent.answerFileUrlChi)} />
+                      ) : previewItem.parent.hasAnswer ? (
                         <CustomPDFViewer fileUrl={getSecurePdfUrl(previewItem.parent.answerFileUrl)} />
                       ) : (
-                        <div className="flex items-center justify-center h-full text-slate-500">No answer file available.</div>
+                        <div className="flex items-center justify-center h-full text-slate-500">{t("No answer file available.")}</div>
                       )
                     ) : (
-                      <CustomPDFViewer fileUrl={getSecurePdfUrl(previewItem.parent.fileUrl)} />
+                      <CustomPDFViewer fileUrl={getSecurePdfUrl((language === 'zh' && previewItem.parent.fileUrlChi) ? previewItem.parent.fileUrlChi : previewItem.parent.fileUrl)} />
                     )}
                   </div>
                 )}
@@ -4010,10 +4222,10 @@ export default function AdvancedHistoryArchive() {
               <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-2xl shrink-0">
                 <div>
                   <h2 className="text-xl font-bold text-slate-800">
-                    {!uploadSelection ? 'Select Upload Type' : (uploadSelection === 'question' ? (editingId ? 'Edit Question Set' : 'Upload New Question Set') : (uploadSelection === 'batch' ? 'Batch Exam Paper Upload' : 'Upload Student Sample'))}
+                    {!uploadSelection ? t('Select Upload Type') : (uploadSelection === 'question' ? (editingId ? t('Edit Question Set') : t('Upload New Question Set')) : (uploadSelection === 'batch' ? t('Batch Exam Paper Upload') : t('Upload Student Sample')))}
                   </h2>
                   <p className="text-sm text-slate-500">
-                    {!uploadSelection ? 'Choose what kind of document you want to add to the archive.' : (uploadSelection === 'question' ? 'Add or modify a parent document and its sub-questions.' : (uploadSelection === 'batch' ? 'Upload a full exam PDF and split it into multiple questions.' : 'Upload a student sample PDF and assign marks.'))}
+                    {!uploadSelection ? t('Choose what kind of document you want to add to the archive.') : (uploadSelection === 'question' ? t('Add or modify a parent document and its sub-questions.') : (uploadSelection === 'batch' ? t('Upload a full exam PDF and split it into multiple questions.') : t('Upload a student sample PDF and assign marks.')))}
                   </p>
                 </div>
                 <button
@@ -4037,8 +4249,8 @@ export default function AdvancedHistoryArchive() {
                       <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
                         <FileText size={32} />
                       </div>
-                      <h3 className="text-lg font-bold text-slate-800 mb-2">Question Set</h3>
-                      <p className="text-sm text-slate-500 text-center">Upload exam papers, mock tests, and their sub-questions.</p>
+                      <h3 className="text-lg font-bold text-slate-800 mb-2">{t("Question Set")}</h3>
+                      <p className="text-sm text-slate-500 text-center">{t("Upload exam papers, mock tests, and their sub-questions.")}</p>
                     </button>
 
                     <button
@@ -4048,8 +4260,8 @@ export default function AdvancedHistoryArchive() {
                       <div className="w-16 h-16 bg-teal-100 text-teal-600 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
                         <FileStack size={32} />
                       </div>
-                      <h3 className="text-lg font-bold text-slate-800 mb-2">Batch Exam Paper</h3>
-                      <p className="text-sm text-slate-500 text-center">Upload a full exam PDF, split pages, and categorize multiple DBQ/Essays at once.</p>
+                      <h3 className="text-lg font-bold text-slate-800 mb-2">{t("Batch Exam Paper")}</h3>
+                      <p className="text-sm text-slate-500 text-center">{t("Upload a full exam PDF, split pages, and categorize multiple DBQ/Essays at once.")}</p>
                     </button>
 
                     <button
@@ -4059,8 +4271,8 @@ export default function AdvancedHistoryArchive() {
                       <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
                         <GraduationCap size={32} />
                       </div>
-                      <h3 className="text-lg font-bold text-slate-800 mb-2">Student Sample</h3>
-                      <p className="text-sm text-slate-500 text-center">Upload student answers, assign grades, and link to specific questions.</p>
+                      <h3 className="text-lg font-bold text-slate-800 mb-2">{t("Student Sample")}</h3>
+                      <p className="text-sm text-slate-500 text-center">{t("Upload student answers, assign grades, and link to specific questions.")}</p>
                     </button>
                   </div>
                 )}
@@ -4068,236 +4280,296 @@ export default function AdvancedHistoryArchive() {
                 {/* QUESTION UPLOAD FORM */}
                 {uploadSelection === 'question' && (
                   <form id="upload-form" onSubmit={handleUploadSubmit} className="space-y-8">
-                    {/* SECTION 1: PARENT DETAILS */}
-                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-                      <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                        <FileText size={16} /> Parent Document Details
-                      </h3>
 
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div className="col-span-full">
-                          <label className="label flex justify-between items-center">
-                            <span>Document Title</span>
-                            <span className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded font-medium flex items-center gap-1">
-                              <Sparkles size={10} /> Auto-detects "2012D" or "2013E"
-                            </span>
-                          </label>
-                          <input
-                            type="text" required placeholder="e.g. 2021E (Type '2012D' to auto-select DBQ)"
-                            className="input-field"
-                            value={uploadForm.title}
-                            onChange={handleTitleChange}
-                          />
-                        </div>
-
-                        <div className="flex flex-col">
-                          <label className="label">Paper Type</label>
-                          <select required className="input-field mt-auto" value={uploadForm.paperType} onChange={(e) => handleParentChange('paperType', e.target.value)}>
-                            <option value="">Select Paper</option>
-                            {PAPER_TYPES.map(p => <option key={p} value={p}>{p}</option>)}
-                          </select>
-                        </div>
-
-                        {/* TIER SELECTION */}
-                        <div>
-                          <label className="label flex items-center gap-2">
-                            <Layers size={14} /> Document Tier Level
-                          </label>
-                          <select required className="input-field" value={uploadForm.tier} onChange={(e) => handleParentChange('tier', e.target.value)}>
-                            {systemTiers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                          </select>
-                        </div>
-
-                        {/* Parent Topic - Disabled for Paper 2 */}
-                        <div>
-                          <label className={`label flex items-center gap-2 ${uploadForm.paperType === "Paper 2 (Essay)" ? 'text-slate-300' : ''}`}>
-                            <Tag size={14} /> Main Topic(s) (Paper 1 Only)
-                          </label>
-                          <CreatableSelect
-                            options={availableTopics}
-                            value={uploadForm.topic}
-                            onChange={(val) => handleParentChange('topic', val)}
-                            onCreate={handleCreateTopic}
-                            placeholder={uploadForm.paperType === "Paper 2 (Essay)" ? "Not applicable" : "Select or type new topic..."}
-                            disabled={uploadForm.paperType === "Paper 2 (Essay)"}
-                            icon={Tag}
-                            isMulti={true}
-                          />
-                        </div>
-
-                        <div>
-                          <label className="label">Origin</label>
-                          <select required className="input-field" value={uploadForm.origin} onChange={(e) => handleParentChange('origin', e.target.value)}>
-                            <option value="">Select Origin</option>
-                            {ORIGINS.map(o => <option key={o} value={o}>{o}</option>)}
-                          </select>
-                        </div>
-
-                        <div>
-                          <label className="label">Year</label>
-                          <input type="number" required className="input-field" value={uploadForm.year} onChange={(e) => handleParentChange('year', e.target.value)} />
-                        </div>
-
-                        <div>
-                          <label className="label flex justify-between">
-                            <span>PDF Document (Question)</span>
-                            <span className="text-slate-400 font-normal italic">Optional</span>
-                          </label>
-                          <div className="relative">
-                            <input
-                              type="file" accept=".pdf"
-                              onChange={(e) => setSelectedFile(e.target.files[0])}
-                              className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-                            />
-                            {selectedFile && <div className="text-xs text-blue-600 mt-2 font-bold">Selected: {selectedFile.name}</div>}
-                            {pendingToolFile && (
-                              <button type="button" onClick={() => setSelectedFile(new File([pendingToolFile.fileBytes], pendingToolFile.name, { type: 'application/pdf' }))} className="mt-2 text-xs bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg hover:bg-blue-200 font-bold flex items-center gap-1">
-                                <Upload size={14} /> Attach Pending: {pendingToolFile.name}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-
-                        <div>
-                          <label className="label flex justify-between">
-                            <span className="text-green-700">Answer Document (PDF)</span>
-                            <span className="text-slate-400 font-normal italic">Optional</span>
-                          </label>
-                          <div className="relative">
-                            <input
-                              type="file" accept=".pdf"
-                              onChange={(e) => setSelectedAnswerFile(e.target.files[0])}
-                              className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-green-50 file:text-green-700 hover:file:bg-green-100"
-                            />
-                          </div>
-                        </div>
-
-                      </div>
+                    {/* LANGUAGE TABS */}
+                    <div className="flex border-b border-slate-200 mb-4 overflow-x-auto">
+                      <button type="button" onClick={() => setUploadLangTab('en')} className={`px-6 py-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${uploadLangTab === 'en' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>English Version</button>
+                      <button type="button" onClick={() => setUploadLangTab('zh')} className={`px-6 py-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${uploadLangTab === 'zh' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>Chinese Version (中文版)</button>
+                      <button type="button" onClick={() => setUploadLangTab('perf')} className={`px-6 py-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${uploadLangTab === 'perf' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>Candidate Performances</button>
                     </div>
 
-                    {/* SECTION 2: SUB-QUESTIONS */}
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                          <CornerDownRight size={16} /> Sub-Questions (Children)
-                        </h3>
-                        <button type="button" onClick={addSubQuestion} className="text-sm font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1">
-                          <Plus size={16} /> Add Question
-                        </button>
-                      </div>
+                    {uploadLangTab !== 'perf' && (
+                      <>
+                        {/* SECTION 1: PARENT DETAILS */}
+                        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                          <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                            <FileText size={16} /> {t("Parent Document Details")}
+                          </h3>
 
-                      {uploadForm.subQuestions.map((sub, index) => (
-                        <motion.div
-                          key={sub.id}
-                          initial={{ opacity: 0, x: -10 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm relative group"
-                        >
-                          <div className="absolute -left-3 top-6 w-3 h-px bg-slate-300"></div>
-
-                          <div className="flex gap-4 items-start">
-                            <div className="w-16 flex-shrink-0">
-                              <label className="text-xs font-bold text-slate-500 mb-1 block">Label</label>
-                              <div className="min-h-8 mb-2"></div> {/* Spacer to align with tags */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div className="col-span-full">
+                              <label className="label flex justify-between items-center">
+                                <span>{t("Document Title")}</span>
+                                <span className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded font-medium flex items-center gap-1">
+                                  <Sparkles size={10} /> {t('Auto-detects "2012D" or "2013E"')}
+                                </span>
+                              </label>
                               <input
-                                type="text"
-                                className="w-full p-2 bg-white border border-slate-200 rounded text-center font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
-                                value={sub.label}
-                                onChange={(e) => updateSubQuestion(index, 'label', e.target.value)}
+                                type="text" required placeholder={t("e.g. 2021E (Type '2012D' to auto-select DBQ)")}
+                                className="input-field"
+                                value={uploadForm.title}
+                                onChange={handleTitleChange}
                               />
                             </div>
 
-                            <div className="flex-1 space-y-4">
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="flex flex-col">
+                              <label className="label">{t("Paper Type")}</label>
+                              <select required className="input-field mt-auto" value={uploadForm.paperType} onChange={(e) => handleParentChange('paperType', e.target.value)}>
+                                <option value="">{t("Select Paper")}</option>
+                                {PAPER_TYPES.map(p => <option key={p} value={p}>{t(p)}</option>)}
+                              </select>
+                            </div>
+
+                            {/* TIER SELECTION */}
+                            <div>
+                              <label className="label flex items-center gap-2">
+                                <Layers size={14} /> {t("Document Tier Level")}
+                              </label>
+                              <select required className="input-field" value={uploadForm.tier} onChange={(e) => handleParentChange('tier', e.target.value)}>
+                                {systemTiers.map(tier => <option key={tier.id} value={tier.id}>{tier.name}</option>)}
+                              </select>
+                            </div>
+
+                            {/* Parent Topic - Disabled for Paper 2 */}
+                            <div>
+                              <label className={`label flex items-center gap-2 ${uploadForm.paperType === "Paper 2 (Essay)" ? 'text-slate-300' : ''}`}>
+                                <Tag size={14} /> {t("Main Topic(s) (Paper 1 Only)")}
+                              </label>
+                              <CreatableSelect
+                                options={availableTopics}
+                                value={uploadForm.topic}
+                                onChange={(val) => handleParentChange('topic', val)}
+                                onCreate={handleCreateTopic}
+                                placeholder={uploadForm.paperType === "Paper 2 (Essay)" ? t("Not applicable") : t("Select or type new topic...")}
+                                disabled={uploadForm.paperType === "Paper 2 (Essay)"}
+                                icon={Tag}
+                                isMulti={true}
+                              />
+                            </div>
+
+                            <div>
+                              <label className="label">{t("Origin")}</label>
+                              <select required className="input-field" value={uploadForm.origin} onChange={(e) => handleParentChange('origin', e.target.value)}>
+                                <option value="">{t("Select Origin")}</option>
+                                {ORIGINS.map(o => <option key={o} value={o}>{o}</option>)}
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="label">{t("Year")}</label>
+                              <input type="number" required className="input-field" value={uploadForm.year} onChange={(e) => handleParentChange('year', e.target.value)} />
+                            </div>
+
+                            {uploadLangTab === 'en' ? (
+                              <>
                                 <div>
-                                  <label className="text-xs font-bold text-slate-500 mb-1 block">Question Type(s)</label>
-                                  <CreatableSelect
-                                    options={uploadForm.paperType ? availableQuestionTypes[uploadForm.paperType] : []}
-                                    value={sub.questionType}
-                                    onChange={(val) => updateSubQuestion(index, 'questionType', val)}
-                                    onCreate={(val) => handleCreateQuestionType(val, uploadForm.paperType)}
-                                    placeholder="Select or add type..."
-                                    disabled={!uploadForm.paperType}
-                                    isMulti={true}
+                                  <label className="label flex justify-between"><span>{t("PDF Document (Question)")}</span><span className="text-slate-400 font-normal italic">{t("Optional")}</span></label>
+                                  <input type="file" accept=".pdf" onChange={(e) => setSelectedFile(e.target.files[0])} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700" />
+                                  {selectedFile && <div className="text-xs text-blue-600 mt-2 font-bold">{t("Selected:")} {selectedFile.name}</div>}
+                                  {!selectedFile && uploadForm.fileUrl && <div className="text-xs text-slate-500 mt-2 font-bold flex items-center gap-1"><Check size={12} className="text-green-500" /> {t("Current File: Attached")}</div>}
+                                </div>
+                                <div>
+                                  <label className="label flex justify-between"><span className="text-green-700">{t("Answer Document (PDF)")}</span><span className="text-slate-400 font-normal italic">{t("Optional")}</span></label>
+                                  <input type="file" accept=".pdf" onChange={(e) => setSelectedAnswerFile(e.target.files[0])} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-green-50 file:text-green-700" />
+                                  {selectedAnswerFile && <div className="text-xs text-green-600 mt-2 font-bold">{t("Selected:")} {selectedAnswerFile.name}</div>}
+                                  {!selectedAnswerFile && uploadForm.answerFileUrl && <div className="text-xs text-slate-500 mt-2 font-bold flex items-center gap-1"><Check size={12} className="text-green-500" /> {t("Current Answer: Attached")}</div>}
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div>
+                                  <label className="label flex justify-between"><span>Chinese PDF Document (Question)</span><span className="text-slate-400 font-normal italic">{t("Optional")}</span></label>
+                                  <input type="file" accept=".pdf" onChange={(e) => setSelectedFileChi(e.target.files[0])} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700" />
+                                  {selectedFileChi && <div className="text-xs text-blue-600 mt-2 font-bold">{t("Selected:")} {selectedFileChi.name}</div>}
+                                  {!selectedFileChi && uploadForm.fileUrlChi && <div className="text-xs text-slate-500 mt-2 font-bold flex items-center gap-1"><Check size={12} className="text-green-500" /> {t("Current Chinese File: Attached")}</div>}
+                                </div>
+                                <div>
+                                  <label className="label flex justify-between"><span className="text-green-700">Chinese Answer Document (PDF)</span><span className="text-slate-400 font-normal italic">{t("Optional")}</span></label>
+                                  <input type="file" accept=".pdf" onChange={(e) => setSelectedAnswerFileChi(e.target.files[0])} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-green-50 file:text-green-700" />
+                                  {selectedAnswerFileChi && <div className="text-xs text-green-600 mt-2 font-bold">{t("Selected:")} {selectedAnswerFileChi.name}</div>}
+                                  {!selectedAnswerFileChi && uploadForm.answerFileUrlChi && <div className="text-xs text-slate-500 mt-2 font-bold flex items-center gap-1"><Check size={12} className="text-green-500" /> {t("Current Chinese Answer: Attached")}</div>}
+                                </div>
+                              </>
+                            )}
+
+                          </div>
+                        </div>
+
+                        {/* SECTION 2: SUB-QUESTIONS */}
+                        <div className="space-y-4">
+                          <div className="flex items-center justify-between">
+                            <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                              <CornerDownRight size={16} /> {t("Sub-Questions (Children)")}
+                            </h3>
+                            <button type="button" onClick={addSubQuestion} className="text-sm font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1">
+                              <Plus size={16} /> {t("Add Question")}
+                            </button>
+                          </div>
+
+                          {uploadForm.subQuestions.map((sub, index) => (
+                            <motion.div
+                              key={sub.id}
+                              initial={{ opacity: 0, x: -10 }}
+                              animate={{ opacity: 1, x: 0 }}
+                              className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm relative group"
+                            >
+                              <div className="absolute -left-3 top-6 w-3 h-px bg-slate-300"></div>
+
+                              <div className="flex gap-4 items-start">
+                                <div className="w-16 flex-shrink-0">
+                                  <label className="text-xs font-bold text-slate-500 mb-1 block">{t("Label")}</label>
+                                  <div className="min-h-8 mb-2"></div> {/* Spacer to align with tags */}
+                                  <input
+                                    type="text"
+                                    className="w-full p-2 bg-white border border-slate-200 rounded text-center font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
+                                    value={sub.label}
+                                    onChange={(e) => updateSubQuestion(index, 'label', e.target.value)}
                                   />
                                 </div>
 
-                                {uploadForm.paperType === "Paper 1 (DBQ)" && (
-                                  <div className="flex flex-col">
-                                    <label className="text-xs font-bold text-slate-500 mb-1 block flex items-center gap-1">
-                                      <Hash size={10} /> Marks
-                                    </label>
-                                    <input
-                                      type="number"
-                                      placeholder="e.g. 4"
-                                      className="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none mt-auto"
-                                      value={sub.marks || ''}
-                                      onChange={(e) => updateSubQuestion(index, 'marks', e.target.value)}
-                                    />
-                                  </div>
-                                )}
+                                <div className="flex-1 space-y-4">
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                      <label className="text-xs font-bold text-slate-500 mb-1 block">{t("Question Type(s)")}</label>
+                                      <CreatableSelect
+                                        options={uploadForm.paperType ? availableQuestionTypes[uploadForm.paperType] : []}
+                                        value={sub.questionType}
+                                        onChange={(val) => updateSubQuestion(index, 'questionType', val)}
+                                        onCreate={(val) => handleCreateQuestionType(val, uploadForm.paperType)}
+                                        placeholder={t("Select or add type...")}
+                                        disabled={!uploadForm.paperType}
+                                        isMulti={true}
+                                      />
+                                    </div>
 
-                                {uploadForm.paperType === "Paper 1 (DBQ)" && (
-                                  <div>
-                                    <label className="text-xs font-bold text-slate-500 mb-1 block flex items-center gap-1">
-                                      <FileDigit size={10} /> Source Type
-                                    </label>
-                                    <CreatableSelect
-                                      options={availableSourceTypes}
-                                      value={sub.sourceType}
-                                      onChange={(val) => updateSubQuestion(index, 'sourceType', val)}
-                                      onCreate={handleCreateSourceType}
-                                      placeholder="e.g. Cartoon, Table..."
-                                      icon={FileDigit}
-                                      isMulti={true}
-                                    />
-                                  </div>
-                                )}
+                                    {uploadForm.paperType === "Paper 1 (DBQ)" && (
+                                      <div className="flex flex-col">
+                                        <label className="text-xs font-bold text-slate-500 mb-1 block flex items-center gap-1">
+                                          <Hash size={10} /> {t("Marks")}
+                                        </label>
+                                        <input
+                                          type="number"
+                                          placeholder={t("e.g. 4")}
+                                          className="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none mt-auto"
+                                          value={sub.marks || ''}
+                                          onChange={(e) => updateSubQuestion(index, 'marks', e.target.value)}
+                                        />
+                                      </div>
+                                    )}
 
-                                {uploadForm.paperType === "Paper 2 (Essay)" && (
+                                    {uploadForm.paperType === "Paper 1 (DBQ)" && (
+                                      <div>
+                                        <label className="text-xs font-bold text-slate-500 mb-1 block flex items-center gap-1">
+                                          <FileDigit size={10} /> {t("Source Type")}
+                                        </label>
+                                        <CreatableSelect
+                                          options={availableSourceTypes}
+                                          value={sub.sourceType}
+                                          onChange={(val) => updateSubQuestion(index, 'sourceType', val)}
+                                          onCreate={handleCreateSourceType}
+                                          placeholder={t("e.g. Cartoon, Table...")}
+                                          icon={FileDigit}
+                                          isMulti={true}
+                                        />
+                                      </div>
+                                    )}
+
+                                    {uploadForm.paperType === "Paper 2 (Essay)" && (
+                                      <div>
+                                        <label className="text-xs font-bold text-blue-600 mb-1 block flex items-center gap-1">
+                                          <Tag size={10} /> {t("Essay Topic(s)")}
+                                        </label>
+                                        <CreatableSelect
+                                          options={availableTopics}
+                                          value={sub.topic}
+                                          onChange={(val) => updateSubQuestion(index, 'topic', val)}
+                                          onCreate={handleCreateTopic}
+                                          placeholder={t("Select or type topic...")}
+                                          icon={Tag}
+                                          isMulti={true}
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Content */}
                                   <div>
-                                    <label className="text-xs font-bold text-blue-600 mb-1 block flex items-center gap-1">
-                                      <Tag size={10} /> Essay Topic(s)
-                                    </label>
-                                    <CreatableSelect
-                                      options={availableTopics}
-                                      value={sub.topic}
-                                      onChange={(val) => updateSubQuestion(index, 'topic', val)}
-                                      onCreate={handleCreateTopic}
-                                      placeholder="Select or type topic..."
-                                      icon={Tag}
-                                      isMulti={true}
+                                    <label className="text-xs font-bold text-slate-500 mb-1 block">{uploadLangTab === 'zh' ? "Chinese Question Content / Text" : t("Question Content / Text")}</label>
+                                    <textarea
+                                      placeholder={uploadLangTab === 'zh' ? "在此輸入中文題目內容..." : t("Type the full question text or essay prompt here...")}
+                                      rows={4}
+                                      className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none mb-4"
+                                      value={uploadLangTab === 'zh' ? (sub.contentChi || '') : sub.content}
+                                      onChange={(e) => updateSubQuestion(index, uploadLangTab === 'zh' ? 'contentChi' : 'content', e.target.value)}
                                     />
                                   </div>
+                                </div>
+
+                                {uploadForm.subQuestions.length > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => removeSubQuestion(index)}
+                                    className="text-slate-300 hover:text-red-500 transition-colors pt-8"
+                                  >
+                                    <Trash2 size={18} />
+                                  </button>
                                 )}
                               </div>
+                            </motion.div>
+                          ))}
+                        </div>
+                      </>
+                    )}
 
-                              {/* Content */}
-                              <div>
-                                <label className="text-xs font-bold text-slate-500 mb-1 block">Question Content / Text</label>
-                                <textarea
-                                  placeholder="Type the full question text or essay prompt here..."
-                                  rows={4}
-                                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                                  value={sub.content}
-                                  onChange={(e) => updateSubQuestion(index, 'content', e.target.value)}
-                                />
+                    {/* SECTION 3: CANDIDATE PERFORMANCES (NEW TAB) */}
+                    {uploadLangTab === 'perf' && (
+                      <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                        <h3 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2">
+                          <FileText size={16} className="text-blue-600" /> {t("Candidate Performances")}
+                        </h3>
+                        <p className="text-xs text-slate-500 mb-6">
+                          {t("Enter candidate performances for each sub-question. Both English and Chinese versions are supported.")}
+                        </p>
+
+                        <div className="space-y-6">
+                          {uploadForm.subQuestions.map((sub, index) => (
+                            <div key={sub.id} className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                              <div className="mb-3 flex items-center gap-2">
+                                <span className="bg-slate-800 text-white text-xs px-2 py-1 rounded-md font-bold">
+                                  Q{sub.label}
+                                </span>
+                                <span className="text-xs text-slate-500 font-medium">
+                                  {t("Performance Details")}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                  <label className="text-xs font-bold text-slate-500 mb-1 block">{t("English Version")}</label>
+                                  <textarea
+                                    placeholder={t("Type candidate performance (English)...")}
+                                    rows={4}
+                                    className="w-full p-3 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                    value={sub.candidatePerformance || ''}
+                                    onChange={(e) => updateSubQuestion(index, 'candidatePerformance', e.target.value)}
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-xs font-bold text-slate-500 mb-1 block">{t("Chinese Version (中文版)")}</label>
+                                  <textarea
+                                    placeholder="在此輸入考生表現 (中文)..."
+                                    rows={4}
+                                    className="w-full p-3 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                    value={sub.candidatePerformanceChi || ''}
+                                    onChange={(e) => updateSubQuestion(index, 'candidatePerformanceChi', e.target.value)}
+                                  />
+                                </div>
                               </div>
                             </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
-                            {uploadForm.subQuestions.length > 1 && (
-                              <button
-                                type="button"
-                                onClick={() => removeSubQuestion(index)}
-                                className="text-slate-300 hover:text-red-500 transition-colors pt-8"
-                              >
-                                <Trash2 size={18} />
-                              </button>
-                            )}
-                          </div>
-                        </motion.div>
-                      ))}
-                    </div>
                   </form>
                 )}
 
@@ -4305,144 +4577,386 @@ export default function AdvancedHistoryArchive() {
                 {uploadSelection === 'batch' && (
                   <div className="flex flex-col lg:flex-row h-full">
                     <div className="flex-1 p-6 overflow-y-auto custom-scrollbar lg:w-1/2 border-r border-slate-200">
+
+                      <div className="flex border-b border-slate-200 mb-4 overflow-x-auto">
+                        <button type="button" onClick={() => setBatchLangTab('en')} className={`px-6 py-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${batchLangTab === 'en' ? 'border-teal-600 text-teal-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>English Version</button>
+                        <button type="button" onClick={() => setBatchLangTab('zh')} className={`px-6 py-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${batchLangTab === 'zh' ? 'border-teal-600 text-teal-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>Chinese Version (中文版)</button>
+                        <button type="button" onClick={() => setBatchLangTab('perf')} className={`px-6 py-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${batchLangTab === 'perf' ? 'border-teal-600 text-teal-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>Candidate Performances</button>
+                      </div>
+
                       <form id="batch-form" onSubmit={handleBatchSubmit} className="space-y-6">
-                        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-                          <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                            <FileStack size={16} /> Exam Paper Details
-                          </h3>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="col-span-full">
-                              <label className="label">Exam Title (e.g., 2024 Midterm)</label>
-                              <input type="text" required className="input-field" value={batchForm.title} onChange={(e) => setBatchForm({ ...batchForm, title: e.target.value })} />
-                            </div>
-                            <div>
-                              <label className="label">Origin</label>
-                              <select required className="input-field" value={batchForm.origin} onChange={(e) => setBatchForm({ ...batchForm, origin: e.target.value })}>
-                                <option value="">Select Origin</option>
-                                {ORIGINS.map(o => <option key={o} value={o}>{o}</option>)}
-                              </select>
-                            </div>
-                            <div>
-                              <label className="label">Year</label>
-                              <input type="number" required className="input-field" value={batchForm.year} onChange={(e) => setBatchForm({ ...batchForm, year: e.target.value })} />
-                            </div>
-                            <div>
-                              <label className="label flex items-center gap-2">
-                                <Layers size={14} /> Document Tier Level
-                              </label>
-                              <select required className="input-field" value={batchForm.tier} onChange={(e) => setBatchForm({ ...batchForm, tier: e.target.value })}>
-                                {systemTiers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                              </select>
-                            </div>
-                            <div className="col-span-full">
-                              <label className="label">Main Exam PDF (Required)</label>
-                              <input type="file" accept=".pdf" required onChange={(e) => handleBatchPdfChange(e, false)} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-teal-50 file:text-teal-700" />
-                            </div>
-                            <div className="col-span-full">
-                              <label className="label">Separate Answer Key PDF (Optional - if not in main PDF)</label>
-                              <input type="file" accept=".pdf" onChange={(e) => handleBatchPdfChange(e, true)} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-green-50 file:text-green-700" />
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="space-y-6">
-                          <div className="flex justify-between items-center">
-                            <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Questions</h3>
-                            <button type="button" onClick={() => setBatchForm(prev => ({ ...prev, questions: [...prev.questions, { id: Date.now(), paperType: 'Paper 1 (DBQ)', topic: [], pagesStr: '', ansPagesStr: '', ansSource: 'answer', subQuestions: [{ id: Date.now() + 1, label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' }] }] }))} className="text-sm font-bold text-teal-600 flex items-center gap-1"><Plus size={16} /> Add Question</button>
-                          </div>
-
-                          {batchForm.questions.map((q, qIdx) => (
-                            <div key={q.id} className="bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm space-y-4">
-                              <div className="flex justify-between items-center">
-                                <h4 className="font-bold text-slate-700">Question {qIdx + 1}</h4>
-                                {batchForm.questions.length > 1 && <button type="button" onClick={() => setBatchForm(prev => ({ ...prev, questions: prev.questions.filter((_, i) => i !== qIdx) }))} className="text-red-500"><Trash2 size={16} /></button>}
-                              </div>
-                              <div className="grid grid-cols-2 gap-4">
-                                <div className="flex flex-col">
-                                  <label className="text-xs font-bold text-slate-500 mb-1">Paper Type</label>
-                                  <select className="w-full p-2 border rounded mt-auto" value={q.paperType} onChange={(e) => {
-                                    const newQ = [...batchForm.questions];
-                                    const newType = e.target.value;
-                                    newQ[qIdx].paperType = newType;
-                                    newQ[qIdx].subQuestions = newQ[qIdx].subQuestions.map((sq, i) => ({
-                                      ...sq,
-                                      label: getNextLabel(i, newType)
-                                    }));
-                                    if (newType === "Paper 2 (Essay)") newQ[qIdx].topic = [];
-                                    setBatchForm({ ...batchForm, questions: newQ });
-                                  }}>
-                                    {PAPER_TYPES.map(p => <option key={p} value={p}>{p}</option>)}
+                        {batchLangTab !== 'perf' && (
+                          <>
+                            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                              <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                                <FileStack size={16} /> {t("Exam Paper Details")}
+                              </h3>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="col-span-full">
+                                  <label className="label">{t("Exam Title (e.g., 2024 Midterm)")}</label>
+                                  <input type="text" required className="input-field" value={batchForm.title} onChange={(e) => setBatchForm({ ...batchForm, title: e.target.value })} />
+                                </div>
+                                <div>
+                                  <label className="label">{t("Origin")}</label>
+                                  <select required className="input-field" value={batchForm.origin} onChange={(e) => setBatchForm({ ...batchForm, origin: e.target.value })}>
+                                    <option value="">{t("Select Origin")}</option>
+                                    {ORIGINS.map(o => <option key={o} value={o}>{o}</option>)}
                                   </select>
                                 </div>
-                                <div className="flex flex-col">
-                                  <label className={`text-xs font-bold mb-1 ${q.paperType === "Paper 2 (Essay)" ? 'text-slate-300' : 'text-slate-500'}`}>Topic</label>
-                                  <div className="mt-auto">
-                                    <CreatableSelect options={availableTopics} value={q.topic} onChange={(val) => { const newQ = [...batchForm.questions]; newQ[qIdx].topic = val; setBatchForm({ ...batchForm, questions: newQ }); }} onCreate={handleCreateTopic} isMulti={true} disabled={q.paperType === "Paper 2 (Essay)"} placeholder={q.paperType === "Paper 2 (Essay)" ? "N/A for Essay" : "Select..."} />
-                                  </div>
+                                <div>
+                                  <label className="label">{t("Year")}</label>
+                                  <input type="number" required className="input-field" value={batchForm.year} onChange={(e) => setBatchForm({ ...batchForm, year: e.target.value })} />
                                 </div>
-                                <div className="flex flex-col">
-                                  <label className="text-xs font-bold text-slate-500 mb-1">Question Pages (e.g. 1-3)</label>
-                                  <input type="text" className="w-full p-2 border rounded mt-auto" value={q.pagesStr} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].pagesStr = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }} />
+                                <div>
+                                  <label className="label flex items-center gap-2">
+                                    <Layers size={14} /> {t("Document Tier Level")}
+                                  </label>
+                                  <select required className="input-field" value={batchForm.tier} onChange={(e) => setBatchForm({ ...batchForm, tier: e.target.value })}>
+                                    {systemTiers.map(tier => <option key={tier.id} value={tier.id}>{tier.name}</option>)}
+                                  </select>
                                 </div>
-                                <div className="flex flex-col">
-                                  <label className="text-xs font-bold text-slate-500 mb-1">Answer Pages (e.g. 10-11)</label>
-                                  <div className="flex gap-2 mt-auto">
-                                    <select className="w-1/3 p-2 border rounded text-xs bg-white" value={q.ansSource || 'answer'} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].ansSource = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }}>
-                                      <option value="answer">From Ans PDF</option>
-                                      <option value="main">From Main PDF</option>
-                                    </select>
-                                    <input type="text" className="w-2/3 p-2 border rounded" value={q.ansPagesStr} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].ansPagesStr = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }} />
+                                {batchLangTab === 'en' ? (
+                                  <>
+                                    <div className="col-span-full">
+                                      <label className="label">{t("Main Exam PDF (English)")}</label>
+                                      <div className="relative">
+                                        <input type="file" accept=".pdf" required={!batchPdfFile && !editingId} onChange={(e) => handleBatchPdfChange(e, false, false)} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-teal-50 file:text-teal-700" />
+                                        {pendingToolFile && (
+                                          <label className="flex items-center gap-2 mt-2 text-xs text-teal-700 bg-teal-50 p-2 rounded-lg border border-teal-100 cursor-pointer w-fit hover:bg-teal-100 transition-colors">
+                                            <input
+                                              type="checkbox"
+                                              className="w-4 h-4 text-teal-600 rounded border-teal-300 focus:ring-teal-500 cursor-pointer"
+                                              checked={batchPdfFile?.name === pendingToolFile.name}
+                                              onChange={(e) => {
+                                                if (e.target.checked) {
+                                                  handleBatchPdfChange({ target: { files: [new File([pendingToolFile.fileBytes], pendingToolFile.name, { type: 'application/pdf' })] } }, false, false);
+                                                } else {
+                                                  setBatchPdfFile(null);
+                                                  setBatchLoadedPdf(null);
+                                                  if (batchPdfPreviewUrl) URL.revokeObjectURL(batchPdfPreviewUrl);
+                                                  setBatchPdfPreviewUrl('');
+                                                }
+                                              }}
+                                            />
+                                            <span className="font-bold">{t("Use Pending:")} {pendingToolFile.name}</span>
+                                          </label>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="col-span-full">
+                                      <label className="label">{t("Separate Answer Key PDF (English - Optional)")}</label>
+                                      <div className="relative">
+                                        <input type="file" accept=".pdf" onChange={(e) => handleBatchPdfChange(e, true, false)} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-green-50 file:text-green-700" />
+                                        {pendingToolFile && (
+                                          <label className="flex items-center gap-2 mt-2 text-xs text-green-700 bg-green-50 p-2 rounded-lg border border-green-100 cursor-pointer w-fit hover:bg-green-100 transition-colors">
+                                            <input
+                                              type="checkbox"
+                                              className="w-4 h-4 text-green-600 rounded border-green-300 focus:ring-green-500 cursor-pointer"
+                                              checked={batchAnsPdfFile?.name === pendingToolFile.name}
+                                              onChange={(e) => {
+                                                if (e.target.checked) {
+                                                  handleBatchPdfChange({ target: { files: [new File([pendingToolFile.fileBytes], pendingToolFile.name, { type: 'application/pdf' })] } }, true, false);
+                                                } else {
+                                                  setBatchAnsPdfFile(null);
+                                                  setBatchLoadedAnsPdf(null);
+                                                  if (batchAnsPdfPreviewUrl) URL.revokeObjectURL(batchAnsPdfPreviewUrl);
+                                                  setBatchAnsPdfPreviewUrl('');
+                                                }
+                                              }}
+                                            />
+                                            <span className="font-bold">{t("Use Pending:")} {pendingToolFile.name}</span>
+                                          </label>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </>
+                                ) : (
+                                  <>
+                                    <div className="col-span-full">
+                                      <label className="label">{t("Main Exam PDF (Chinese - Optional)")}</label>
+                                      <div className="relative">
+                                        <input type="file" accept=".pdf" onChange={(e) => handleBatchPdfChange(e, false, true)} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-teal-50 file:text-teal-700" />
+                                        {pendingToolFile && (
+                                          <label className="flex items-center gap-2 mt-2 text-xs text-teal-700 bg-teal-50 p-2 rounded-lg border border-teal-100 cursor-pointer w-fit hover:bg-teal-100 transition-colors">
+                                            <input
+                                              type="checkbox"
+                                              className="w-4 h-4 text-teal-600 rounded border-teal-300 focus:ring-teal-500 cursor-pointer"
+                                              checked={batchPdfFileChi?.name === pendingToolFile.name}
+                                              onChange={(e) => {
+                                                if (e.target.checked) {
+                                                  handleBatchPdfChange({ target: { files: [new File([pendingToolFile.fileBytes], pendingToolFile.name, { type: 'application/pdf' })] } }, false, true);
+                                                } else {
+                                                  setBatchPdfFileChi(null);
+                                                  setBatchLoadedPdfChi(null);
+                                                  if (batchPdfPreviewUrlChi) URL.revokeObjectURL(batchPdfPreviewUrlChi);
+                                                  setBatchPdfPreviewUrlChi('');
+                                                }
+                                              }}
+                                            />
+                                            <span className="font-bold">{t("Use Pending:")} {pendingToolFile.name}</span>
+                                          </label>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="col-span-full">
+                                      <label className="label">{t("Separate Answer Key PDF (Chinese - Optional)")}</label>
+                                      <div className="relative">
+                                        <input type="file" accept=".pdf" onChange={(e) => handleBatchPdfChange(e, true, true)} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-green-50 file:text-green-700" />
+                                        {pendingToolFile && (
+                                          <label className="flex items-center gap-2 mt-2 text-xs text-green-700 bg-green-50 p-2 rounded-lg border border-green-100 cursor-pointer w-fit hover:bg-green-100 transition-colors">
+                                            <input
+                                              type="checkbox"
+                                              className="w-4 h-4 text-green-600 rounded border-green-300 focus:ring-green-500 cursor-pointer"
+                                              checked={batchAnsPdfFileChi?.name === pendingToolFile.name}
+                                              onChange={(e) => {
+                                                if (e.target.checked) {
+                                                  handleBatchPdfChange({ target: { files: [new File([pendingToolFile.fileBytes], pendingToolFile.name, { type: 'application/pdf' })] } }, true, true);
+                                                } else {
+                                                  setBatchAnsPdfFileChi(null);
+                                                  setBatchLoadedAnsPdfChi(null);
+                                                  if (batchAnsPdfPreviewUrlChi) URL.revokeObjectURL(batchAnsPdfPreviewUrlChi);
+                                                  setBatchAnsPdfPreviewUrlChi('');
+                                                }
+                                              }}
+                                            />
+                                            <span className="font-bold">{t("Use Pending:")} {pendingToolFile.name}</span>
+                                          </label>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="space-y-6">
+                              <div className="flex justify-between items-center">
+                                <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">{t("Questions")}</h3>
+                                <div className="flex gap-2 items-center">
+                                  <div className="w-48">
+                                    <CreatableSelect
+                                      options={archives.map(a => a.title)}
+                                      value=""
+                                      onChange={(val) => {
+                                        if (!val) return;
+                                        const existingDoc = archives.find(a => a.title === val);
+                                        if (existingDoc && !batchForm.questions.some(q => q.id === existingDoc.id)) {
+                                          setBatchForm(prev => ({
+                                            ...prev,
+                                            questions: [...prev.questions, {
+                                              id: existingDoc.id,
+                                              paperType: existingDoc.paperType,
+                                              topic: ensureArray(existingDoc.topic),
+                                              pagesStr: '', ansPagesStr: '', ansSource: 'answer',
+                                              pagesStrChi: '', ansPagesStrChi: '', ansSourceChi: 'answer',
+                                              hasFile: existingDoc.hasFile, hasAnswer: existingDoc.hasAnswer,
+                                              fileUrl: existingDoc.fileUrl, answerFileUrl: existingDoc.answerFileUrl,
+                                              fileUrlChi: existingDoc.fileUrlChi, answerFileUrlChi: existingDoc.answerFileUrlChi,
+                                              subQuestions: existingDoc.subQuestions
+                                            }]
+                                          }));
+                                        }
+                                      }}
+                                      placeholder={t("+ Import Existing...")}
+                                      isMulti={false}
+                                    />
                                   </div>
+                                  <button type="button" onClick={() => setBatchForm(prev => ({ ...prev, questions: [...prev.questions, { id: Date.now(), paperType: 'Paper 1 (DBQ)', topic: [], pagesStr: '', ansPagesStr: '', ansSource: 'answer', pagesStrChi: '', ansPagesStrChi: '', ansSourceChi: 'answer', hasFile: false, hasAnswer: false, subQuestions: [{ id: Date.now() + 1, label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' }] }] }))} className="text-sm font-bold text-teal-600 flex items-center gap-1"><Plus size={16} /> {t("Add Question")}</button>
                                 </div>
                               </div>
 
-                              {/* SUBQUESTIONS */}
-                              <div className="pl-4 border-l-2 border-teal-200 space-y-3">
-                                <div className="flex justify-between items-center">
-                                  <span className="text-xs font-bold text-slate-500">Sub-Questions</span>
-                                  <button type="button" onClick={() => {
-                                    const newQ = [...batchForm.questions];
-                                    newQ[qIdx].subQuestions.push({ id: Date.now(), label: getNextLabel(newQ[qIdx].subQuestions.length, q.paperType), questionType: [], content: '', topic: [], sourceType: [], marks: '' });
-                                    setBatchForm({ ...batchForm, questions: newQ });
-                                  }} className="text-xs text-teal-600 font-bold"><Plus size={12} className="inline" /> Add Sub</button>
-                                </div>
-                                {q.subQuestions.map((sq, sqIdx) => (
-                                  <div key={sq.id} className="bg-white p-3 rounded border border-slate-200 space-y-2 relative">
-                                    {q.subQuestions.length > 1 && <button type="button" onClick={() => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions = newQ[qIdx].subQuestions.filter((_, i) => i !== sqIdx); setBatchForm({ ...batchForm, questions: newQ }); }} className="absolute top-2 right-2 text-red-400"><X size={14} /></button>}
-                                    <div className="flex gap-2 items-start">
-                                      <input type="text" className="w-12 flex-shrink-0 p-2 border rounded text-center text-sm font-bold" value={sq.label} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].label = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }} />
-                                      <div className="flex-1">
-                                        <CreatableSelect options={availableQuestionTypes[q.paperType] || []} value={sq.questionType} onChange={(val) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].questionType = val; setBatchForm({ ...batchForm, questions: newQ }); }} onCreate={(val) => handleCreateQuestionType(val, q.paperType)} placeholder="Q-Type..." isMulti={true} />
+                              {batchForm.questions.map((q, qIdx) => {
+                                const isEnDisabled = q.hasFile || !batchPdfFile;
+                                const isZhDisabled = q.fileUrlChi || !batchPdfFileChi;
+                                const isAnsEnDisabled = q.hasAnswer || (!batchAnsPdfFile && !batchPdfFile);
+                                const isAnsZhDisabled = q.answerFileUrlChi || (!batchAnsPdfFileChi && !batchPdfFileChi);
+
+                                return (
+                                  <div key={q.id} className="bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm space-y-4">
+                                    <div className="flex justify-between items-center">
+                                      <div className="flex items-center gap-2">
+                                        <h4 className="font-bold text-slate-700">{t("Question")} {qIdx + 1}</h4>
+                                        {q.hasFile && <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-bold">{t("File Attached")}</span>}
                                       </div>
+                                      {batchForm.questions.length > 1 && <button type="button" onClick={() => setBatchForm(prev => ({ ...prev, questions: prev.questions.filter((_, i) => i !== qIdx) }))} className="text-red-500"><Trash2 size={16} /></button>}
                                     </div>
-                                    <textarea placeholder="Question content..." rows={2} className="w-full p-2 border rounded text-sm" value={sq.content} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].content = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }} />
-                                    <div className="grid grid-cols-2 gap-2 items-end">
-                                      {q.paperType === "Paper 1 (DBQ)" && <input type="number" placeholder="Marks" className="p-2 border rounded text-sm w-full" value={sq.marks} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].marks = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }} />}
-                                      {q.paperType === "Paper 1 (DBQ)" && <div className="w-full"><CreatableSelect options={availableSourceTypes} value={sq.sourceType} onChange={(val) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].sourceType = val; setBatchForm({ ...batchForm, questions: newQ }); }} onCreate={handleCreateSourceType} placeholder="Source Type" isMulti={true} /></div>}
-                                      {q.paperType === "Paper 2 (Essay)" && (
-                                        <div className="col-span-2">
-                                          <CreatableSelect options={availableTopics} value={sq.topic} onChange={(val) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].topic = val; setBatchForm({ ...batchForm, questions: newQ }); }} onCreate={handleCreateTopic} placeholder="Essay Topic(s)" isMulti={true} />
+                                    <div className="grid grid-cols-2 gap-4">
+                                      <div className="flex flex-col">
+                                        <label className="text-xs font-bold text-slate-500 mb-1">{t("Paper Type")}</label>
+                                        <select className="w-full p-2 border rounded mt-auto" value={q.paperType} onChange={(e) => {
+                                          const newQ = [...batchForm.questions];
+                                          const newType = e.target.value;
+                                          newQ[qIdx].paperType = newType;
+                                          newQ[qIdx].subQuestions = newQ[qIdx].subQuestions.map((sq, i) => ({
+                                            ...sq,
+                                            label: getNextLabel(i, newType)
+                                          }));
+                                          if (newType === "Paper 2 (Essay)") newQ[qIdx].topic = [];
+                                          setBatchForm({ ...batchForm, questions: newQ });
+                                        }}>
+                                          {PAPER_TYPES.map(p => <option key={p} value={p}>{t(p)}</option>)}
+                                        </select>
+                                      </div>
+                                      <div className="flex flex-col">
+                                        <label className={`text-xs font-bold mb-1 ${q.paperType === "Paper 2 (Essay)" ? 'text-slate-300' : 'text-slate-500'}`}>{t("Topic")}</label>
+                                        <div className="mt-auto">
+                                          <CreatableSelect options={availableTopics} value={q.topic} onChange={(val) => { const newQ = [...batchForm.questions]; newQ[qIdx].topic = val; setBatchForm({ ...batchForm, questions: newQ }); }} onCreate={handleCreateTopic} isMulti={true} disabled={q.paperType === "Paper 2 (Essay)"} placeholder={q.paperType === "Paper 2 (Essay)" ? t("N/A for Essay") : t("Select...")} />
                                         </div>
+                                      </div>
+                                      {batchLangTab === 'en' ? (
+                                        <>
+                                          <div className="flex flex-col">
+                                            <label className="text-xs font-bold text-slate-500 mb-1">{t("Question Pages (e.g. 1-3)")}</label>
+                                            <input type="text" disabled={isEnDisabled} placeholder={q.hasFile ? t("Existing file attached") : (batchPdfFile ? "" : t("Upload Main PDF first"))} className={`w-full p-2 border rounded mt-auto ${isEnDisabled ? 'bg-slate-100 cursor-not-allowed' : ''}`} value={q.pagesStr} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].pagesStr = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }} />
+                                          </div>
+                                          <div className="flex flex-col">
+                                            <label className="text-xs font-bold text-slate-500 mb-1">{t("Answer Pages (e.g. 10-11)")}</label>
+                                            <div className="flex gap-2 mt-auto">
+                                              <select disabled={isAnsEnDisabled} className={`w-1/3 p-2 border rounded text-xs bg-white ${isAnsEnDisabled ? 'bg-slate-100 cursor-not-allowed' : ''}`} value={q.ansSource || 'answer'} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].ansSource = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }}>
+                                                <option value="answer">{t("From Ans PDF")}</option>
+                                                <option value="main">{t("From Main PDF")}</option>
+                                              </select>
+                                              <input type="text" disabled={isAnsEnDisabled} placeholder={q.hasAnswer ? t("Existing ans attached") : ""} className={`w-2/3 p-2 border rounded ${isAnsEnDisabled ? 'bg-slate-100 cursor-not-allowed' : ''}`} value={q.ansPagesStr} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].ansPagesStr = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }} />
+                                            </div>
+                                          </div>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <div className="flex flex-col">
+                                            <label className="text-xs font-bold text-slate-500 mb-1">{t("Chinese Question Pages")}</label>
+                                            <input type="text" disabled={isZhDisabled} placeholder={q.fileUrlChi ? t("Existing file attached") : (batchPdfFileChi ? "" : t("Upload Main PDF first"))} className={`w-full p-2 border rounded mt-auto ${isZhDisabled ? 'bg-slate-100 cursor-not-allowed' : ''}`} value={q.pagesStrChi || ''} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].pagesStrChi = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }} />
+                                          </div>
+                                          <div className="flex flex-col">
+                                            <label className="text-xs font-bold text-slate-500 mb-1">{t("Chinese Answer Pages")}</label>
+                                            <div className="flex gap-2 mt-auto">
+                                              <select disabled={isAnsZhDisabled} className={`w-1/3 p-2 border rounded text-xs bg-white ${isAnsZhDisabled ? 'bg-slate-100 cursor-not-allowed' : ''}`} value={q.ansSourceChi || 'answer'} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].ansSourceChi = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }}>
+                                                <option value="answer">{t("From Ans PDF")}</option>
+                                                <option value="main">{t("From Main PDF")}</option>
+                                              </select>
+                                              <input type="text" disabled={isAnsZhDisabled} placeholder={q.answerFileUrlChi ? t("Existing ans attached") : ""} className={`w-2/3 p-2 border rounded ${isAnsZhDisabled ? 'bg-slate-100 cursor-not-allowed' : ''}`} value={q.ansPagesStrChi || ''} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].ansPagesStrChi = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }} />
+                                            </div>
+                                          </div>
+                                        </>
                                       )}
                                     </div>
+
+                                    {/* SUBQUESTIONS */}
+                                    <div className="pl-4 border-l-2 border-teal-200 space-y-3">
+                                      <div className="flex justify-between items-center">
+                                        <span className="text-xs font-bold text-slate-500">{t("Sub-Questions")}</span>
+                                        <button type="button" onClick={() => {
+                                          const newQ = [...batchForm.questions];
+                                          newQ[qIdx].subQuestions.push({ id: Date.now(), label: getNextLabel(newQ[qIdx].subQuestions.length, q.paperType), questionType: [], content: '', topic: [], sourceType: [], marks: '' });
+                                          setBatchForm({ ...batchForm, questions: newQ });
+                                        }} className="text-xs text-teal-600 font-bold"><Plus size={12} className="inline" /> {t("Add Sub")}</button>
+                                      </div>
+                                      {q.subQuestions.map((sq, sqIdx) => (
+                                        <div key={sq.id} className="bg-white p-3 rounded border border-slate-200 space-y-2 relative">
+                                          {q.subQuestions.length > 1 && <button type="button" onClick={() => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions = newQ[qIdx].subQuestions.filter((_, i) => i !== sqIdx); setBatchForm({ ...batchForm, questions: newQ }); }} className="absolute top-2 right-2 text-red-400"><X size={14} /></button>}
+                                          <div className="flex gap-2 items-start">
+                                            <input type="text" className="w-12 flex-shrink-0 p-2 border rounded text-center text-sm font-bold" value={sq.label} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].label = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }} />
+                                            <div className="flex-1">
+                                              <CreatableSelect options={availableQuestionTypes[q.paperType] || []} value={sq.questionType} onChange={(val) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].questionType = val; setBatchForm({ ...batchForm, questions: newQ }); }} onCreate={(val) => handleCreateQuestionType(val, q.paperType)} placeholder={t("Q-Type...")} isMulti={true} />
+                                            </div>
+                                          </div>
+                                          <textarea placeholder={t("Question content...")} rows={2} className="w-full p-2 border rounded text-sm" value={sq.content} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].content = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }} />
+                                          <div className="grid grid-cols-2 gap-2 items-end">
+                                            {q.paperType === "Paper 1 (DBQ)" && <input type="number" placeholder={t("Marks")} className="p-2 border rounded text-sm w-full" value={sq.marks} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].marks = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }} />}
+                                            {q.paperType === "Paper 1 (DBQ)" && <div className="w-full"><CreatableSelect options={availableSourceTypes} value={sq.sourceType} onChange={(val) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].sourceType = val; setBatchForm({ ...batchForm, questions: newQ }); }} onCreate={handleCreateSourceType} placeholder={t("Source Type")} isMulti={true} /></div>}
+                                            {q.paperType === "Paper 2 (Essay)" && (
+                                              <div className="col-span-2">
+                                                <CreatableSelect options={availableTopics} value={sq.topic} onChange={(val) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].topic = val; setBatchForm({ ...batchForm, questions: newQ }); }} onCreate={handleCreateTopic} placeholder={t("Essay Topic(s)")} isMulti={true} />
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
                                   </div>
-                                ))}
-                              </div>
+                                );
+                              })}
                             </div>
-                          ))}
-                        </div>
+                          </>
+                        )}
+
+                        {/* SECTION 3: CANDIDATE PERFORMANCES (NEW TAB FOR BATCH) */}
+                        {batchLangTab === 'perf' && (
+                          <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                            <h3 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2">
+                              <FileText size={16} className="text-teal-600" /> {t("Candidate Performances")}
+                            </h3>
+                            <p className="text-xs text-slate-500 mb-6">
+                              {t("Enter candidate performances for each sub-question across all batch questions. Both English and Chinese versions are supported.")}
+                            </p>
+
+                            <div className="space-y-8">
+                              {batchForm.questions.map((q, qIdx) => (
+                                <div key={q.id} className="space-y-4">
+                                  <h4 className="font-bold text-slate-700 border-b pb-2">{t("Question")} {qIdx + 1}</h4>
+                                  {q.subQuestions.map((sq, sqIdx) => (
+                                    <div key={sq.id} className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                                      <div className="mb-3 flex items-center gap-2">
+                                        <span className="bg-slate-800 text-white text-xs px-2 py-1 rounded-md font-bold">
+                                          Q{sq.label}
+                                        </span>
+                                      </div>
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                          <label className="text-xs font-bold text-slate-500 mb-1 block">{t("English Version")}</label>
+                                          <textarea
+                                            placeholder={t("Type candidate performance (English)...")}
+                                            rows={4}
+                                            className="w-full p-3 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 outline-none"
+                                            value={sq.candidatePerformance || ''}
+                                            onChange={(e) => {
+                                              const newQ = [...batchForm.questions];
+                                              newQ[qIdx].subQuestions[sqIdx].candidatePerformance = e.target.value;
+                                              setBatchForm({ ...batchForm, questions: newQ });
+                                            }}
+                                          />
+                                        </div>
+                                        <div>
+                                          <label className="text-xs font-bold text-slate-500 mb-1 block">{t("Chinese Version (中文版)")}</label>
+                                          <textarea
+                                            placeholder="在此輸入考生表現 (中文)..."
+                                            rows={4}
+                                            className="w-full p-3 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 outline-none"
+                                            value={sq.candidatePerformanceChi || ''}
+                                            onChange={(e) => {
+                                              const newQ = [...batchForm.questions];
+                                              newQ[qIdx].subQuestions[sqIdx].candidatePerformanceChi = e.target.value;
+                                              setBatchForm({ ...batchForm, questions: newQ });
+                                            }}
+                                          />
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </form>
                     </div>
                     <div className="lg:w-1/2 bg-slate-200 h-[50vh] lg:h-full relative border-t lg:border-t-0 lg:border-l border-slate-300 flex flex-col">
                       <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex bg-white rounded-lg shadow-md p-1 border border-slate-200">
-                        <button type="button" onClick={() => setBatchPreviewMode('question')} className={`px-4 py-1.5 text-sm font-bold rounded-md transition-colors ${batchPreviewMode === 'question' ? 'bg-teal-100 text-teal-700' : 'text-slate-500 hover:bg-slate-50'}`}>Main PDF</button>
-                        <button type="button" onClick={() => setBatchPreviewMode('answer')} className={`px-4 py-1.5 text-sm font-bold rounded-md transition-colors ${batchPreviewMode === 'answer' ? 'bg-green-100 text-green-700' : 'text-slate-500 hover:bg-slate-50'}`}>Answer PDF</button>
+                        <button type="button" onClick={() => setBatchPreviewMode('question')} className={`px-4 py-1.5 text-sm font-bold rounded-md transition-colors ${batchPreviewMode === 'question' ? 'bg-teal-100 text-teal-700' : 'text-slate-500 hover:bg-slate-50'}`}>{t("Main PDF")}</button>
+                        <button type="button" onClick={() => setBatchPreviewMode('answer')} className={`px-4 py-1.5 text-sm font-bold rounded-md transition-colors ${batchPreviewMode === 'answer' ? 'bg-green-100 text-green-700' : 'text-slate-500 hover:bg-slate-50'}`}>{t("Answer PDF")}</button>
                       </div>
                       <div className="flex-1 relative">
-                        {batchPreviewMode === 'question' ? (
-                          batchPdfPreviewUrl ? <CustomPDFViewer fileUrl={batchPdfPreviewUrl} /> : <div className="flex items-center justify-center h-full text-slate-500">Upload Main PDF to preview</div>
+                        {batchLangTab === 'en' ? (
+                          batchPreviewMode === 'question' ? (
+                            batchPdfPreviewUrl ? <CustomPDFViewer fileUrl={batchPdfPreviewUrl} /> : <div className="flex items-center justify-center h-full text-slate-500">{t("Upload Main PDF to preview")}</div>
+                          ) : (
+                            batchAnsPdfPreviewUrl ? <CustomPDFViewer fileUrl={batchAnsPdfPreviewUrl} /> : <div className="flex items-center justify-center h-full text-slate-500">{t("Upload Answer PDF to preview")}</div>
+                          )
                         ) : (
-                          batchAnsPdfPreviewUrl ? <CustomPDFViewer fileUrl={batchAnsPdfPreviewUrl} /> : <div className="flex items-center justify-center h-full text-slate-500">Upload Answer PDF to preview</div>
+                          batchPreviewMode === 'question' ? (
+                            batchPdfPreviewUrlChi ? <CustomPDFViewer fileUrl={batchPdfPreviewUrlChi} /> : <div className="flex items-center justify-center h-full text-slate-500">{t("Upload Chinese Main PDF to preview")}</div>
+                          ) : (
+                            batchAnsPdfPreviewUrlChi ? <CustomPDFViewer fileUrl={batchAnsPdfPreviewUrlChi} /> : <div className="flex items-center justify-center h-full text-slate-500">{t("Upload Chinese Answer PDF to preview")}</div>
+                          )
                         )}
                       </div>
                     </div>
@@ -4457,12 +4971,12 @@ export default function AdvancedHistoryArchive() {
                       <form id="sample-form" onSubmit={handleSampleSubmit} className="space-y-6">
                         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                           <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                            <GraduationCap size={16} /> Student Sample Details
+                            <GraduationCap size={16} /> {t("Student Sample Details")}
                           </h3>
 
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                             <div>
-                              <label className="label">Year</label>
+                              <label className="label">{t("Year")}</label>
                               <select required className="input-field" value={sampleForm.year} onChange={(e) => {
                                 const newYear = e.target.value;
                                 const newScores = Array.from({ length: 6 }, (_, i) => {
@@ -4479,22 +4993,22 @@ export default function AdvancedHistoryArchive() {
                                 {Array.from({ length: new Date().getFullYear() - 2011 }, (_, i) => new Date().getFullYear() - i).map(y => (
                                   <option key={y} value={y}>{y}</option>
                                 ))}
-                                <option value="Others">Others</option>
+                                <option value="Others">{t("Others")}</option>
                               </select>
                             </div>
 
                             <div>
-                              <label className="label">Language</label>
+                              <label className="label">{t("Language")}</label>
                               <select required className="input-field" value={sampleForm.language} onChange={(e) => setSampleForm({ ...sampleForm, language: e.target.value })}>
-                                <option value="English">English</option>
-                                <option value="Chinese">Chinese</option>
+                                <option value="English">{t("English")}</option>
+                                <option value="Chinese">{t("Chinese")}</option>
                               </select>
                             </div>
 
                             <div>
-                              <label className="label">Overall Grade</label>
+                              <label className="label">{t("Overall Grade")}</label>
                               <input
-                                type="text" required placeholder="e.g. 5*"
+                                type="text" required placeholder={t("e.g. 5*")}
                                 className="input-field"
                                 value={sampleForm.overallGrade}
                                 onChange={(e) => setSampleForm({ ...sampleForm, overallGrade: e.target.value })}
@@ -4503,9 +5017,9 @@ export default function AdvancedHistoryArchive() {
 
                             <div className="col-span-full">
                               <label className="label flex justify-between">
-                                <span>Full Student Sample Document (PDF)</span>
+                                <span>{t("Full Student Sample Document (PDF)")}</span>
                                 <span className={`${editingId ? 'text-slate-400' : 'text-red-500'} font-bold text-xs`}>
-                                  {editingId ? '*Optional (Leave blank to keep existing)' : '*Required'}
+                                  {editingId ? t('*Optional (Leave blank to keep existing)') : t('*Required')}
                                 </span>
                               </label>
                               <div className="relative">
@@ -4514,11 +5028,16 @@ export default function AdvancedHistoryArchive() {
                                   onChange={handleSampleFileChange}
                                   className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
                                 />
-                                {selectedSampleFile && <div className="text-xs text-indigo-600 mt-2 font-bold">Selected: {selectedSampleFile.name}</div>}
+                                {selectedSampleFile && <div className="text-xs text-indigo-600 mt-2 font-bold">{t("Selected:")} {selectedSampleFile.name}</div>}
                                 {pendingToolFile && (
-                                  <button type="button" onClick={() => handleSampleFileChange({ target: { files: [new File([pendingToolFile.fileBytes], pendingToolFile.name, { type: 'application/pdf' })] } })} className="mt-2 text-xs bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-lg hover:bg-indigo-200 font-bold flex items-center gap-1">
-                                    <Upload size={14} /> Attach Pending: {pendingToolFile.name}
-                                  </button>
+                                  <div className="flex items-center gap-2 mt-2">
+                                    <button type="button" onClick={() => handleSampleFileChange({ target: { files: [new File([pendingToolFile.fileBytes], pendingToolFile.name, { type: 'application/pdf' })] } })} className="text-xs bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-lg hover:bg-indigo-200 font-bold flex items-center gap-1">
+                                      <Upload size={14} /> {t("Attach Pending:")} {pendingToolFile.name}
+                                    </button>
+                                    <button type="button" onClick={() => setPendingToolFile(null)} className="text-xs bg-slate-100 text-slate-500 p-1.5 rounded-lg hover:bg-red-100 hover:text-red-600 transition-colors" title={t("Cancel")}>
+                                      <X size={14} />
+                                    </button>
+                                  </div>
                                 )}
                               </div>
                             </div>
@@ -4527,17 +5046,17 @@ export default function AdvancedHistoryArchive() {
 
                         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                           <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
-                            <FileOutput size={16} /> Individual Question Scores & Page Splitting
+                            <FileOutput size={16} /> {t("Individual Question Scores & Page Splitting")}
                           </h3>
                           <p className="text-xs text-slate-500 mb-4">
-                            Link this sample to specific questions (e.g. "2016D Q3"). Specify the pages (e.g., "1, 3-5") to split and save only those pages.
+                            {t('Link this sample to specific questions (e.g. "2016D Q3"). Specify the pages (e.g., "1, 3-5") to split and save only those pages.')}
                           </p>
 
                           <div className="space-y-3">
                             <div className="grid grid-cols-12 gap-3 mb-2 px-2">
-                              <div className="col-span-5 text-xs font-bold text-slate-500 uppercase">Question Tag</div>
-                              <div className="col-span-3 text-xs font-bold text-slate-500 uppercase">Mark</div>
-                              <div className="col-span-4 text-xs font-bold text-slate-500 uppercase">Pages (e.g. 1, 3-5)</div>
+                              <div className="col-span-5 text-xs font-bold text-slate-500 uppercase">{t("Question Tag")}</div>
+                              <div className="col-span-3 text-xs font-bold text-slate-500 uppercase">{t("Mark")}</div>
+                              <div className="col-span-4 text-xs font-bold text-slate-500 uppercase">{t("Pages (e.g. 1, 3-5)")}</div>
                             </div>
 
                             {sampleForm.scores.map((score, idx) => {
@@ -4557,7 +5076,7 @@ export default function AdvancedHistoryArchive() {
                                   <div className="grid grid-cols-12 gap-3 items-center">
                                     <div className="col-span-5">
                                       <input
-                                        type="text" placeholder="e.g. 2016D Q1"
+                                        type="text" placeholder={t("e.g. 2016D Q1")}
                                         className="w-full p-2 bg-white border border-slate-200 rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
                                         value={score.tag}
                                         onChange={(e) => {
@@ -4569,7 +5088,7 @@ export default function AdvancedHistoryArchive() {
                                     </div>
                                     <div className="col-span-3">
                                       <input
-                                        type="text" placeholder="Total Mark"
+                                        type="text" placeholder={t("Total Mark")}
                                         className="w-full p-2 bg-white border border-slate-200 rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
                                         value={score.mark}
                                         onChange={(e) => {
@@ -4640,7 +5159,7 @@ export default function AdvancedHistoryArchive() {
                                     </div>
                                     <div className="col-span-4">
                                       <input
-                                        type="text" placeholder="e.g. 1, 3-5"
+                                        type="text" placeholder={t("e.g. 1, 3-5")}
                                         className="w-full p-2 bg-white border border-slate-200 rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
                                         value={score.pagesStr}
                                         onChange={(e) => {
@@ -4658,24 +5177,24 @@ export default function AdvancedHistoryArchive() {
                                       {score.newFile ? (
                                         <span className="text-indigo-600 font-bold truncate max-w-[120px]">{score.newFile.name}</span>
                                       ) : score.fileUrl ? (
-                                        <span className="text-indigo-600 font-bold">Attached PDF</span>
+                                        <span className="text-indigo-600 font-bold">{t("Attached PDF")}</span>
                                       ) : (
-                                        <span className="text-slate-400 italic">No PDF attached</span>
+                                        <span className="text-slate-400 italic">{t("No PDF attached")}</span>
                                       )}
                                     </div>
                                     <div className="flex items-center gap-2">
                                       {(score.fileUrl || score.newFileUrl) && (
                                         <>
                                           <button type="button" onClick={() => setSamplePdfPreviewUrl(score.newFileUrl || score.fileUrl)} className="text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded hover:bg-indigo-100 font-medium">
-                                            View
+                                            {t("View")}
                                           </button>
                                           <a href={score.newFileUrl || score.fileUrl} target="_blank" rel="noreferrer" download className="text-xs bg-green-50 text-green-700 px-2 py-1 rounded hover:bg-green-100 font-medium">
-                                            Download
+                                            {t("Download")}
                                           </a>
                                         </>
                                       )}
                                       <label className="text-xs bg-slate-100 text-slate-700 px-2 py-1 rounded hover:bg-slate-200 cursor-pointer font-medium">
-                                        Upload
+                                        {t("Upload")}
                                         <input type="file" accept=".pdf" className="hidden" onChange={(e) => {
                                           if (e.target.files[0]) {
                                             const newScores = [...sampleForm.scores];
@@ -4697,7 +5216,7 @@ export default function AdvancedHistoryArchive() {
                                           setSampleForm({ ...sampleForm, scores: newScores });
                                           setSamplePdfPreviewUrl(newScores[idx].newFileUrl);
                                         }} className="text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded hover:bg-indigo-200 font-medium">
-                                          Use Pending
+                                          {t("Use Pending")}
                                         </button>
                                       )}
                                       {(score.fileUrl || score.newFile) && (
@@ -4710,7 +5229,7 @@ export default function AdvancedHistoryArchive() {
                                           setSampleForm({ ...sampleForm, scores: newScores });
                                           setSamplePdfPreviewUrl('');
                                         }} className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded hover:bg-red-100 font-medium">
-                                          Remove
+                                          {t("Remove")}
                                         </button>
                                       )}
                                     </div>
@@ -4726,7 +5245,7 @@ export default function AdvancedHistoryArchive() {
                                           {/* Add this input back in! */}
                                           <input
                                             type="text"
-                                            placeholder="Mark"
+                                            placeholder={t("Mark")}
                                             className="w-16 p-1 bg-white border border-slate-200 rounded text-xs focus:ring-2 focus:ring-indigo-500 outline-none"
                                             value={score.subMarks?.[sq.label] || ''}
                                             onChange={(e) => {
@@ -4758,7 +5277,7 @@ export default function AdvancedHistoryArchive() {
                         ) : (
                           <div className="flex items-center justify-center h-full text-slate-500 flex-col gap-2">
                             <Loader2 className="animate-spin text-indigo-600" size={32} />
-                            <span>Loading PDF Viewer...</span>
+                            <span>{t("Loading PDF Viewer...")}</span>
                           </div>
                         )}
                       </div>
@@ -4779,22 +5298,22 @@ export default function AdvancedHistoryArchive() {
                         onClick={() => setDeleteConfirm(true)}
                         className="text-red-500 hover:bg-red-50 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors"
                       >
-                        <Trash2 size={16} /> Delete Document
+                        <Trash2 size={16} /> {t("Delete Document")}
                       </button>
                     ) : (
                       <div className="flex items-center gap-2 animate-in fade-in slide-in-from-left-2 duration-200">
-                        <span className="text-xs font-bold text-red-600 uppercase">Are you sure?</span>
+                        <span className="text-xs font-bold text-red-600 uppercase">{t("Are you sure?")}</span>
                         <button
                           onClick={handleDelete}
                           className="bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors"
                         >
-                          Yes, Delete
+                          {t("Yes, Delete")}
                         </button>
                         <button
                           onClick={() => setDeleteConfirm(false)}
                           className="text-slate-400 hover:text-slate-600 px-2 py-1 text-xs"
                         >
-                          Cancel
+                          {t("Cancel")}
                         </button>
                       </div>
                     )
@@ -4808,7 +5327,7 @@ export default function AdvancedHistoryArchive() {
                       onClick={() => setUploadSelection(null)}
                       className="px-6 py-2 rounded-lg border border-slate-200 text-slate-600 font-medium hover:bg-slate-50 transition-colors"
                     >
-                      Back
+                      {t("Back")}
                     </button>
                   )}
                   <button
@@ -4816,7 +5335,7 @@ export default function AdvancedHistoryArchive() {
                     onClick={closeModal}
                     className="px-6 py-2 rounded-lg border border-slate-200 text-slate-600 font-medium hover:bg-slate-50 transition-colors"
                   >
-                    Cancel
+                    {t("Cancel")}
                   </button>
                   {uploadSelection && (
                     <button
@@ -4825,7 +5344,7 @@ export default function AdvancedHistoryArchive() {
                       disabled={isLoading}
                       className={`px-6 py-2 rounded-lg ${uploadSelection === 'question' ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-200' : uploadSelection === 'batch' ? 'bg-teal-600 hover:bg-teal-700 shadow-teal-200' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200'} text-white font-bold shadow-lg transition-all ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
-                      {isLoading ? 'Processing...' : (editingId ? 'Update Archive' : 'Upload Data')}
+                      {isLoading ? t('Processing...') : (editingId ? t('Update Archive') : t('Upload Data'))}
                     </button>
                   )}
                 </div>
@@ -4848,9 +5367,9 @@ export default function AdvancedHistoryArchive() {
               <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
                 <div>
                   <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                    <BarChart2 size={20} className="text-teal-600" /> Assessment Marks
+                    <BarChart2 size={20} className="text-teal-600" /> {t("Assessment Marks")}
                   </h2>
-                  <p className="text-xs text-slate-500 mt-1">Showing marks linked to: <span className="font-bold">{currentMarksDocTitle}</span></p>
+                  <p className="text-xs text-slate-500 mt-1">{t("Showing marks linked to:")} <span className="font-bold">{currentMarksDocTitle}</span></p>
                 </div>
                 <button onClick={() => setShowMarksModal(false)} className="text-slate-400 hover:text-slate-800">
                   <X size={20} />
@@ -4861,16 +5380,16 @@ export default function AdvancedHistoryArchive() {
                 {isLoadingMarks ? (
                   <div className="flex justify-center py-10"><Loader2 className="animate-spin text-teal-600" size={32} /></div>
                 ) : linkedMarksData.length === 0 ? (
-                  <div className="text-center py-10 text-slate-500 italic">No assessment marks linked to this document yet.</div>
+                  <div className="text-center py-10 text-slate-500 italic">{t("No assessment marks linked to this document yet.")}</div>
                 ) : (
                   <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
                     <table className="w-full text-left text-sm">
                       <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase text-xs font-bold">
                         <tr>
-                          <th className="px-4 py-3">Student</th>
-                          <th className="px-4 py-3">Class</th>
-                          <th className="px-4 py-3">Assessment</th>
-                          <th className="px-4 py-3 text-right">Mark</th>
+                          <th className="px-4 py-3">{t("Student")}</th>
+                          <th className="px-4 py-3">{t("Class")}</th>
+                          <th className="px-4 py-3">{t("Assessment")}</th>
+                          <th className="px-4 py-3 text-right">{t("Mark")}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
@@ -4892,12 +5411,12 @@ export default function AdvancedHistoryArchive() {
         )}
       </AnimatePresence >
       {/* --- VIEW REPORTS MODAL (ADMIN ONLY) --- */}
-      <AnimatePresence>
+      < AnimatePresence >
         {showReportViewModal && user?.isAdmin && (
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[80] flex items-center justify-center p-4">
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-xl p-6 max-w-lg w-full shadow-2xl max-h-[80vh] flex flex-col">
               <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-3">
-                <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2"><ShieldAlert size={20} className="text-red-500" /> Attached Reports</h2>
+                <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2"><ShieldAlert size={20} className="text-red-500" /> {t("Attached Reports")}</h2>
                 <button onClick={() => setShowReportViewModal(false)} className="text-slate-400 hover:text-slate-800"><X size={20} /></button>
               </div>
               <div className="flex-1 overflow-y-auto space-y-3 mb-4 custom-scrollbar">
@@ -4911,7 +5430,7 @@ export default function AdvancedHistoryArchive() {
                       onClick={() => handleClearReport(r.id)}
                       className="self-end px-4 py-2 bg-green-600 text-white rounded-lg text-xs font-bold hover:bg-green-700 transition-colors shadow-sm flex items-center gap-1"
                     >
-                      <Check size={14} /> Clear this Report
+                      <Check size={14} /> {t("Clear this Report")}
                     </button>
                   </div>
                 ))}
@@ -4919,69 +5438,69 @@ export default function AdvancedHistoryArchive() {
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+      </AnimatePresence >
       {/* --- REPORT MODAL --- */}
-      <AnimatePresence>
+      < AnimatePresence >
         {showReportModal && (
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[80] flex items-center justify-center p-4">
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-xl p-6 max-w-md w-full shadow-2xl">
               <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2"><ShieldAlert size={20} className="text-red-500" /> Report Document Issue</h2>
+                <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2"><ShieldAlert size={20} className="text-red-500" /> {t("Report Document Issue")}</h2>
                 <button onClick={() => setShowReportModal(false)} className="text-slate-400 hover:text-slate-800"><X size={20} /></button>
               </div>
               <form onSubmit={handleReportSubmit} className="space-y-4">
                 <div>
-                  <label className="text-xs font-bold text-slate-500 mb-1 block">Reason for reporting</label>
+                  <label className="text-xs font-bold text-slate-500 mb-1 block">{t("Reason for reporting")}</label>
                   <select required className="w-full p-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-red-500" value={reportForm.reason} onChange={(e) => setReportForm({ ...reportForm, reason: e.target.value })}>
-                    <option value="">Select a reason...</option>
-                    <option value="Wrong deployment of files">Wrong deployment of files</option>
-                    <option value="Missing/wrong pages">Missing/wrong pages</option>
-                    <option value="Difficult to view">Difficult to view</option>
-                    <option value="Spelling mistakes of questions">Spelling mistakes of questions</option>
-                    <option value="No answer attached">No answer attached</option>
-                    <option value="Wrong tags">Wrong tags</option>
-                    <option value="Others (Please specify)">Others (Please specify)</option>
+                    <option value="">{t("Select a reason...")}</option>
+                    <option value="Wrong deployment of files">{t("Wrong deployment of files")}</option>
+                    <option value="Missing/wrong pages">{t("Missing/wrong pages")}</option>
+                    <option value="Difficult to view">{t("Difficult to view")}</option>
+                    <option value="Spelling mistakes of questions">{t("Spelling mistakes of questions")}</option>
+                    <option value="No answer attached">{t("No answer attached")}</option>
+                    <option value="Wrong tags">{t("Wrong tags")}</option>
+                    <option value="Others (Please specify)">{t("Others (Please specify)")}</option>
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs font-bold text-slate-500 mb-1 block">Details</label>
-                  <textarea required rows={4} className="w-full p-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-red-500" placeholder="Please provide more details..." value={reportForm.details} onChange={(e) => setReportForm({ ...reportForm, details: e.target.value })}></textarea>
+                  <label className="text-xs font-bold text-slate-500 mb-1 block">{t("Details")}</label>
+                  <textarea required rows={4} className="w-full p-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-red-500" placeholder={t("Please provide more details...")} value={reportForm.details} onChange={(e) => setReportForm({ ...reportForm, details: e.target.value })}></textarea>
                 </div>
                 <button type="submit" disabled={isSubmittingReport} className="w-full py-2 bg-red-600 text-white rounded-lg text-sm font-bold hover:bg-red-700 disabled:opacity-50">
-                  {isSubmittingReport ? "Submitting..." : "Submit Report"}
+                  {isSubmittingReport ? t("Submitting...") : t("Submit Report")}
                 </button>
               </form>
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+      </AnimatePresence >
       {/* --- TOOL LINK ROUTING MODAL --- */}
       < AnimatePresence >
         {showToolLinkModal && (
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-xl p-6 max-w-md w-full shadow-2xl">
-              <h2 className="text-lg font-bold text-slate-800 mb-4">Link Document to Archive</h2>
-              <p className="text-sm text-slate-600 mb-6">Where would you like to add <strong>{pendingToolFile?.name}</strong>?</p>
+              <h2 className="text-lg font-bold text-slate-800 mb-4">{t("Link Document to Archive")}</h2>
+              <p className="text-sm text-slate-600 mb-6">{t("Where would you like to add")} <strong>{pendingToolFile?.name}</strong>?</p>
 
               <div className="space-y-4">
                 <div className="border border-slate-200 p-4 rounded-lg">
-                  <h3 className="font-bold text-sm mb-2 text-blue-600">Add to Question Bank</h3>
+                  <h3 className="font-bold text-sm mb-2 text-blue-600">{t("Add to Question Bank")}</h3>
                   <div className="flex gap-2">
-                    <button onClick={() => processToolLink('question', true)} className="flex-1 bg-blue-50 hover:bg-blue-100 text-blue-700 py-2 rounded text-sm font-medium">New Document</button>
-                    <button onClick={() => processToolLink('question', false)} className="flex-1 bg-slate-50 hover:bg-slate-100 text-slate-700 py-2 rounded text-sm font-medium">Current Document</button>
+                    <button onClick={() => processToolLink('question', true)} className="flex-1 bg-blue-50 hover:bg-blue-100 text-blue-700 py-2 rounded text-sm font-medium">{t("New Document")}</button>
+                    <button onClick={() => processToolLink('question', false)} className="flex-1 bg-slate-50 hover:bg-slate-100 text-slate-700 py-2 rounded text-sm font-medium">{t("Current Document")}</button>
                   </div>
                 </div>
 
                 <div className="border border-slate-200 p-4 rounded-lg">
-                  <h3 className="font-bold text-sm mb-2 text-indigo-600">Add to Student Samples</h3>
+                  <h3 className="font-bold text-sm mb-2 text-indigo-600">{t("Add to Student Samples")}</h3>
                   <div className="flex gap-2">
-                    <button onClick={() => processToolLink('sample', true)} className="flex-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 py-2 rounded text-sm font-medium">New Sample</button>
-                    <button onClick={() => processToolLink('sample', false)} className="flex-1 bg-slate-50 hover:bg-slate-100 text-slate-700 py-2 rounded text-sm font-medium">Current Sample</button>
+                    <button onClick={() => processToolLink('sample', true)} className="flex-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 py-2 rounded text-sm font-medium">{t("New Sample")}</button>
+                    <button onClick={() => processToolLink('sample', false)} className="flex-1 bg-slate-50 hover:bg-slate-100 text-slate-700 py-2 rounded text-sm font-medium">{t("Current Sample")}</button>
                   </div>
                 </div>
               </div>
 
-              <button onClick={() => { setShowToolLinkModal(false); setPendingToolFile(null); }} className="mt-6 w-full py-2 text-slate-500 hover:bg-slate-50 rounded-lg text-sm font-medium">Cancel</button>
+              <button onClick={() => { setShowToolLinkModal(false); setPendingToolFile(null); }} className="mt-6 w-full py-2 text-slate-500 hover:bg-slate-50 rounded-lg text-sm font-medium">{t("Cancel")}</button>
             </motion.div>
           </div>
         )}

@@ -2,9 +2,29 @@ import React, { useState, useEffect } from 'react';
 import { collection, getDocs, doc, getDoc, updateDoc, addDoc, deleteDoc, query, where, setDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import { useAuth } from './main.jsx';
-import { BookOpen, Edit, Trash2, Plus, Save, X, ExternalLink, Loader2, FileText, GripHorizontal, Check, Star, BarChart2 } from 'lucide-react';
+import { BookOpen, Edit, Trash2, Plus, Save, X, ExternalLink, Loader2, FileText, GripHorizontal, Check, Star, BarChart2, Download } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { useLanguage } from './LanguageContext.jsx';
+import { Viewer, Worker } from '@react-pdf-viewer/core';
+import { defaultLayoutPlugin } from '@react-pdf-viewer/default-layout';
+import '@react-pdf-viewer/core/lib/styles/index.css';
+import '@react-pdf-viewer/default-layout/lib/styles/index.css';
+
+const pdfjsVersion = '3.4.120';
+const workerUrl = `https://unpkg.com/pdfjs-dist@${pdfjsVersion}/build/pdf.worker.min.js`;
+
+const CustomPDFViewer = ({ fileUrl }) => {
+    const defaultLayoutPluginInstance = defaultLayoutPlugin();
+    return (
+        <div className="absolute inset-0 bg-slate-200 flex flex-col items-center z-50">
+            <Worker workerUrl={workerUrl}>
+                <div className="w-full h-full" style={{ height: '100%', width: '100%' }}>
+                    <Viewer fileUrl={fileUrl} plugins={[defaultLayoutPluginInstance]} theme="light" />
+                </div>
+            </Worker>
+        </div>
+    );
+};
 
 // Paste it right here, outside the component:
 const getTermWeight = (term) => {
@@ -58,10 +78,15 @@ export default function StudentDashboard() {
     const [doneItems, setDoneItems] = useState([]); // NEW: Mark as done state
     const [starredItems, setStarredItems] = useState([]); // NEW: Starring state
 
+    // Recommendation State
+    const [showRecommendations, setShowRecommendations] = useState(false);
+    const [recommendedQuestions, setRecommendedQuestions] = useState([]);
+
     // Graph State
     const [graphMetric, setGraphMetric] = useState('percentage');
     const [graphCategories, setGraphCategories] = useState(['Assignments', 'Quizzes', 'Uniform Test', 'Exam']);
     const [excludeNoMarks, setExcludeNoMarks] = useState(true);
+    const [previewPdfUrl, setPreviewPdfUrl] = useState(null); // NEW: State for the generated PDF
 
     useEffect(() => {
         fetchData();
@@ -719,6 +744,374 @@ export default function StudentDashboard() {
     }, [items, user, percentileTopic, archives]);
     // --- END GRAPH LOGIC ---
 
+    // --- RECOMMENDATION LOGIC ---
+    const generateRecommendations = () => {
+        const percentiles = graphData.filter(d => d.percentile !== null).map(d => d.percentile);
+        const avgPercentile = percentiles.length > 0 ? percentiles.reduce((a, b) => a + b, 0) / percentiles.length : 50;
+
+        let minStar = 0, maxStar = 5;
+        if (avgPercentile > 60) { minStar = 4; maxStar = 5; }
+        else if (avgPercentile >= 45) { minStar = 2; maxStar = 4; }
+        else { minStar = 1; maxStar = 2; }
+
+        // Allow Paper 1 (DBQ) and Paper 2 (Essay) to be considered as weakest topics
+        const weakestTopics = topicStats.slice(-3).reverse().map(s => s.topic);
+
+        const topicGroups = {
+            "China": ["China Diplomacy", "China Modernisation (First half)", "China Modernisation (Second half)", "Communist Revolution"],
+            "Hong Kong": ["HK Economic Development", "HK Political Development", "HK Relationship with China", "HK Roles in Asia-Pacific Rim", "HK Social and Cultural Development"],
+            "Japan": ["Japan Diplomacy", "Japan Economy", "Japan Militarism", "Japan Modernisation"],
+            "First World War": ["First World War"],
+            "Second World War": ["Second World War"],
+            "Cold War": ["Cold War Development", "End of Cold War"],
+            "International Cooperation": ["International Political and Social Cooperation", "International Economic Cooperation"],
+            "Others": ["Elective", "General"]
+        };
+
+        const allQuestions = [];
+        archives.forEach(a => {
+            const parentRating = a.rating || 0;
+            (a.subQuestions || []).forEach(sq => {
+                const sqRating = sq.rating || parentRating;
+                if (sqRating >= minStar && sqRating <= maxStar) {
+                    let topics = [];
+                    if (a.topic) topics.push(...(Array.isArray(a.topic) ? a.topic : [a.topic]));
+                    if (sq.topic) topics.push(...(Array.isArray(sq.topic) ? sq.topic : [sq.topic]));
+
+                    let matchedGroups = new Set();
+
+                    // Explicitly add the paper type so it matches if Paper 1 or Paper 2 is the weakest
+                    if (a.paperType) matchedGroups.add(a.paperType);
+
+                    topics.forEach(t => {
+                        if (!t) return;
+                        const tLower = t.toLowerCase().trim();
+                        for (let [group, tags] of Object.entries(topicGroups)) {
+                            if (tags.some(tag => tag.toLowerCase().trim() === tLower)) {
+                                matchedGroups.add(group);
+                            }
+                        }
+                    });
+
+                    allQuestions.push({
+                        parent: a,
+                        child: sq,
+                        rating: sqRating,
+                        groups: Array.from(matchedGroups)
+                    });
+                }
+            });
+        });
+
+        const finalRecs = [];
+        const addedIds = new Set();
+
+        weakestTopics.forEach(wt => {
+            allQuestions.forEach(q => {
+                const id = `${q.parent.id}_${q.child.id}`;
+                if (q.groups.includes(wt) && !addedIds.has(id)) {
+                    finalRecs.push(q);
+                    addedIds.add(id);
+                }
+            });
+        });
+
+        allQuestions.forEach(q => {
+            const id = `${q.parent.id}_${q.child.id}`;
+            if (!addedIds.has(id)) {
+                finalRecs.push(q);
+                addedIds.add(id);
+            }
+        });
+
+        setRecommendedQuestions(finalRecs.slice(0, 20)); // Limit to top 20
+    };
+    // --- END RECOMMENDATION LOGIC ---
+
+    const handleGeneratePDF = async (level) => {
+        setIsLoading(true);
+        try {
+            const { PDFDocument, rgb, StandardFonts } = await import('pdf-lib');
+            const terms = level === 'S4' ? ['S4 Term 1', 'S4 Term 2'] : level === 'S5' ? ['S5 Term 1', 'S5 Term 2'] : ['S6 Term 1', 'S6 Mock'];
+
+            const filteredItems = allItems.filter(item =>
+                terms.includes(item.term) &&
+                (item.classes?.includes(selectedClass) || item.className === selectedClass)
+            );
+
+            const reversedItems = [...filteredItems].sort((a, b) => {
+                const orderA = a.order !== undefined ? a.order : -1;
+                const orderB = b.order !== undefined ? b.order : -1;
+                if (orderA !== orderB) return orderB - orderA;
+                const weightA = getTermWeight(a.term);
+                const weightB = getTermWeight(b.term);
+                if (weightA !== weightB) return weightA - weightB;
+                return new Date(a.date) - new Date(b.date);
+            });
+
+            const getDocGroups = (docId) => {
+                if (!docId) return [];
+                const parts = docId.split('_');
+                const baseId = parts[0];
+                const doc = archives.find(a => a.id === baseId);
+                if (!doc) return [];
+                let tagsAndTopics = [];
+                if (doc.topic) tagsAndTopics.push(...(Array.isArray(doc.topic) ? doc.topic : [doc.topic]));
+                if (doc.tags) tagsAndTopics.push(...(Array.isArray(doc.tags) ? doc.tags : [doc.tags]));
+                if (parts[1] && doc.subQuestions) {
+                    const child = doc.subQuestions.find(sq => sq.id.toString() === parts[1]);
+                    if (child && child.topic) tagsAndTopics.push(...(Array.isArray(child.topic) ? child.topic : [child.topic]));
+                }
+
+                const topicGroups = {
+                    "China": ["China Diplomacy", "China Modernisation (First half)", "China Modernisation (Second half)", "Communist Revolution"],
+                    "Hong Kong": ["HK Economic Development", "HK Political Development", "HK Relationship with China", "HK Roles in Asia-Pacific Rim", "HK Social and Cultural Development"],
+                    "Japan": ["Japan Diplomacy", "Japan Economy", "Japan Militarism", "Japan Modernisation"],
+                    "World War I": ["First World War"],
+                    "World War II": ["Second World War"],
+                    "Cold War": ["Cold War Development", "End of Cold War"],
+                    "International Cooperation": ["International Political and Social Cooperation", "International Economic Cooperation"]
+                };
+
+                let matched = new Set();
+                tagsAndTopics.forEach(t => {
+                    if (!t) return;
+                    const tLower = t.toLowerCase().trim();
+                    for (let [group, tags] of Object.entries(topicGroups)) {
+                        if (tags.some(tag => tag.toLowerCase().trim() === tLower)) {
+                            matched.add(group);
+                        }
+                    }
+                });
+                return Array.from(matched);
+            };
+
+            const isZh = language === 'zh' || language === 'zh-HK' || language === 'zh-TW';
+            const tr = (en, zh) => isZh ? zh : en;
+
+            const pdfDoc = await PDFDocument.create();
+
+            // Register fontkit to support custom fonts
+            const fontkit = await import('@pdf-lib/fontkit').then(m => m.default || m);
+            pdfDoc.registerFontkit(fontkit);
+
+            // Fetch Noto Sans CJK TC from the official static repository
+            const [fontBytes, boldFontBytes] = await Promise.all([
+                fetch('https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk@main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf').then(res => res.arrayBuffer()),
+                fetch('https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk@main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Bold.otf').then(res => res.arrayBuffer())
+            ]);
+
+            const cjkFont = await pdfDoc.embedFont(fontBytes);
+            const cjkBoldFont = await pdfDoc.embedFont(boldFontBytes);
+
+            // Embed Standard Times New Roman for English and syntax
+            const engFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
+            const engBoldFont = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
+
+            let page = pdfDoc.addPage([595.28, 841.89]); // A4 size
+            let y = 780;
+            const margin = 70;
+
+            const drawText = (text, x, yPos, size, isBold = false, align = 'left', maxWidth = null) => {
+                if (!text) return;
+                let t = String(text);
+
+                const currentCjkFont = isBold ? cjkBoldFont : cjkFont;
+                const currentEngFont = isBold ? engBoldFont : engFont;
+
+                // Helper to measure text width with mixed fonts
+                const measureWidth = (str) => {
+                    let w = 0;
+                    for (let i = 0; i < str.length; i++) {
+                        const char = str[i];
+                        const isCjk = /[\u3400-\u9FBF\u3000-\u303F\uFF00-\uFFEF]/.test(char);
+                        w += (isCjk ? currentCjkFont : currentEngFont).widthOfTextAtSize(char, size);
+                    }
+                    return w;
+                };
+
+                if (maxWidth) {
+                    while (measureWidth(t) > maxWidth && t.length > 0) { t = t.slice(0, -1); }
+                    if (t.length < String(text).length) t += '...';
+                }
+
+                const totalWidth = measureWidth(t);
+                let xPos = x;
+                if (align === 'center') xPos = x - totalWidth / 2;
+                if (align === 'right') xPos = x - totalWidth;
+
+                // Draw text chunk by chunk depending on language
+                let currentX = xPos;
+                let currentChunk = '';
+                let currentIsCjk = null;
+
+                const drawChunk = (chunk, isCjk) => {
+                    if (!chunk) return;
+                    const f = isCjk ? currentCjkFont : currentEngFont;
+                    page.drawText(chunk, { x: currentX, y: yPos, size, font: f, color: rgb(0, 0, 0) });
+                    currentX += f.widthOfTextAtSize(chunk, size);
+                };
+
+                for (let i = 0; i < t.length; i++) {
+                    const char = t[i];
+                    // Match Chinese characters and CJK punctuations
+                    const isCjk = /[\u3400-\u9FBF\u3000-\u303F\uFF00-\uFFEF]/.test(char);
+
+                    if (currentIsCjk === null) {
+                        currentIsCjk = isCjk;
+                        currentChunk += char;
+                    } else if (currentIsCjk === isCjk) {
+                        currentChunk += char;
+                    } else {
+                        drawChunk(currentChunk, currentIsCjk);
+                        currentChunk = char;
+                        currentIsCjk = isCjk;
+                    }
+                }
+                drawChunk(currentChunk, currentIsCjk);
+            };
+
+            drawText(tr('Kowloon True Light School', '九龍真光中學'), 595.28 / 2, y, 16, true, 'center'); y -= 24;
+            drawText(tr(`${level} History`, level === 'S4' ? '中四級歷史科' : level === 'S5' ? '中五級歷史科' : '中六級歷史科'), 595.28 / 2, y, 16, true, 'center'); y -= 24;
+            drawText(tr('Assessment Content', '目錄'), 595.28 / 2, y, 16, true, 'center'); y -= 40;
+
+            drawText(tr('Name: ______________________', '姓名: ______________________'), margin, y, 12);
+            drawText(tr(`Class: ${level} _______ (          )`, `班別: ${level} _______ (          )`), 595.28 - margin, y, 12, false, 'right'); y -= 35;
+
+            const colX = [margin, margin + 25, margin + 95, margin + 160, 595.28 - margin - 55];
+            const colW = [25, 70, 65, colX[4] - (margin + 160), 55];
+
+            const checkPageBreak = () => {
+                if (y < 50) {
+                    page = pdfDoc.addPage([595.28, 841.89]);
+                    y = 800;
+                }
+            };
+
+            checkPageBreak();
+            page.drawRectangle({ x: colX[0], y: y - 10, width: colW[0], height: 30, borderColor: rgb(0, 0, 0), borderWidth: 1 });
+            page.drawRectangle({ x: colX[1], y: y - 10, width: colW[1], height: 30, borderColor: rgb(0, 0, 0), borderWidth: 1 });
+            page.drawRectangle({ x: colX[2], y: y - 10, width: colW[2] + colW[3], height: 30, borderColor: rgb(0, 0, 0), borderWidth: 1 });
+            page.drawRectangle({ x: colX[4], y: y - 10, width: colW[4], height: 30, borderColor: rgb(0, 0, 0), borderWidth: 1 });
+
+            drawText(tr('Date', '日期'), colX[1] + colW[1] / 2, y, 12, true, 'center');
+            drawText(tr('Content', '內容'), colX[2] + (colW[2] + colW[3]) / 2, y, 12, true, 'center');
+            drawText(tr('Marks', '分數'), colX[4] + colW[4] / 2, y, 12, true, 'center');
+            y -= 30;
+
+            let counter = 1;
+            const formatDate = (dateStr) => {
+                if (!dateStr) return '';
+                const d = new Date(dateStr);
+                return `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()}`;
+            };
+
+            const drawRow = (date, origin, name, marks) => {
+                checkPageBreak();
+                page.drawRectangle({ x: colX[0], y: y - 10, width: colW[0], height: 30, borderColor: rgb(0, 0, 0), borderWidth: 1 });
+                page.drawRectangle({ x: colX[1], y: y - 10, width: colW[1], height: 30, borderColor: rgb(0, 0, 0), borderWidth: 1 });
+                page.drawRectangle({ x: colX[2], y: y - 10, width: colW[2], height: 30, borderColor: rgb(0, 0, 0), borderWidth: 1 });
+                page.drawRectangle({ x: colX[3], y: y - 10, width: colW[3], height: 30, borderColor: rgb(0, 0, 0), borderWidth: 1 });
+                page.drawRectangle({ x: colX[4], y: y - 10, width: colW[4], height: 30, borderColor: rgb(0, 0, 0), borderWidth: 1 });
+
+                drawText(counter.toString(), colX[0] + colW[0] / 2, y, 12, false, 'center');
+                drawText(date, colX[1] + colW[1] / 2, y, 12, false, 'center');
+                drawText(origin, colX[2] + colW[2] / 2, y, 12, false, 'center');
+                drawText(name, colX[3] + colW[3] / 2, y, 12, false, 'center', colW[3] - 10);
+                drawText(marks, colX[4] + colW[4] - 5, y, 12, false, 'right');
+                counter++;
+                y -= 30;
+            };
+
+            const topicsOrder = ["World War I", "World War II", "Cold War", "Japan", "Hong Kong", "China", "International Cooperation"];
+            const topicsZhMap = {
+                "World War I": "一戰", "World War II": "二戰", "Cold War": "冷戰",
+                "Japan": "日本", "Hong Kong": "香港", "China": "中國", "International Cooperation": "國際合作"
+            };
+            const originsOrder = ["Assignments", "Quizzes", "Others"];
+            const typeZhMap = { "Practice": "練習", "Quiz": "小測", "Task": "其他" };
+
+            topicsOrder.forEach(topic => {
+                let topicItems = [];
+                originsOrder.forEach(origin => {
+                    const items = reversedItems.filter(item => item.category === origin && !item.name?.toLowerCase().includes('corr') && getDocGroups(item.linkedDocId).includes(topic));
+                    topicItems.push(...items);
+                });
+
+                if (topicItems.length > 0) {
+                    checkPageBreak();
+                    page.drawRectangle({ x: colX[0], y: y - 10, width: colX[4] + colW[4] - colX[0], height: 30, color: rgb(0.95, 0.95, 0.95), borderColor: rgb(0, 0, 0), borderWidth: 1 });
+                    drawText(tr(topic, topicsZhMap[topic]), colX[0] + 5, y, 12, true);
+                    y -= 30;
+
+                    let typeCounters = { 'Assignments': 1, 'Quizzes': 1, 'Others': 1 };
+                    topicItems.forEach(item => {
+                        const marks = item.fullMark || item.paperFullMark || '';
+                        let typeNameEn = item.category === 'Assignments' ? 'Practice' : (item.category === 'Quizzes' ? 'Quiz' : 'Task');
+                        let typeName = tr(typeNameEn, typeZhMap[typeNameEn]);
+                        drawRow(formatDate(item.date), `${typeName} ${typeCounters[item.category]++}`, item.name, marks ? `/${marks}` : '');
+                    });
+                }
+            });
+
+            const internalItems = reversedItems.filter(item => ['Uniform Test', 'Exam'].includes(item.category) || item.name?.toLowerCase().includes('corr'));
+            if (internalItems.length > 0) {
+                checkPageBreak();
+                page.drawRectangle({ x: colX[0], y: y - 10, width: colX[4] + colW[4] - colX[0], height: 30, color: rgb(0.95, 0.95, 0.95), borderColor: rgb(0, 0, 0), borderWidth: 1 });
+                drawText(tr("Internal Assessments", "測考項目"), colX[0] + 5, y, 12, true);
+                y -= 30;
+
+                const internalZhMap = {
+                    "1st Term Uniform Test": "上測",
+                    "2nd Term Uniform Test": "下測",
+                    "1st Exam": "上考",
+                    "2nd Exam": "下考"
+                };
+
+                internalItems.forEach(item => {
+                    const marks = item.fullMark || item.paperFullMark || '';
+                    checkPageBreak();
+                    page.drawRectangle({ x: colX[0], y: y - 10, width: colW[0], height: 30, borderColor: rgb(0, 0, 0), borderWidth: 1 });
+                    page.drawRectangle({ x: colX[1], y: y - 10, width: colW[1], height: 30, borderColor: rgb(0, 0, 0), borderWidth: 1 });
+                    page.drawRectangle({ x: colX[2], y: y - 10, width: colW[2] + colW[3], height: 30, borderColor: rgb(0, 0, 0), borderWidth: 1 });
+                    page.drawRectangle({ x: colX[4], y: y - 10, width: colW[4], height: 30, borderColor: rgb(0, 0, 0), borderWidth: 1 });
+
+                    // Check if the item name matches any of our specific internal assessment mappings
+                    let displayName = item.name;
+                    if (level === 'S6') {
+                        if (item.category === 'Uniform Test') {
+                            displayName = tr('Pre-mock Examination', '模擬預試');
+                        } else if (item.category === 'Exam') {
+                            displayName = tr('Mock Examination', '模擬試');
+                        } else if (isZh && internalZhMap[item.name]) {
+                            displayName = internalZhMap[item.name];
+                        }
+                    } else {
+                        if (isZh && internalZhMap[item.name]) {
+                            displayName = internalZhMap[item.name];
+                        }
+                    }
+
+                    drawText(counter.toString(), colX[0] + colW[0] / 2, y, 12, false, 'center');
+                    drawText(formatDate(item.date), colX[1] + colW[1] / 2, y, 12, false, 'center');
+                    drawText(displayName, colX[2] + (colW[2] + colW[3]) / 2, y, 12, false, 'center');
+                    drawText(marks ? `/${marks}` : '', colX[4] + colW[4] - 5, y, 12, false, 'right');
+                    counter++;
+                    y -= 30;
+                });
+            }
+
+            const pdfBytes = await pdfDoc.save();
+            const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+            const url = URL.createObjectURL(blob);
+            setPreviewPdfUrl(url);
+        } catch (error) {
+            console.error("Error generating PDF:", error);
+            alert("Failed to generate PDF.");
+        }
+        setIsLoading(false);
+    };
+
     if (isLoading) {
         return <div className="flex justify-center py-20"><Loader2 className="animate-spin text-blue-600 w-10 h-10" /></div>;
     }
@@ -732,6 +1125,18 @@ export default function StudentDashboard() {
                 </h1>
                 {user?.isAdmin && (
                     <div className="flex gap-2">
+                        <div className="relative group inline-block">
+                            <button className="px-4 py-2 bg-indigo-100 text-indigo-700 rounded-lg text-sm font-bold hover:bg-indigo-200 transition-colors flex items-center gap-1">
+                                <FileText size={16} /> Export BIS
+                            </button>
+                            <div className="absolute right-0 top-full pt-1 w-40 hidden group-hover:block z-50">
+                                <div className="bg-white rounded-md shadow-lg border border-slate-200 overflow-hidden">
+                                    <button onClick={() => handleGeneratePDF('S4')} className="block w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">S4 Terms 1-2</button>
+                                    <button onClick={() => handleGeneratePDF('S5')} className="block w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">S5 Terms 1-2</button>
+                                    <button onClick={() => handleGeneratePDF('S6')} className="block w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">S6</button>
+                                </div>
+                            </div>
+                        </div>
                         <button
                             onClick={() => setIsEditing(!isEditing)}
                             className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors ${isEditing ? 'bg-amber-100 text-amber-700' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}
@@ -874,11 +1279,19 @@ export default function StudentDashboard() {
             {/* --- TOPIC PERFORMANCE TABLE --- */}
             {topicStats.length > 0 && (
                 <div className="bg-white rounded-xl shadow-sm border border-slate-200 w-full mb-6 overflow-hidden">
-                    <div className="p-4 md:p-6 border-b border-slate-200 bg-slate-50">
+                    <div className="p-4 md:p-6 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
                         <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                             <BookOpen className="text-blue-600" />
                             {t("Performance by Topic")}
                         </h2>
+                        {!user?.isAdmin && (
+                            <button
+                                onClick={() => { generateRecommendations(); setShowRecommendations(true); }}
+                                className="px-3 md:px-4 py-1.5 md:py-2 bg-gradient-to-r from-amber-400 to-orange-500 text-white text-xs md:text-sm font-bold rounded-lg shadow-md hover:from-amber-500 hover:to-orange-600 transition-all flex items-center gap-1.5 md:gap-2 animate-pulse"
+                            >
+                                <Star size={16} className="fill-current md:w-[18px] md:h-[18px]" /> {t("Get Recommendations")}
+                            </button>
+                        )}
                     </div>
                     <table className="w-full text-left">
                         <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 text-[10px] md:text-sm uppercase">
@@ -1404,6 +1817,71 @@ export default function StudentDashboard() {
                                 <Save size={18} /> {t("Save Item")}
                             </button>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Recommendations Modal */}
+            {showRecommendations && (
+                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[80vh] flex flex-col">
+                        <div className="flex justify-between items-center p-5 md:p-6 border-b border-slate-200 bg-slate-50 rounded-t-xl">
+                            <h2 className="text-lg md:text-xl font-bold text-slate-800 flex items-center gap-2">
+                                <Star className="text-amber-500 fill-current" /> {t("Recommended Questions")}
+                            </h2>
+                            <button onClick={() => setShowRecommendations(false)} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
+                        </div>
+                        <div className="p-4 md:p-6 overflow-y-auto custom-scrollbar flex-1 space-y-3 md:space-y-4">
+                            {recommendedQuestions.length === 0 ? (
+                                <p className="text-slate-500 text-center py-10">{t("No recommendations available at the moment.")}</p>
+                            ) : (
+                                recommendedQuestions.map((req) => (
+                                    <div key={`${req.parent.id}_${req.child.id}`} className="flex justify-between items-center bg-white p-3 md:p-4 rounded-lg border border-slate-200 shadow-sm hover:border-amber-300 transition-colors">
+                                        <div>
+                                            <div className="font-bold text-slate-800 text-sm md:text-base">
+                                                {req.parent.title} {req.parent.paperType === "Paper 1 (DBQ)" ? "Q1" : "Q"}{req.child.label}
+                                            </div>
+                                            <div className="text-[10px] md:text-xs text-slate-500 mt-1 flex flex-wrap items-center gap-2">
+                                                <span className="flex items-center gap-0.5 text-amber-500 font-bold bg-amber-50 px-1.5 py-0.5 rounded border border-amber-100"><Star size={10} className="fill-current" /> {req.rating}</span>
+                                                <span className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">{req.groups.join(', ')}</span>
+                                            </div>
+                                        </div>
+                                        <a href={`/?search=${encodeURIComponent(req.parent.title)}&viewId=${req.parent.id}_${req.child.id}`} target="_blank" rel="noreferrer" className="px-3 md:px-4 py-1.5 md:py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold rounded-lg text-xs md:text-sm flex items-center gap-1.5 transition-colors shrink-0">
+                                            <ExternalLink size={14} /> <span className="hidden sm:inline">{t("View")}</span>
+                                        </a>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* --- GENERATED PDF PREVIEW MODAL --- */}
+            {previewPdfUrl && (
+                <div className="fixed inset-0 bg-black/90 z-[100] flex flex-col">
+                    <div className="flex justify-between items-center p-4 bg-white border-b border-slate-200 z-[110]">
+                        <h2 className="font-bold text-lg text-slate-800 flex items-center gap-2">
+                            <FileText className="text-blue-600" /> Assessment Content Preview
+                        </h2>
+                        <div className="flex items-center gap-3">
+                            <a
+                                href={previewPdfUrl}
+                                download="Assessment_Content.pdf"
+                                className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-700 flex items-center gap-2 transition-colors"
+                            >
+                                <Download size={16} /> Download PDF
+                            </a>
+                            <button
+                                onClick={() => { URL.revokeObjectURL(previewPdfUrl); setPreviewPdfUrl(null); }}
+                                className="p-2 bg-slate-100 rounded-full hover:bg-slate-200 text-slate-500 transition-colors"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+                    </div>
+                    <div className="flex-1 relative w-full h-full bg-slate-200">
+                        <CustomPDFViewer fileUrl={previewPdfUrl} />
                     </div>
                 </div>
             )}

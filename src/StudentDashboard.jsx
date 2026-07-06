@@ -749,13 +749,12 @@ export default function StudentDashboard() {
         const percentiles = graphData.filter(d => d.percentile !== null).map(d => d.percentile);
         const avgPercentile = percentiles.length > 0 ? percentiles.reduce((a, b) => a + b, 0) / percentiles.length : 50;
 
-        let minStar = 0, maxStar = 5;
+        let minStar = 1, maxStar = 5;
         if (avgPercentile > 60) { minStar = 4; maxStar = 5; }
         else if (avgPercentile >= 45) { minStar = 2; maxStar = 4; }
         else { minStar = 1; maxStar = 2; }
 
-        // Allow Paper 1 (DBQ) and Paper 2 (Essay) to be considered as weakest topics
-        const weakestTopics = topicStats.slice(-3).reverse().map(s => s.topic);
+        const weakestTopics = topicStats.filter(s => !s.topic.includes('Paper')).slice(-2).reverse().map(s => s.topic);
 
         const topicGroups = {
             "China": ["China Diplomacy", "China Modernisation (First half)", "China Modernisation (Second half)", "Communist Revolution"],
@@ -768,21 +767,174 @@ export default function StudentDashboard() {
             "Others": ["Elective", "General"]
         };
 
+        const linkedScores = {};
+        const linkedParents = new Set();
+        const linkedSpecifics = new Set();
+
+        items.forEach(item => {
+            if (!item.classes?.includes(selectedClass) && item.className !== selectedClass) return;
+
+            const processLink = (docId, markVal, fullMark) => {
+                if (!docId) return;
+                const isSub = docId.includes('_');
+                const [parentId, childId] = docId.split('_');
+
+                if (!isSub) linkedParents.add(parentId);
+                linkedSpecifics.add(docId);
+
+                const deduction = parseFloat(item.marks?.[`${currentStudentId}_deduction`]) || 0;
+                let finalMark = null;
+                if (markVal !== undefined && markVal !== null && markVal !== '') {
+                    if (typeof markVal === 'object') {
+                        let total = 0;
+                        let hasValid = false;
+                        Object.values(markVal).forEach(v => {
+                            if (v !== undefined && v !== null && v !== '' && !isNaN(parseFloat(v))) {
+                                total += parseFloat(v);
+                                hasValid = true;
+                            }
+                        });
+                        if (hasValid) finalMark = total - deduction;
+                    } else {
+                        const parsed = parseFloat(markVal);
+                        if (!isNaN(parsed)) finalMark = parsed - deduction;
+                    }
+                }
+
+                const isReattempt = finalMark !== null && finalMark < (fullMark / 2);
+                const isDoneWell = finalMark !== null && finalMark >= (fullMark / 2);
+
+                if (isSub) {
+                    linkedScores[docId] = { mark: finalMark, fullMark, isReattempt, isDoneWell };
+                } else {
+                    linkedScores[parentId] = { mark: finalMark, fullMark, isReattempt, isDoneWell };
+                }
+            };
+
+            if (item.linkedDocId) {
+                processLink(item.linkedDocId, item.marks?.[currentStudentId], item.fullMark || item.paperFullMark || 100);
+            }
+            if (item.sectionsConfig) {
+                item.sectionsConfig.forEach(sec => {
+                    if (sec.linkedDocId) {
+                        const markVal = item.marks?.[currentStudentId];
+                        let secRawTotal = null;
+                        if (markVal !== undefined && markVal !== null && markVal !== '') {
+                            secRawTotal = 0;
+                            if (sec.hasSubSections) {
+                                sec.subSections.forEach(sub => {
+                                    const m = parseFloat(markVal[sub.id]);
+                                    if (!isNaN(m)) secRawTotal += m;
+                                });
+                            } else {
+                                const m = parseFloat(markVal[sec.id]);
+                                if (!isNaN(m)) secRawTotal += m;
+                            }
+                        }
+                        processLink(sec.linkedDocId, secRawTotal, sec.fullMark || 100);
+                    }
+                });
+            }
+        });
+
         const allQuestions = [];
         archives.forEach(a => {
+            const docTier = parseInt(a.tier, 10) || 10;
             const parentRating = a.rating || 0;
-            (a.subQuestions || []).forEach(sq => {
-                const sqRating = sq.rating || parentRating;
-                if (sqRating >= minStar && sqRating <= maxStar) {
+
+            if (a.paperType === "Paper 1 (DBQ)") {
+                const hasTierAccess = docTier <= maxUnlockedTier || user?.isAdmin || linkedParents.has(a.id) || a.subQuestions?.some(sq => linkedSpecifics.has(`${a.id}_${sq.id}`));
+                if (!hasTierAccess) return;
+                if (parentRating === 0) return;
+
+                let anyDoneWell = false;
+                let anyReattempt = false;
+                let totalMark = 0;
+                let totalFullMark = 0;
+                let hasMarks = false;
+                let anyUnmarked = false;
+
+                const parentLinkedInfo = linkedScores[a.id];
+                if (parentLinkedInfo && parentLinkedInfo.mark !== null) {
+                    hasMarks = true;
+                    totalMark = parentLinkedInfo.mark;
+                    totalFullMark = parentLinkedInfo.fullMark;
+                    if (parentLinkedInfo.isDoneWell) anyDoneWell = true;
+                    if (parentLinkedInfo.isReattempt) anyReattempt = true;
+                }
+
+                a.subQuestions?.forEach(sq => {
+                    const id = `${a.id}_${sq.id}`;
+                    const linkedInfo = linkedScores[id];
+                    if (linkedInfo?.isDoneWell) anyDoneWell = true;
+                    if (linkedInfo?.isReattempt) anyReattempt = true;
+                    if (!parentLinkedInfo && linkedInfo && linkedInfo.mark !== null) {
+                        hasMarks = true;
+                        totalMark += linkedInfo.mark;
+                        totalFullMark += linkedInfo.fullMark;
+                    }
+                    if (linkedSpecifics.has(id) && (!linkedInfo || linkedInfo.mark === null)) anyUnmarked = true;
+                });
+
+                if (anyDoneWell) return;
+                const allDone = a.subQuestions?.every(sq => doneItems.includes(`${a.id}_${sq.id}`));
+                if (allDone && !anyReattempt) return;
+
+                let topics = [];
+                if (a.topic) topics.push(...(Array.isArray(a.topic) ? a.topic : [a.topic]));
+                a.subQuestions?.forEach(sq => {
+                    if (sq.topic) topics.push(...(Array.isArray(sq.topic) ? sq.topic : [sq.topic]));
+                });
+
+                let matchedGroups = new Set();
+                matchedGroups.add(a.paperType);
+                topics.forEach(t => {
+                    if (!t) return;
+                    const tLower = t.toLowerCase().trim();
+                    for (let [group, tags] of Object.entries(topicGroups)) {
+                        if (tags.some(tag => tag.toLowerCase().trim() === tLower)) {
+                            matchedGroups.add(group);
+                        }
+                    }
+                });
+
+                const isWeakest = weakestTopics.some(wt => matchedGroups.has(wt));
+                let isEligible = false;
+                if (isWeakest) {
+                    isEligible = parentRating <= maxStar;
+                } else {
+                    isEligible = parentRating >= minStar && parentRating <= maxStar;
+                }
+
+                if (isEligible || anyReattempt || anyUnmarked) {
+                    allQuestions.push({
+                        parent: a,
+                        child: null,
+                        rating: parentRating,
+                        groups: Array.from(matchedGroups),
+                        isReattempt: anyReattempt,
+                        previousMark: hasMarks ? `${totalMark}/${totalFullMark}` : null
+                    });
+                }
+            } else {
+                (a.subQuestions || []).forEach(sq => {
+                    const sqRating = sq.rating || parentRating;
+                    if (sqRating === 0) return;
+
+                    const id = `${a.id}_${sq.id}`;
+                    const hasTierAccess = docTier <= maxUnlockedTier || user?.isAdmin || linkedParents.has(a.id) || linkedSpecifics.has(id);
+                    if (!hasTierAccess) return;
+
+                    const linkedInfo = linkedScores[id] || linkedScores[a.id];
+                    if (linkedInfo?.isDoneWell) return;
+                    if (doneItems.includes(id) && !linkedInfo?.isReattempt) return;
+
                     let topics = [];
                     if (a.topic) topics.push(...(Array.isArray(a.topic) ? a.topic : [a.topic]));
                     if (sq.topic) topics.push(...(Array.isArray(sq.topic) ? sq.topic : [sq.topic]));
 
                     let matchedGroups = new Set();
-
-                    // Explicitly add the paper type so it matches if Paper 1 or Paper 2 is the weakest
-                    if (a.paperType) matchedGroups.add(a.paperType);
-
+                    matchedGroups.add(a.paperType);
                     topics.forEach(t => {
                         if (!t) return;
                         const tLower = t.toLowerCase().trim();
@@ -793,38 +945,85 @@ export default function StudentDashboard() {
                         }
                     });
 
-                    allQuestions.push({
-                        parent: a,
-                        child: sq,
-                        rating: sqRating,
-                        groups: Array.from(matchedGroups)
-                    });
-                }
-            });
+                    const isWeakest = weakestTopics.some(wt => matchedGroups.has(wt));
+                    let isEligible = false;
+
+                    const essayMaxStar = avgPercentile > 60 ? 5 : 4;
+
+                    if (isWeakest) {
+                        isEligible = sqRating <= essayMaxStar;
+                    } else {
+                        isEligible = sqRating >= minStar && sqRating <= essayMaxStar;
+                    }
+
+                    if (isEligible || linkedInfo?.isReattempt || (linkedInfo && linkedInfo.mark === null)) {
+                        allQuestions.push({
+                            parent: a,
+                            child: sq,
+                            rating: sqRating,
+                            groups: Array.from(matchedGroups),
+                            isReattempt: linkedInfo?.isReattempt || false,
+                            previousMark: linkedInfo?.mark !== null && linkedInfo?.mark !== undefined ? `${linkedInfo.mark}/${linkedInfo.fullMark}` : null
+                        });
+                    }
+                });
+            }
         });
 
         const finalRecs = [];
         const addedIds = new Set();
 
-        weakestTopics.forEach(wt => {
-            allQuestions.forEach(q => {
-                const id = `${q.parent.id}_${q.child.id}`;
-                if (q.groups.includes(wt) && !addedIds.has(id)) {
-                    finalRecs.push(q);
-                    addedIds.add(id);
-                }
-            });
-        });
-
+        const topicQueues = {};
         allQuestions.forEach(q => {
-            const id = `${q.parent.id}_${q.child.id}`;
-            if (!addedIds.has(id)) {
-                finalRecs.push(q);
-                addedIds.add(id);
-            }
+            const topic = weakestTopics.find(wt => q.groups.includes(wt)) || q.groups.find(g => g !== "Paper 1 (DBQ)" && g !== "Paper 2 (Essay)") || "Others";
+            if (!topicQueues[topic]) topicQueues[topic] = { dbq: [], essay: [] };
+            if (q.parent.paperType === "Paper 1 (DBQ)") topicQueues[topic].dbq.push(q);
+            else topicQueues[topic].essay.push(q);
         });
 
-        setRecommendedQuestions(finalRecs.slice(0, 20)); // Limit to top 20
+        let keepGoing = true;
+        const topicKeys = Object.keys(topicQueues).sort((a, b) => {
+            const aIdx = weakestTopics.indexOf(a);
+            const bIdx = weakestTopics.indexOf(b);
+            if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
+            if (aIdx !== -1) return -1;
+            if (bIdx !== -1) return 1;
+            return 0;
+        });
+
+        while (keepGoing && finalRecs.length < 20) {
+            keepGoing = false;
+            for (let topic of topicKeys) {
+                if (finalRecs.length >= 20) break;
+                const queue = topicQueues[topic];
+                let addedThisRound = 0;
+
+                while (queue.dbq.length > 0 && addedThisRound < 2) {
+                    const q = queue.dbq.shift();
+                    const id = q.child ? `${q.parent.id}_${q.child.id}` : q.parent.id;
+                    if (!addedIds.has(id)) {
+                        finalRecs.push(q);
+                        addedIds.add(id);
+                        addedThisRound++;
+                        keepGoing = true;
+                    }
+                }
+
+                let essayAdded = 0;
+                while (queue.essay.length > 0 && essayAdded < 1) {
+                    const q = queue.essay.shift();
+                    const id = q.child ? `${q.parent.id}_${q.child.id}` : q.parent.id;
+                    if (!addedIds.has(id)) {
+                        finalRecs.push(q);
+                        addedIds.add(id);
+                        essayAdded++;
+                        keepGoing = true;
+                    }
+                }
+            }
+        }
+
+        setRecommendedQuestions(finalRecs.slice(0, 20));
     };
     // --- END RECOMMENDATION LOGIC ---
 
@@ -1502,15 +1701,22 @@ export default function StudentDashboard() {
                                                 if (sec.hasSubSections) {
                                                     sec.subSections.forEach(sub => {
                                                         const m = parseFloat(markVal[sub.id]);
-                                                        if (!isNaN(m)) { secRawTotal += m; secHasMark = true; }
+                                                        if (!isNaN(m)) {
+                                                            secRawTotal += m;
+                                                            secHasMark = true;
+                                                            breakdown.push(`${sub.name}: ${m}/${sub.fullMark}`);
+                                                        }
                                                     });
                                                 } else {
                                                     const m = parseFloat(markVal[sec.id]);
-                                                    if (!isNaN(m)) { secRawTotal += m; secHasMark = true; }
+                                                    if (!isNaN(m)) {
+                                                        secRawTotal += m;
+                                                        secHasMark = true;
+                                                        breakdown.push(`${sec.name}: ${m}/${sec.fullMark}`);
+                                                    }
                                                 }
 
                                                 if (secHasMark) {
-                                                    breakdown.push(`${sec.name}: ${secRawTotal}/${sec.fullMark}`);
                                                     const weight = parseFloat(sec.weight);
                                                     const full = parseFloat(sec.fullMark);
                                                     if (full > 0 && !isNaN(weight)) {
@@ -1525,11 +1731,9 @@ export default function StudentDashboard() {
                                                 studentMark = (
                                                     <div className="flex flex-col items-center justify-center text-[10px] md:text-sm leading-tight">
                                                         <span className="font-bold text-blue-700 text-[11px] md:text-base mb-0.5 md:mb-0">{finalTotal.toFixed(1)} / {item.paperFullMark || 100}%</span>
-                                                        <div className="flex flex-col md:flex-row md:gap-1 text-[8px] md:text-xs text-slate-500 font-normal mt-0.5 md:mt-1">
+                                                        <div className="flex flex-col text-[8px] md:text-xs text-slate-500 font-normal mt-0.5 md:mt-1 gap-0.5">
                                                             {breakdown.map((b, i) => (
-                                                                <span key={i} className="whitespace-nowrap">
-                                                                    {b}{i < breakdown.length - 1 ? <span className="hidden md:inline"> |</span> : ''}
-                                                                </span>
+                                                                <span key={i} className="whitespace-nowrap">{b}</span>
                                                             ))}
                                                         </div>
                                                         {deduction > 0 && <span className="text-[8px] md:text-xs text-red-500 mt-0.5">- {deduction} {t("(Deduction)")}</span>}
@@ -1836,17 +2040,18 @@ export default function StudentDashboard() {
                                 <p className="text-slate-500 text-center py-10">{t("No recommendations available at the moment.")}</p>
                             ) : (
                                 recommendedQuestions.map((req) => (
-                                    <div key={`${req.parent.id}_${req.child.id}`} className="flex justify-between items-center bg-white p-3 md:p-4 rounded-lg border border-slate-200 shadow-sm hover:border-amber-300 transition-colors">
+                                    <div key={`${req.parent.id}_${req.child ? req.child.id : 'main'}`} className="flex justify-between items-center bg-white p-3 md:p-4 rounded-lg border border-slate-200 shadow-sm hover:border-amber-300 transition-colors">
                                         <div>
-                                            <div className="font-bold text-slate-800 text-sm md:text-base">
-                                                {req.parent.title} {req.parent.paperType === "Paper 1 (DBQ)" ? "Q1" : "Q"}{req.child.label}
+                                            <div className="font-bold text-slate-800 text-sm md:text-base flex items-center gap-2">
+                                                {req.parent.title} {req.child ? (req.parent.paperType === "Paper 1 (DBQ)" ? "Q1" + req.child.label : "Q" + req.child.label) : ""}
+                                                {req.isReattempt && <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">Reattempt {req.previousMark ? `(${req.previousMark})` : ''}</span>}
                                             </div>
                                             <div className="text-[10px] md:text-xs text-slate-500 mt-1 flex flex-wrap items-center gap-2">
                                                 <span className="flex items-center gap-0.5 text-amber-500 font-bold bg-amber-50 px-1.5 py-0.5 rounded border border-amber-100"><Star size={10} className="fill-current" /> {req.rating}</span>
                                                 <span className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">{req.groups.join(', ')}</span>
                                             </div>
                                         </div>
-                                        <a href={`/?search=${encodeURIComponent(req.parent.title)}&viewId=${req.parent.id}_${req.child.id}`} target="_blank" rel="noreferrer" className="px-3 md:px-4 py-1.5 md:py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold rounded-lg text-xs md:text-sm flex items-center gap-1.5 transition-colors shrink-0">
+                                        <a href={`/?search=${encodeURIComponent(req.parent.title)}&viewId=${req.child ? req.parent.id + '_' + req.child.id : req.parent.id}`} target="_blank" rel="noreferrer" className="px-3 md:px-4 py-1.5 md:py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold rounded-lg text-xs md:text-sm flex items-center gap-1.5 transition-colors shrink-0">
                                             <ExternalLink size={14} /> <span className="hidden sm:inline">{t("View")}</span>
                                         </a>
                                     </div>

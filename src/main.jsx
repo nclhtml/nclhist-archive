@@ -13,6 +13,8 @@ import Record from './Record.jsx';
 import Marks from './Marks.jsx'; // <-- IMPORT THE NEW MARKS COMPONENT
 import StudentDashboard from './StudentDashboard.jsx'; // <-- ADD THIS IMPORT
 import List from './List.jsx'; // <-- ADD THIS IMPORT
+import Exercises from './Exercises.jsx'; // <-- NEW EXERCISES LIST COMPONENT
+import ExerciseRunner from './ExerciseRunner.jsx'; // <-- NEW EXERCISE RUNNER COMPONENT
 import { LanguageProvider, useLanguage } from './LanguageContext.jsx'; // <-- NEW IMPORT
 import { auth, db, googleProvider } from './firebase.js';
 import './index.css';
@@ -657,6 +659,9 @@ const Layout = ({ children }) => {
             <Link to="/list" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isList ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
               {t("Saved Lists")}
             </Link>
+            <Link to="/exercises" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${location.pathname.startsWith('/exercise') ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+              {t("Interactive Exercises")}
+            </Link>
 
             {/* ONLY SHOW TABS IF ADMIN */}
             {user?.isAdmin && (
@@ -713,6 +718,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               } />
               <Route path="/dashboard" element={<StudentDashboard />} />
               <Route path="/list" element={<List />} />
+              <Route path="/exercises" element={<Exercises />} />
+              <Route path="/exercise/:exerciseId/:studentEmail?" element={<ExerciseRunner />} />
             </Routes>
           </Layout>
         </BrowserRouter>

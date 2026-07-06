@@ -18,6 +18,7 @@ import {
   ResponsiveContainer
 } from 'recharts';
 import { motion, AnimatePresence } from 'framer-motion';
+import * as XLSX from 'xlsx';
 
 // Helper to generate unique IDs for sections/subsections
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -39,6 +40,7 @@ export default function Marks() {
 
   // Data State
   const [classes, setClasses] = useState([]);
+  const [archivedClasses, setArchivedClasses] = useState([]);
   const [students, setStudents] = useState([]);
   const [categories, setCategories] = useState([
     'Assignments', 'Quizzes', 'Uniform Test', 'Exam', 'Others'
@@ -210,8 +212,38 @@ export default function Marks() {
         const classDocRef = doc(db, "settings", "classes");
         const classDocSnap = await getDoc(classDocRef);
         let loadedClasses = [];
+        let loadedArchivedClasses = [];
         if (classDocSnap.exists()) {
-          loadedClasses = classDocSnap.data().list || [];
+          const rawList = classDocSnap.data().list || [];
+          let classObjects = rawList.map(c => typeof c === 'string' ? { name: c, owner: 'clng@ktls.edu.hk', isArchived: false } : c);
+
+          // --- AUTO-FIX DUPLICATES WITH INVISIBLE CHARACTERS ---
+          const seenNames = new Set();
+          let needsUpdate = false;
+          classObjects = classObjects.map(c => {
+            let finalName = c.name.replace(/\(\d+\)/g, '').trim();
+            while (seenNames.has(finalName)) {
+              finalName = finalName + '\u200B';
+              needsUpdate = true;
+            }
+            seenNames.add(finalName);
+            return { ...c, name: finalName };
+          });
+
+          if (needsUpdate) {
+            await setDoc(classDocRef, { list: classObjects }, { merge: true });
+          }
+          // ---------------------------
+
+          // Strict Owner Filter
+          let visibleClasses = classObjects;
+          if (user?.email !== 'clng@ktls.edu.hk') {
+            visibleClasses = classObjects.filter(c => c.owner === user?.email);
+          }
+
+          // Keep as objects for grouping in dropdowns
+          loadedClasses = visibleClasses.filter(c => !c.isArchived);
+          loadedArchivedClasses = visibleClasses.filter(c => c.isArchived);
 
           // Fetch user role if not present on the user object
           let currentUserRole = user?.role;
@@ -224,18 +256,27 @@ export default function Marks() {
             }
           }
 
-          // Filter classes based on role
-          if (currentUserRole) {
+          // Filter classes based on role (Super admin bypasses this)
+          if (currentUserRole && user?.email !== 'clng@ktls.edu.hk') {
             const allowed = roleClasses[currentUserRole] || [];
             loadedClasses = loadedClasses.filter(c => allowed.includes(c));
+            loadedArchivedClasses = loadedArchivedClasses.filter(c => allowed.includes(c));
           }
 
-          loadedClasses.sort((a, b) => a.localeCompare(b));
+          loadedClasses.sort((a, b) => a.name.localeCompare(b.name));
+          loadedArchivedClasses.sort((a, b) => a.name.localeCompare(b.name));
+
           setClasses(loadedClasses);
+          setArchivedClasses(loadedArchivedClasses);
+
           if (loadedClasses.length > 0) {
-            setSelectedClass(loadedClasses[0]);
-            setSelectedClassesForNew([loadedClasses[0]]);
-            setModalClasses([loadedClasses[0]]);
+            setSelectedClass(loadedClasses[0].name);
+            setSelectedClassesForNew([loadedClasses[0].name]);
+            setModalClasses([loadedClasses[0].name]);
+          } else if (loadedArchivedClasses.length > 0) {
+            setSelectedClass(loadedArchivedClasses[0].name);
+            setSelectedClassesForNew([loadedArchivedClasses[0].name]);
+            setModalClasses([loadedArchivedClasses[0].name]);
           }
         }
 
@@ -1620,7 +1661,8 @@ export default function Marks() {
     });
 
     setExportAssessmentsMap(grouped);
-    if (presets.length > 0) setSelectedPresetId(presets[0].id);
+    const defaultPreset = classPresetsMap[selectedClass] || (presets.length > 0 ? presets[0].id : '');
+    setExportPresetId(defaultPreset);
     setShowExportModal(true);
   };
 
@@ -1642,38 +1684,144 @@ export default function Marks() {
     }
 
     const preset = presets.find(p => p.id === exportPresetId);
-    const categoryOrder = ['Assignments', 'Quizzes', 'Others', 'Uniform Test', 'Exam'];
+    const isJSGeog = preset.name === 'JS Geography';
+
+    // Determine which categories are actively used in the calculation
+    const inCalc = (cat) => {
+      if (isJSGeog) return ['Assignments', 'Quizzes', 'Uniform Test'].includes(cat);
+      return (preset.weights?.[cat] || 0) > 0;
+    };
+
+    const baseCategories = ['Assignments', 'Quizzes', 'Others', 'Uniform Test'];
+    const activeCalcCategories = baseCategories.filter(cat => inCalc(cat));
+    const examInCalc = inCalc('Exam');
+    const hasExamItems = (exportAssessmentsMap['Exam'] || []).length > 0;
+
+    // Define the layout order
+    let layout = [...activeCalcCategories];
+    if (examInCalc) {
+      layout.push('Exam');
+      layout.push('Total Term Score');
+    } else {
+      layout.push('Total Term Score');
+      if (hasExamItems) {
+        layout.push('Empty');
+        layout.push('Exam');
+      }
+    }
 
     let html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
-    html += '<head><meta charset="UTF-8"></head><body><table border="1">';
+    html += '<head><meta charset="UTF-8"><meta name="ProgId" content="Excel.Sheet"><!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Marks</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head><body><table border="1">';
 
     // Header Row 1: Categories
-    html += '<tr><th rowSpan="2">Class No.</th><th rowSpan="2">English Name</th>';
-    categoryOrder.forEach(cat => {
-      const items = exportAssessmentsMap[cat] || [];
-      const colSpan = items.length + (cat !== 'Exam' ? 1 : 0) + (cat === 'Uniform Test' ? 1 : 0);
-      if (colSpan > 0) {
-        html += `<th colSpan="${colSpan}" style="background-color:#f3f4f6; font-weight:bold; text-align:center;">${cat}</th>`;
+    html += '<tr><th rowSpan="3">Class No.</th><th rowSpan="3">English Name</th>';
+    layout.forEach(col => {
+      if (col === 'Total Term Score') {
+        html += `<th rowSpan="3" style="background-color:#dbeafe; font-weight:bold; text-align:center;">Total Term Score</th>`;
+      } else if (col === 'Empty') {
+        html += `<th rowSpan="3" style="background-color:#ffffff; border:none; min-width: 40px;"></th>`;
+      } else {
+        const cat = col;
+        const items = exportAssessmentsMap[cat] || [];
+
+        let colSpan = 0;
+        items.forEach(item => {
+          if (item.sectionsConfig && item.sectionsConfig.length > 0) {
+            item.sectionsConfig.forEach(sec => {
+              if (sec.hasSubSections) {
+                colSpan += sec.subSections.length + 1; // sub-sections + section total
+              } else {
+                colSpan += 1;
+              }
+            });
+            colSpan += 1; // paper total
+          } else {
+            colSpan += 1;
+          }
+        });
+
+        let hasCatTotal = inCalc(cat);
+        if (isJSGeog && cat === 'Assignments') hasCatTotal = false; // Hide Assignment Total for JS Geog
+        if (hasCatTotal) colSpan += 1; // Category Total column
+
+        if (colSpan > 0) {
+          html += `<th colSpan="${colSpan}" style="background-color:#f3f4f6; font-weight:bold; text-align:center;">${cat}</th>`;
+        }
       }
     });
     html += '</tr>';
 
-    // Header Row 2: Items
+    // Header Row 2: Items (Names only, no redundant prefixes, forced nowrap)
     html += '<tr>';
-    categoryOrder.forEach(cat => {
+    layout.forEach(col => {
+      if (col === 'Total Term Score' || col === 'Empty') return;
+
+      const cat = col;
       const items = exportAssessmentsMap[cat] || [];
-      if (items.length === 0 && cat !== 'Exam') return; // Skip empty categories unless it's Exam which might just be empty
 
       items.forEach(item => {
-        html += `<th>${item.name} (/${item.fullMark || 100})</th>`;
+        if (item.sectionsConfig && item.sectionsConfig.length > 0) {
+          item.sectionsConfig.forEach(sec => {
+            if (sec.hasSubSections) {
+              sec.subSections.forEach(sub => {
+                html += `<th style="white-space:nowrap;">${sec.name} ${sub.name}</th>`;
+              });
+              html += `<th style="background-color:#f9fafb; white-space:nowrap;">${sec.name} Total</th>`;
+            } else {
+              html += `<th style="white-space:nowrap;">${sec.name}</th>`;
+            }
+          });
+          html += `<th style="background-color:#f3f4f6; font-weight:bold; white-space:nowrap;">${item.name} Total</th>`;
+        } else {
+          html += `<th style="white-space:nowrap;">${item.name}</th>`;
+        }
       });
 
-      if (cat !== 'Exam') {
-        const weight = preset.weights?.[cat] || (preset.name === 'JS Geography' && (cat === 'Assignments' || cat === 'Quizzes') ? 25 : 0);
-        html += `<th style="background-color:#e5e7eb;">${cat} Total (/${weight})</th>`;
+      let hasCatTotal = inCalc(cat);
+      if (isJSGeog && cat === 'Assignments') hasCatTotal = false;
+      if (hasCatTotal) {
+        let catName = cat;
+        if (isJSGeog && cat === 'Quizzes') catName = 'A+Q';
+        html += `<th style="background-color:#e5e7eb; white-space:nowrap;">${catName} Total</th>`;
       }
-      if (cat === 'Uniform Test') {
-        html += `<th style="background-color:#dbeafe; font-weight:bold;">Total Term Score</th>`;
+    });
+    html += '</tr>';
+
+    // Header Row 3: Full Marks
+    html += '<tr>';
+    layout.forEach(col => {
+      if (col === 'Total Term Score' || col === 'Empty') return;
+
+      const cat = col;
+      const items = exportAssessmentsMap[cat] || [];
+
+      items.forEach(item => {
+        if (item.sectionsConfig && item.sectionsConfig.length > 0) {
+          item.sectionsConfig.forEach(sec => {
+            if (sec.hasSubSections) {
+              sec.subSections.forEach(sub => {
+                html += `<th>(/${sub.fullMark})</th>`;
+              });
+              html += `<th style="background-color:#f9fafb;">(/${sec.fullMark})</th>`;
+            } else {
+              html += `<th>(/${sec.fullMark})</th>`;
+            }
+          });
+          html += `<th style="background-color:#f3f4f6; font-weight:bold;">(/100)</th>`;
+        } else {
+          html += `<th>(/${item.fullMark || 100})</th>`;
+        }
+      });
+
+      let hasCatTotal = inCalc(cat);
+      if (isJSGeog && cat === 'Assignments') hasCatTotal = false;
+      if (hasCatTotal) {
+        let weightLabel = preset.weights?.[cat] || 0;
+        if (isJSGeog) {
+          if (cat === 'Quizzes') weightLabel = '50';
+          else if (cat === 'Uniform Test') weightLabel = '50';
+        }
+        html += `<th style="background-color:#e5e7eb;">(/${weightLabel})</th>`;
       }
     });
     html += '</tr>';
@@ -1683,8 +1831,20 @@ export default function Marks() {
       html += `<tr><td>${student.classNumber}</td><td>${student.englishName}</td>`;
 
       let totalTermScore = 0;
+      let jsGeogAQRaw = 0;
+      let jsGeogAQFull = 0;
 
-      categoryOrder.forEach(cat => {
+      layout.forEach(col => {
+        if (col === 'Total Term Score') {
+          html += `<td style="background-color:#eff6ff; font-weight:bold;">${totalTermScore.toFixed(1)}</td>`;
+          return;
+        }
+        if (col === 'Empty') {
+          html += `<td style="background-color:#ffffff; border:none;"></td>`;
+          return;
+        }
+
+        const cat = col;
         const items = exportAssessmentsMap[cat] || [];
         let catRawTotal = 0;
         let catFullTotal = 0;
@@ -1695,42 +1855,103 @@ export default function Marks() {
           const deduction = parseFloat(marks[`${student.id}_deduction`]) || 0;
 
           let finalMark = null;
+
           if (item.sectionsConfig && item.sectionsConfig.length > 0) {
+            let paperRawTotal = 0;
+            let hasPaperMark = false;
+
+            item.sectionsConfig.forEach(sec => {
+              if (sec.hasSubSections) {
+                let secRawTotal = 0;
+                let hasSecMark = false;
+                sec.subSections.forEach(sub => {
+                  const val = (studentMark && typeof studentMark === 'object') ? studentMark[sub.id] : null;
+                  if (val !== null && val !== '' && !isNaN(val)) {
+                    html += `<td>${parseFloat(val).toFixed(1)}</td>`;
+                    secRawTotal += parseFloat(val);
+                    hasSecMark = true;
+                  } else {
+                    html += `<td>-</td>`;
+                  }
+                });
+                if (hasSecMark) {
+                  html += `<td style="background-color:#f9fafb;">${secRawTotal.toFixed(1)}</td>`;
+                  paperRawTotal += secRawTotal;
+                  hasPaperMark = true;
+                } else {
+                  html += `<td style="background-color:#f9fafb;">-</td>`;
+                }
+              } else {
+                const val = (studentMark && typeof studentMark === 'object') ? studentMark[sec.id] : null;
+                if (val !== null && val !== '' && !isNaN(val)) {
+                  html += `<td>${parseFloat(val).toFixed(1)}</td>`;
+                  paperRawTotal += parseFloat(val);
+                  hasPaperMark = true;
+                } else {
+                  html += `<td>-</td>`;
+                }
+              }
+            });
+
             const scaled = calculateScaledTotal(studentMark, item.sectionsConfig);
-            if (scaled !== null) finalMark = scaled - deduction;
+            if (scaled !== null) {
+              finalMark = scaled - deduction;
+              html += `<td style="background-color:#f3f4f6; font-weight:bold;">${finalMark.toFixed(1)}</td>`;
+            } else {
+              html += `<td style="background-color:#f3f4f6; font-weight:bold;">-</td>`;
+            }
           } else {
             const raw = calculateTotal(studentMark);
-            if (raw !== null) finalMark = raw - deduction;
+            if (raw !== null) {
+              finalMark = raw - deduction;
+              html += `<td>${finalMark.toFixed(1)}</td>`;
+            } else {
+              html += `<td>-</td>`;
+            }
           }
 
           if (finalMark !== null) {
             catRawTotal += finalMark;
             catFullTotal += (item.fullMark || 100);
-            html += `<td>${finalMark.toFixed(1)}</td>`;
-          } else {
-            html += `<td>-</td>`;
           }
         });
 
-        // Category Total Calculation
-        if (cat !== 'Exam') {
-          let catWeight = preset.weights?.[cat] || 0;
-          if (preset.name === 'JS Geography') {
-            if (cat === 'Assignments' || cat === 'Quizzes') catWeight = 25; // 50% combined
-            if (cat === 'Uniform Test') catWeight = 50;
-          }
-
-          let catScore = 0;
-          if (catFullTotal > 0 && catWeight > 0) {
-            catScore = (catRawTotal / catFullTotal) * catWeight;
-            totalTermScore += catScore;
-          }
-          html += `<td style="background-color:#f9fafb;">${catScore.toFixed(1)}</td>`;
+        if (isJSGeog && (cat === 'Assignments' || cat === 'Quizzes')) {
+          jsGeogAQRaw += catRawTotal;
+          jsGeogAQFull += catFullTotal;
         }
 
-        // Total Term Score Column (After UT)
-        if (cat === 'Uniform Test') {
-          html += `<td style="background-color:#eff6ff; font-weight:bold;">${totalTermScore.toFixed(1)}</td>`;
+        let hasCatTotal = inCalc(cat);
+        if (isJSGeog && cat === 'Assignments') hasCatTotal = false;
+
+        if (hasCatTotal) {
+          let catWeight = preset.weights?.[cat] || 0;
+          let catScore = 0;
+          let displayScore = "0.0";
+
+          if (isJSGeog) {
+            if (cat === 'Quizzes') {
+              if (jsGeogAQFull > 0) {
+                catScore = (jsGeogAQRaw / jsGeogAQFull) * 50;
+                totalTermScore += catScore;
+              }
+              displayScore = catScore.toFixed(1);
+            } else if (cat === 'Uniform Test') {
+              if (catFullTotal > 0) {
+                catScore = (catRawTotal / catFullTotal) * 50;
+                totalTermScore += catScore;
+              }
+              displayScore = catScore.toFixed(1);
+            }
+          } else {
+            if (catFullTotal > 0 && catWeight > 0) {
+              catScore = (catRawTotal / catFullTotal) * catWeight;
+              totalTermScore += catScore;
+            }
+            displayScore = catScore.toFixed(1);
+          }
+
+          html += `<td style="background-color:#f9fafb;">${displayScore}</td>`;
         }
       });
       html += '</tr>';
@@ -1738,14 +1959,10 @@ export default function Marks() {
 
     html += '</table></body></html>';
 
-    // Trigger Download
-    const blob = new Blob([html], { type: 'application/vnd.ms-excel' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${selectedClass}_${selectedTerm}_Marks.xls`;
-    a.click();
-    URL.revokeObjectURL(url);
+    // Trigger Download using SheetJS
+    const wb = XLSX.read(html, { type: 'string' });
+    XLSX.writeFile(wb, `${selectedClass}_${selectedTerm}_Marks.xlsx`);
+
     setShowExportModal(false);
   };
 
@@ -1823,10 +2040,42 @@ export default function Marks() {
               onChange={(e) => setSelectedClass(e.target.value)}
               className="w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium bg-gray-50 mb-2"
             >
-              {classes.length === 0 && <option value="">No classes</option>}
-              {classes.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
+              {classes.length === 0 && archivedClasses.length === 0 && <option value="">No classes</option>}
 
+              {user?.email === 'clng@ktls.edu.hk' ? (
+                <>
+                  {Object.entries(classes.reduce((acc, c) => {
+                    const key = c.owner === user?.email ? "Active - Created by you" : `Active - Created by ${c.owner}`;
+                    acc[key] = acc[key] || []; acc[key].push(c); return acc;
+                  }, {})).map(([group, items]) => (
+                    <optgroup key={group} label={group}>
+                      {items.map(c => <option key={c.name} value={c.name}>{c.name.replace(/\u200B/g, '')}</option>)}
+                    </optgroup>
+                  ))}
+                  {Object.entries(archivedClasses.reduce((acc, c) => {
+                    const key = c.owner === user?.email ? "Archived - Created by you" : `Archived - Created by ${c.owner}`;
+                    acc[key] = acc[key] || []; acc[key].push(c); return acc;
+                  }, {})).map(([group, items]) => (
+                    <optgroup key={group} label={group}>
+                      {items.map(c => <option key={c.name} value={c.name}>{c.name.replace(/\u200B/g, '')} (Archived)</option>)}
+                    </optgroup>
+                  ))}
+                </>
+              ) : (
+                <>
+                  {classes.length > 0 && (
+                    <optgroup label="Active Classes">
+                      {classes.map(c => <option key={c.name} value={c.name}>{c.name.replace(/\u200B/g, '')}</option>)}
+                    </optgroup>
+                  )}
+                  {archivedClasses.length > 0 && (
+                    <optgroup label="Archived Classes">
+                      {archivedClasses.map(c => <option key={c.name} value={c.name}>{c.name.replace(/\u200B/g, '')} (Archived)</option>)}
+                    </optgroup>
+                  )}
+                </>
+              )}
+            </select>
             <label className="font-semibold text-gray-700 flex items-center mb-1.5 text-xs mt-2">
               <Calculator className="w-3 h-3 mr-1" /> Default Term Score Method
             </label>
@@ -2790,14 +3039,14 @@ export default function Marks() {
                   <label className="block text-sm font-semibold text-gray-700 mb-2">Apply to Classes</label>
                   <div className="flex flex-wrap gap-2">
                     {classes.map(c => (
-                      <label key={c} className={`flex items-center px-3 py-1.5 rounded-md border cursor-pointer transition-colors ${selectedClassesForNew.includes(c) ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}`}>
+                      <label key={c.name} className={`flex items-center px-3 py-1.5 rounded-md border cursor-pointer transition-colors ${selectedClassesForNew.includes(c.name) ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}`}>
                         <input
                           type="checkbox"
-                          checked={selectedClassesForNew.includes(c)}
-                          onChange={() => toggleClassForNew(c)}
+                          checked={selectedClassesForNew.includes(c.name)}
+                          onChange={() => toggleClassForNew(c.name)}
                           className="mr-2 rounded text-blue-600 focus:ring-blue-500"
                         />
-                        <span className="text-sm font-medium">{c}</span>
+                        <span className="text-sm font-medium">{c.name}</span>
                       </label>
                     ))}
                   </div>
@@ -3450,17 +3699,17 @@ export default function Marks() {
                   <label className="font-semibold text-gray-700 text-sm">Classes:</label>
                   <div className="flex flex-wrap gap-1 max-w-[200px] max-h-16 overflow-y-auto">
                     {classes.map(c => (
-                      <label key={c} className="flex items-center text-xs bg-gray-100 px-2 py-1 rounded cursor-pointer hover:bg-gray-200">
+                      <label key={c.name} className="flex items-center text-xs bg-gray-100 px-2 py-1 rounded cursor-pointer hover:bg-gray-200">
                         <input
                           type="checkbox"
-                          checked={modalClasses.includes(c)}
+                          checked={modalClasses.includes(c.name)}
                           onChange={() => {
-                            setModalClasses(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]);
+                            setModalClasses(prev => prev.includes(c.name) ? prev.filter(x => x !== c.name) : [...prev, c.name]);
                             setTermScoresData([]);
                           }}
                           className="mr-1 rounded text-purple-600 focus:ring-purple-500"
                         />
-                        {c}
+                        {c.name}
                       </label>
                     ))}
                   </div>

@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { AlertTriangle, Users, BookX, CheckCircle, Save, Upload, Plus, Trash2, Archive, Calendar, Loader2, MinusCircle, History, X } from 'lucide-react';
 import { collection, getDocs, doc, writeBatch, updateDoc, setDoc, getDoc, query, where, deleteDoc, addDoc } from 'firebase/firestore';
 import { db } from './firebase';
+import { useAuth } from './main.jsx';
 
 export default function Record() {
+  const { user } = useAuth();
   // Navigation
   const [activeTab, setActiveTab] = useState('records');
   const [isLoading, setIsLoading] = useState(true);
@@ -42,11 +44,37 @@ export default function Record() {
 
         let loadedClasses = [];
         if (classDocSnap.exists()) {
-          loadedClasses = classDocSnap.data().list || [];
-          // Sort classes alphabetically
-          loadedClasses.sort((a, b) => a.localeCompare(b));
+          const rawList = classDocSnap.data().list || [];
+          let classObjects = rawList.map(c => typeof c === 'string' ? { name: c, owner: 'clng@ktls.edu.hk', isArchived: false } : c);
+
+          // --- AUTO-FIX DUPLICATES WITH INVISIBLE CHARACTERS ---
+          const seenNames = new Set();
+          let needsUpdate = false;
+          classObjects = classObjects.map(c => {
+            let finalName = c.name.replace(/\(\d+\)/g, '').trim(); // Remove old (1) if any
+            while (seenNames.has(finalName)) {
+              finalName = finalName + '\u200B'; // Append zero-width space
+              needsUpdate = true;
+            }
+            seenNames.add(finalName);
+            return { ...c, name: finalName };
+          });
+
+          if (needsUpdate) {
+            await setDoc(classDocRef, { list: classObjects }, { merge: true });
+          }
+          // ---------------------------
+
+          let visibleClasses = classObjects;
+          if (user?.email !== 'clng@ktls.edu.hk') {
+            visibleClasses = classObjects.filter(c => c.owner === user?.email);
+          }
+
+          // Keep as objects so we can group them by owner in the dropdown
+          loadedClasses = visibleClasses.filter(c => !c.isArchived);
+          loadedClasses.sort((a, b) => a.name.localeCompare(b.name));
           setClasses(loadedClasses);
-          if (loadedClasses.length > 0) setSelectedClass(loadedClasses[0]);
+          if (loadedClasses.length > 0) setSelectedClass(loadedClasses[0].name);
         }
 
         // Fetch all students
@@ -182,19 +210,56 @@ export default function Record() {
   // ============================================================================
   const handleAddClass = async (e) => {
     e.preventDefault();
-    const className = newClassName.trim();
-    if (className && !classes.includes(className)) {
-      try {
-        const updatedClasses = [...classes, className].sort((a, b) => a.localeCompare(b));
-        await setDoc(doc(db, "settings", "classes"), { list: updatedClasses }, { merge: true });
+    const baseClassName = newClassName.trim();
+    if (!baseClassName) return;
 
-        setClasses(updatedClasses);
-        setSelectedClass(className);
-        setNewClassName('');
-      } catch (error) {
-        console.error("Error adding class:", error);
-        alert("Failed to add class to database.");
+    try {
+      const classDocRef = doc(db, "settings", "classes");
+      const classDocSnap = await getDoc(classDocRef);
+      const rawList = classDocSnap.exists() ? classDocSnap.data().list || [] : [];
+
+      // Use zero-width spaces for global uniqueness without altering visible text
+      let finalClassName = baseClassName;
+      while (rawList.some(c => (typeof c === 'string' ? c : c.name) === finalClassName)) {
+        finalClassName += '\u200B';
       }
+
+      const newClassObject = { name: finalClassName, owner: user?.email || 'unknown', isArchived: false };
+      const updatedList = [...rawList, newClassObject];
+
+      await setDoc(classDocRef, { list: updatedList }, { merge: true });
+
+      const updatedClasses = [...classes, newClassObject].sort((a, b) => a.name.localeCompare(b.name));
+      setClasses(updatedClasses);
+      setSelectedClass(finalClassName);
+      setNewClassName('');
+    } catch (error) {
+      console.error("Error adding class:", error);
+      alert("Failed to add class to database.");
+    }
+  };
+
+  const handleArchiveClass = async () => {
+    if (!window.confirm(`Are you sure you want to archive ${selectedClass}? It will be hidden from active lists but kept for storage.`)) return;
+    try {
+      const classDocRef = doc(db, "settings", "classes");
+      const classDocSnap = await getDoc(classDocRef);
+      if (classDocSnap.exists()) {
+        const rawList = classDocSnap.data().list || [];
+        const updatedList = rawList.map(c => {
+          if (typeof c === 'string' && c === selectedClass) return { name: c, owner: 'clng@ktls.edu.hk', isArchived: true };
+          if (typeof c === 'object' && c.name === selectedClass) return { ...c, isArchived: true };
+          return c;
+        });
+        await setDoc(classDocRef, { list: updatedList }, { merge: true });
+        const remainingClasses = classes.filter(c => c !== selectedClass);
+        setClasses(remainingClasses);
+        setSelectedClass(remainingClasses.length > 0 ? remainingClasses[0] : '');
+        alert("Class archived successfully.");
+      }
+    } catch (error) {
+      console.error("Error archiving class:", error);
+      alert("Failed to archive class.");
     }
   };
 
@@ -709,7 +774,18 @@ export default function Record() {
                 disabled={classes.length === 0}
               >
                 {classes.length === 0 && <option value="">No classes available</option>}
-                {classes.map(c => <option key={c} value={c}>{c}</option>)}
+                {user?.email === 'clng@ktls.edu.hk' ? (
+                  Object.entries(classes.reduce((acc, c) => {
+                    const key = c.owner === user?.email ? "Created by you" : `Created by ${c.owner}`;
+                    acc[key] = acc[key] || []; acc[key].push(c); return acc;
+                  }, {})).map(([group, items]) => (
+                    <optgroup key={group} label={group}>
+                      {items.map(c => <option key={c.name} value={c.name}>{c.name.replace(/\u200B/g, '')}</option>)}
+                    </optgroup>
+                  ))
+                ) : (
+                  classes.map(c => <option key={c.name} value={c.name}>{c.name.replace(/\u200B/g, '')}</option>)
+                )}
               </select>
             </div>
 
@@ -774,7 +850,18 @@ export default function Record() {
                 disabled={classes.length === 0}
               >
                 {classes.length === 0 && <option value="">No classes available</option>}
-                {classes.map(c => <option key={c} value={c}>{c}</option>)}
+                {user?.email === 'clng@ktls.edu.hk' ? (
+                  Object.entries(classes.reduce((acc, c) => {
+                    const key = c.owner === user?.email ? "Created by you" : `Created by ${c.owner}`;
+                    acc[key] = acc[key] || []; acc[key].push(c); return acc;
+                  }, {})).map(([group, items]) => (
+                    <optgroup key={group} label={group}>
+                      {items.map(c => <option key={c.name} value={c.name}>{c.name.replace(/\u200B/g, '')}</option>)}
+                    </optgroup>
+                  ))
+                ) : (
+                  classes.map(c => <option key={c.name} value={c.name}>{c.name.replace(/\u200B/g, '')}</option>)
+                )}
               </select>
             </div>
 
@@ -851,8 +938,27 @@ export default function Record() {
                   className="flex-1 border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-blue-500 outline-none"
                 >
                   {classes.length === 0 && <option value="">No classes...</option>}
-                  {classes.map(c => <option key={c} value={c}>{c}</option>)}
+                  {user?.email === 'clng@ktls.edu.hk' ? (
+                    Object.entries(classes.reduce((acc, c) => {
+                      const key = c.owner === user?.email ? "Created by you" : `Created by ${c.owner}`;
+                      acc[key] = acc[key] || []; acc[key].push(c); return acc;
+                    }, {})).map(([group, items]) => (
+                      <optgroup key={group} label={group}>
+                        {items.map(c => <option key={c.name} value={c.name}>{c.name.replace(/\u200B/g, '')}</option>)}
+                      </optgroup>
+                    ))
+                  ) : (
+                    classes.map(c => <option key={c.name} value={c.name}>{c.name.replace(/\u200B/g, '')}</option>)
+                  )}
                 </select>
+                <button
+                  onClick={handleArchiveClass}
+                  disabled={!selectedClass}
+                  className="bg-orange-100 text-orange-600 px-3 py-2 rounded-md hover:bg-orange-200 transition-colors disabled:opacity-50"
+                  title="Archive Selected Class"
+                >
+                  <Archive className="w-5 h-5" />
+                </button>
                 <button
                   onClick={handleDeleteClass}
                   disabled={!selectedClass}

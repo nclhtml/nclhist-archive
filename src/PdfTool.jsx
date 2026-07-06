@@ -1,22 +1,22 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, degrees } from 'pdf-lib';
 import { useNavigate } from 'react-router-dom'; // <-- ADD THIS
-import { 
-  FileText, Trash2, UploadCloud, Loader2, Info, 
+import {
+  FileText, Trash2, UploadCloud, Loader2, Info,
   Download, Edit2, Check, GripHorizontal, Layers, Link, X
 } from 'lucide-react';
 
 export default function PdfTool() {
   const navigate = useNavigate(); // <-- ADD THIS
-  
+
   const [isDragging, setIsDragging] = useState(false);
   const [files, setFiles] = useState([]);
   const [activePreviewUrl, setActivePreviewUrl] = useState(null);
   const [processing, setProcessing] = useState(false);
   const [processingMsg, setProcessingMsg] = useState("");
-  
+
   const fileInputRef = useRef(null);
-  
+
   // Keep track of all generated blob URLs to prevent memory leaks
   // without prematurely breaking them during drag-and-drop re-renders
   const blobUrlsRef = useRef(new Set());
@@ -31,10 +31,10 @@ export default function PdfTool() {
 
   const handleLinkToArchive = (file) => {
     // Send the file data in the hidden router state to the home page ('/')
-    navigate('/', { 
-      state: { 
-        linkedFile: { fileBytes: file.fileBytes, name: file.name } 
-      } 
+    navigate('/', {
+      state: {
+        linkedFile: { fileBytes: file.fileBytes, name: file.name }
+      }
     });
   };
 
@@ -57,23 +57,23 @@ export default function PdfTool() {
     if (pdfFiles.length === 0) return;
 
     setProcessing(true);
-    
+
     try {
       const newFiles = [];
-      
+
       for (const file of pdfFiles) {
         setProcessingMsg(`Reading ${file.name}...`);
         const fileBytes = await file.arrayBuffer();
         const pdfDoc = await PDFDocument.load(fileBytes);
         const pageCount = pdfDoc.getPageCount();
         const fileId = Math.random().toString(36).substring(2, 9);
-        
+
         const pages = [];
-        
+
         // Generate a preview for each page
         for (let i = 0; i < pageCount; i++) {
           setProcessingMsg(`Generating preview for ${file.name} (Page ${i + 1}/${pageCount})...`);
-          
+
           // Extract single page to create a blob URL for the iframe preview
           const singlePagePdf = await PDFDocument.create();
           const [copiedPage] = await singlePagePdf.copyPages(pdfDoc, [i]);
@@ -81,12 +81,12 @@ export default function PdfTool() {
           const singleBytes = await singlePagePdf.save();
           const blob = new Blob([singleBytes], { type: 'application/pdf' });
           const previewUrl = URL.createObjectURL(blob);
-          
+
           blobUrlsRef.current.add(previewUrl); // Register for unmount cleanup
 
           pages.push({
             id: `${fileId}-page-${i}-${Date.now()}`,
-            originalIndex: i, 
+            originalIndex: i,
             previewUrl: previewUrl
           });
         }
@@ -94,17 +94,17 @@ export default function PdfTool() {
         newFiles.push({
           id: fileId,
           name: file.name,
-          fileBytes: fileBytes, 
+          fileBytes: fileBytes,
           pages: pages
         });
       }
-      
+
       setFiles(prev => [...prev, ...newFiles]);
     } catch (error) {
       console.error("Error reading PDFs:", error);
       alert("Failed to read one or more PDFs. Ensure they are valid and not password protected.");
     }
-    
+
     setProcessing(false);
   };
 
@@ -118,7 +118,7 @@ export default function PdfTool() {
   };
   const handleFileInput = (e) => {
     processFiles(e.target.files);
-    e.target.value = null; 
+    e.target.value = null;
   };
 
   // --- WORKSPACE ACTIONS ---
@@ -126,7 +126,7 @@ export default function PdfTool() {
   // Merge all files currently in the workspace into one new file
   const handleMergeAll = async () => {
     if (files.length < 2) return alert("You need at least 2 files to merge.");
-    
+
     setProcessing(true);
     setProcessingMsg("Merging documents...");
 
@@ -137,22 +137,22 @@ export default function PdfTool() {
 
       for (const file of files) {
         const sourcePdf = await PDFDocument.load(file.fileBytes);
-        
+
         for (const page of file.pages) {
           const [copiedPage] = await mergedPdf.copyPages(sourcePdf, [page.originalIndex]);
           mergedPdf.addPage(copiedPage);
-          
+
           // Re-use the preview URL for performance, just update IDs
           mergedPages.push({
             id: `${newFileId}-page-${mergedPages.length}-${Date.now()}`,
-            originalIndex: mergedPages.length, 
-            previewUrl: page.previewUrl 
+            originalIndex: mergedPages.length,
+            previewUrl: page.previewUrl
           });
         }
       }
 
       const mergedBytes = await mergedPdf.save();
-      
+
       const newMergedFile = {
         id: newFileId,
         name: `Merged_Document_${new Date().getTime()}.pdf`,
@@ -162,7 +162,7 @@ export default function PdfTool() {
 
       // Replace all original files with the newly merged file
       setFiles([newMergedFile]);
-      
+
     } catch (error) {
       console.error(error);
       alert("Error merging files.");
@@ -179,19 +179,19 @@ export default function PdfTool() {
     try {
       const newPdf = await PDFDocument.create();
       const sourcePdf = await PDFDocument.load(file.fileBytes);
-      
+
       for (const page of file.pages) {
         const [copiedPage] = await newPdf.copyPages(sourcePdf, [page.originalIndex]);
         newPdf.addPage(copiedPage);
       }
-      
+
       const pdfBytes = await newPdf.save();
       downloadPdf(pdfBytes, file.name);
     } catch (error) {
       console.error(error);
       alert("Error generating the final PDF.");
     }
-    
+
     setProcessing(false);
   };
 
@@ -207,12 +207,12 @@ export default function PdfTool() {
     const handleExtractPages = async () => {
       const input = prompt("Enter pages to extract (e.g., 1, 3-5):");
       if (!input) return;
-      
+
       setProcessing(true);
       try {
         const sourcePdf = await PDFDocument.load(file.fileBytes);
         const newPdf = await PDFDocument.create();
-        
+
         // Basic parser for "1, 3-5"
         const pagesToExtract = new Set();
         input.split(',').forEach(part => {
@@ -224,13 +224,13 @@ export default function PdfTool() {
           }
         });
 
-        const validPages = Array.from(pagesToExtract).filter(p => p >= 0 && p < file.pages.length).sort((a,b) => a-b);
+        const validPages = Array.from(pagesToExtract).filter(p => p >= 0 && p < file.pages.length).sort((a, b) => a - b);
         const copiedPages = await newPdf.copyPages(sourcePdf, validPages);
         copiedPages.forEach(p => newPdf.addPage(p));
-        
+
         const newBytes = await newPdf.save();
         const newFileId = Math.random().toString(36).substring(2, 9);
-        
+
         // Generate previews for the new file
         const newPages = [];
         for (let i = 0; i < validPages.length; i++) {
@@ -249,20 +249,20 @@ export default function PdfTool() {
       setProcessing(false);
     };
 
-    // 2. Split pages (A3 to A4)
+    // 2. Split pages (A3 to A4 / Vertical or Horizontal)
     const handleSplitPages = async (direction) => {
       setProcessing(true);
       try {
         const sourcePdf = await PDFDocument.load(file.fileBytes);
         const newPdf = await PDFDocument.create();
-        
+
         for (let i = 0; i < sourcePdf.getPageCount(); i++) {
           const page = sourcePdf.getPage(i);
           const { width, height } = page.getSize();
-          
+
           // Copy the page twice (one for left/top, one for right/bottom)
           const [page1, page2] = await newPdf.copyPages(sourcePdf, [i, i]);
-          
+
           if (direction === 'vertical') {
             // Split vertically (Left and Right halves)
             page1.setCropBox(0, 0, width / 2, height);
@@ -272,16 +272,14 @@ export default function PdfTool() {
             page1.setCropBox(0, height / 2, width, height / 2);
             page2.setCropBox(0, 0, width, height / 2);
           }
-          
+
           newPdf.addPage(page1);
           newPdf.addPage(page2);
         }
-        
+
         const newBytes = await newPdf.save();
-        // Replace current file bytes and regenerate previews (similar to extract logic)
-        // For brevity, you would call your existing `processFiles` logic here on a new File object
         const splitFile = new File([newBytes], `Split_${file.name}`, { type: 'application/pdf' });
-        processFiles([splitFile]); 
+        processFiles([splitFile]);
         handleRemoveFile(file.id); // Remove original
       } catch (err) {
         console.error(err);
@@ -289,6 +287,31 @@ export default function PdfTool() {
       }
       setProcessing(false);
     };
+
+    // 3. Rotate all pages 90 degrees clockwise
+    const handleRotatePages = async () => {
+      setProcessing(true);
+      try {
+        const sourcePdf = await PDFDocument.load(file.fileBytes);
+        const pageCount = sourcePdf.getPageCount();
+
+        for (let i = 0; i < pageCount; i++) {
+          const page = sourcePdf.getPage(i);
+          const currentRotation = page.getRotation().angle;
+          page.setRotation(degrees(currentRotation + 90));
+        }
+
+        const newBytes = await sourcePdf.save();
+        const rotatedFile = new File([newBytes], `Rotated_${file.name}`, { type: 'application/pdf' });
+        processFiles([rotatedFile]);
+        handleRemoveFile(file.id);
+      } catch (err) {
+        console.error(err);
+        alert("Error rotating pages.");
+      }
+      setProcessing(false);
+    };
+
     const [editName, setEditName] = useState(file.name);
 
     const saveName = () => {
@@ -313,10 +336,10 @@ export default function PdfTool() {
       e.preventDefault();
       try {
         const data = JSON.parse(e.dataTransfer.getData('application/json'));
-        
+
         // Ignore drops if they came from a different file
-        if (data.fileId !== file.id) return; 
-        
+        if (data.fileId !== file.id) return;
+
         const dragIndex = data.pageIndex;
         if (dragIndex === dropIndex) return;
 
@@ -338,11 +361,11 @@ export default function PdfTool() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 pb-4 border-b border-slate-100">
           <div className="flex items-center gap-3 flex-1">
             <FileText size={24} className="text-blue-600 shrink-0" />
-            
+
             {isEditingName ? (
               <div className="flex items-center gap-2 flex-1 max-w-md">
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   value={editName}
                   onChange={(e) => setEditName(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && saveName()}
@@ -361,7 +384,7 @@ export default function PdfTool() {
                 </button>
               </div>
             )}
-            
+
             <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-1 rounded-md shrink-0">
               {file.pages.length} Pages
             </span>
@@ -378,7 +401,13 @@ export default function PdfTool() {
               Extract Pages
             </button>
             <button onClick={() => handleSplitPages('vertical')} className="px-3 py-1.5 text-sm font-medium text-teal-600 hover:bg-teal-50 rounded-lg">
-              Split A3 to A4
+              Split Vertically
+            </button>
+            <button onClick={() => handleSplitPages('horizontal')} className="px-3 py-1.5 text-sm font-medium text-teal-600 hover:bg-teal-50 rounded-lg">
+              Split Horizontally
+            </button>
+            <button onClick={handleRotatePages} className="px-3 py-1.5 text-sm font-medium text-orange-600 hover:bg-orange-50 rounded-lg">
+              Rotate 90°
             </button>
             <button
               onClick={() => handleRemoveFile(file.id)}
@@ -394,7 +423,7 @@ export default function PdfTool() {
             </button>
           </div>
         </div>
-        
+
         {/* Pages Grid */}
         {file.pages.length === 0 ? (
           <div className="text-center py-8 text-slate-400 text-sm">No pages left. You can remove this file.</div>
@@ -412,9 +441,9 @@ export default function PdfTool() {
                 className="group relative rounded-lg border-2 border-slate-200 bg-slate-50 overflow-hidden hover:border-blue-400 transition-all cursor-pointer shadow-sm hover:shadow-md"
               >
                 {/* PDF Preview Iframe */}
-                <iframe 
-                  src={`${page.previewUrl}#toolbar=0&navpanes=0&scrollbar=0&view=Fit`} 
-                  className="w-full h-full pointer-events-none" 
+                <iframe
+                  src={`${page.previewUrl}#toolbar=0&navpanes=0&scrollbar=0&view=Fit`}
+                  className="w-full h-full pointer-events-none"
                   title={`Page ${index + 1}`}
                 />
 
@@ -425,8 +454,8 @@ export default function PdfTool() {
                       <GripHorizontal size={12} className="text-slate-400" />
                       {index + 1}
                     </div>
-                    
-                    <button 
+
+                    <button
                       onClick={() => deletePage(page.id)}
                       className="bg-white/90 backdrop-blur text-red-500 hover:text-white hover:bg-red-500 p-1.5 rounded shadow-sm opacity-0 group-hover:opacity-100 transition-all"
                       title="Delete Page"
@@ -443,9 +472,9 @@ export default function PdfTool() {
     );
   };
 
-return (
+  return (
     <div className="animate-in fade-in duration-300 space-y-6 max-w-[95%] mx-auto p-4">
-      
+
       {/* Active Status Banner */}
       <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-4 rounded-xl flex items-start gap-3">
         <Info className="mt-0.5 shrink-0 text-emerald-600" size={18} />
@@ -456,16 +485,16 @@ return (
 
       {/* Top Toolbar */}
       <div className="flex flex-wrap gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-sm items-center justify-between">
-        <button 
+        <button
           onClick={() => fileInputRef.current?.click()}
           className="flex items-center gap-2 bg-white border border-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-50 transition-all"
         >
           <UploadCloud size={16} /> Add More Files
         </button>
-        
-        <button 
-          onClick={handleMergeAll} 
-          disabled={files.length < 2 || processing} 
+
+        <button
+          onClick={handleMergeAll}
+          disabled={files.length < 2 || processing}
           className="flex items-center gap-2 bg-blue-50 border border-blue-200 text-blue-700 px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
           title="Combine all files in the workspace into one new document"
         >
@@ -475,14 +504,13 @@ return (
 
       {/* Dropzone (Only show prominently if no files) */}
       {files.length === 0 && (
-        <div 
-          onDragOver={handleDragOver} 
-          onDragLeave={handleDragLeave} 
+        <div
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           onClick={() => fileInputRef.current?.click()}
-          className={`border-2 border-dashed rounded-xl p-16 flex flex-col items-center justify-center text-center cursor-pointer transition-colors ${
-            isDragging ? 'border-blue-500 bg-blue-50' : 'border-slate-300 bg-white hover:bg-slate-50'
-          }`}
+          className={`border-2 border-dashed rounded-xl p-16 flex flex-col items-center justify-center text-center cursor-pointer transition-colors ${isDragging ? 'border-blue-500 bg-blue-50' : 'border-slate-300 bg-white hover:bg-slate-50'
+            }`}
         >
           <UploadCloud size={48} className={`mb-4 ${isDragging ? 'text-blue-500' : 'text-slate-400'}`} />
           <h3 className="text-xl font-bold text-slate-700">Drag & Drop PDF files here</h3>
@@ -491,13 +519,13 @@ return (
       )}
 
       {/* Hidden File Input */}
-      <input 
-        type="file" 
-        ref={fileInputRef} 
-        onChange={handleFileInput} 
-        accept="application/pdf" 
-        multiple 
-        className="hidden" 
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileInput}
+        accept="application/pdf"
+        multiple
+        className="hidden"
       />
 
       {/* Workspace / File Viewer */}
@@ -518,11 +546,11 @@ return (
         </div>
       )}
 
-            {/* PDF Viewer Modal */}
+      {/* PDF Viewer Modal */}
       {activePreviewUrl && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[60] flex flex-col p-4 sm:p-8">
           <div className="flex justify-end mb-4">
-            <button 
+            <button
               onClick={() => setActivePreviewUrl(null)}
               className="flex items-center gap-2 bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-lg transition-colors"
             >
@@ -530,9 +558,9 @@ return (
             </button>
           </div>
           <div className="flex-1 w-full max-w-5xl mx-auto bg-slate-100 rounded-xl overflow-hidden shadow-2xl">
-            <iframe 
-              src={`${activePreviewUrl}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`} 
-              className="w-full h-full" 
+            <iframe
+              src={`${activePreviewUrl}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`}
+              className="w-full h-full"
               title="PDF Preview"
             />
           </div>

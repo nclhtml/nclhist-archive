@@ -510,10 +510,11 @@ export default function AdvancedHistoryArchive() {
 
   // Helper to highlight search terms
   const highlightText = (text, highlight) => {
-    if (!highlight || !highlight.trim()) return text;
+    const cleanText = text.replace(/\*\*/g, '');
+    if (!highlight || !highlight.trim()) return cleanText;
     // Escape special characters to prevent RegExp syntax errors
-    const escapedHighlight = highlight.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const parts = text.split(new RegExp(`(${escapedHighlight})`, 'gi'));
+    const escapedHighlight = highlight.trim().replace(/[.*+?^${}()|[]\]/g, '\\$&');
+    const parts = cleanText.split(new RegExp(`(${escapedHighlight})`, 'gi'));
     return parts.map((part, i) =>
       part.toLowerCase() === highlight.trim().toLowerCase() ? <mark key={i} className="bg-yellow-300 text-slate-900 rounded-sm px-0.5">{part}</mark> : part
     );
@@ -1519,7 +1520,7 @@ export default function AdvancedHistoryArchive() {
         if (matchQuestionType && matchSourceType && matchMarks && matchSearch && matchTopic) {
           // Identify if it's Extra Practice: Tier < 10, unlocked naturally, NOT via dashboard link
           const isExtraPractice = parentTierNum < 10 && parentAllowedByTier && !allowedViewIds.includes(parent.id) && !allowedViewIds.includes(childUniqueId);
-          results.push({ uniqueId: `${parent.id}_${child.id}`, parent, child, isExtraPractice });
+          results.push({ uniqueId: `${parent.id}_${child.id}`, parent, child, isExtraPractice, hasFullAccess });
         }
       });
     });
@@ -1535,7 +1536,8 @@ export default function AdvancedHistoryArchive() {
           isFullPaper: true,
           matchedChildrenCount: 0,
           matchedChildren: [],
-          isExtraPractice: item.isExtraPractice
+          isExtraPractice: item.isExtraPractice,
+          hasFullAccess: item.hasFullAccess
         });
       }
       groupedMap.get(item.parent.id).matchedChildrenCount += 1;
@@ -1733,9 +1735,11 @@ export default function AdvancedHistoryArchive() {
   };
 
   const updateSubQuestion = (index, field, value) => {
-    const newSubs = [...uploadForm.subQuestions];
-    newSubs[index][field] = value;
-    setUploadForm(prev => ({ ...prev, subQuestions: newSubs }));
+    setUploadForm(prev => {
+      const newSubs = [...prev.subQuestions];
+      newSubs[index] = { ...newSubs[index], [field]: value };
+      return { ...prev, subQuestions: newSubs };
+    });
   };
 
   const handleCreateTopic = (newTopic) => {
@@ -1875,6 +1879,27 @@ export default function AdvancedHistoryArchive() {
         subQuestions: parentItem.subQuestions
       }]
     });
+
+    // Clear previous batch PDF states
+    setBatchPdfFile(null);
+    setBatchAnsPdfFile(null);
+    setBatchLoadedPdf(null);
+    setBatchLoadedAnsPdf(null);
+    if (batchPdfPreviewUrl) URL.revokeObjectURL(batchPdfPreviewUrl);
+    setBatchPdfPreviewUrl('');
+    if (batchAnsPdfPreviewUrl) URL.revokeObjectURL(batchAnsPdfPreviewUrl);
+    setBatchAnsPdfPreviewUrl('');
+
+    setBatchPdfFileChi(null);
+    setBatchAnsPdfFileChi(null);
+    setBatchLoadedPdfChi(null);
+    setBatchLoadedAnsPdfChi(null);
+    if (batchPdfPreviewUrlChi) URL.revokeObjectURL(batchPdfPreviewUrlChi);
+    setBatchPdfPreviewUrlChi('');
+    if (batchAnsPdfPreviewUrlChi) URL.revokeObjectURL(batchAnsPdfPreviewUrlChi);
+    setBatchAnsPdfPreviewUrlChi('');
+    setBatchPreviewMode('question');
+
     setEditingId(parentItem.id);
     setUploadSelection('batch'); // Open batch interface instead of single question
     setDeleteConfirm(false);
@@ -2509,61 +2534,6 @@ export default function AdvancedHistoryArchive() {
     return () => { document.body.style.overflow = 'unset'; };
   }, [isUploadModalOpen, previewItem, isManageFiltersOpen, isUserManagementOpen, showMarksModal]);
 
-  // --- MIGRATION SCRIPT FOR STAR RATINGS ---
-  const runStarMigration = async () => {
-    if (!window.confirm("Run star migration on all archives? This will update existing DBQ and Essay questions to 3 or 5 stars based on their types.")) return;
-    setIsLoading(true);
-    try {
-      let updatedCount = 0;
-      for (const parent of archives) {
-        let parentChanged = false;
-        let newParentRating = parent.rating || 0;
-
-        const newSubQs = parent.subQuestions.map(sq => {
-          let newSqRating = sq.rating || 0;
-          // Make tags lowercase and remove hyphens so "Single-factor" matches "single factor"
-          const qTypes = ensureArray(sq.questionType).map(t => t.toLowerCase().replace(/-/g, ' ').trim());
-
-          if (parent.paperType === "Paper 1 (DBQ)") {
-            // Use .some() and .includes() to catch both "argument" and "arguments"
-            if (qTypes.some(t => t.includes("two sided argument") || t.includes("single factor relative importance"))) {
-              newParentRating = 3;
-            }
-          } else if (parent.paperType === "Paper 2 (Essay)") {
-            if (qTypes.some(t => t.includes("dual factor"))) {
-              newSqRating = 5;
-            } else if (qTypes.some(t => t.includes("single factor relative importance"))) {
-              newSqRating = 3;
-            }
-          }
-
-          if (newSqRating !== (sq.rating || 0)) {
-            parentChanged = true;
-            return { ...sq, rating: newSqRating };
-          }
-          return sq;
-        });
-
-        if (newParentRating !== (parent.rating || 0)) {
-          parentChanged = true;
-        }
-
-        if (parentChanged) {
-          await updateDoc(doc(db, "archives", parent.id), {
-            subQuestions: newSubQs,
-            rating: newParentRating
-          });
-          updatedCount++;
-        }
-      }
-      alert(`Migration complete! Updated ${updatedCount} documents.`);
-      window.location.reload();
-    } catch (e) {
-      console.error("Migration error:", e);
-      alert("Migration failed. Check console for details.");
-    }
-    setIsLoading(false);
-  };
   // --- RENDER CONTENT ---
   const showTags = user?.isAdmin || currentUserRole === 'dse_only';
 
@@ -2625,13 +2595,6 @@ export default function AdvancedHistoryArchive() {
 
           {user && user.isAdmin && (
             <div className="flex gap-1.5 md:gap-2 w-full md:w-auto mt-2 md:mt-0 flex-nowrap md:flex-wrap">
-              <button
-                onClick={runStarMigration}
-                className="btn-secondary flex-1 md:flex-none hover:bg-yellow-50 hover:text-yellow-700 hover:border-yellow-200 text-[10px] md:text-sm px-2 py-1.5 md:px-4 md:py-2"
-                title="Run Star Rating Migration"
-              >
-                <Star className="w-3.5 h-3.5 md:w-[18px] md:h-[18px]" /> <span className="whitespace-nowrap">{t("Fix Stars")}</span>
-              </button>
               <button
                 onClick={() => setIsUserManagementOpen(true)}
                 className="btn-secondary flex-1 md:flex-none hover:bg-purple-50 hover:text-purple-700 hover:border-purple-200 text-[10px] md:text-sm px-2 py-1.5 md:px-4 md:py-2"
@@ -2721,7 +2684,7 @@ export default function AdvancedHistoryArchive() {
                   {/* Rating (Admin Only) */}
                   {user.isAdmin && (
                     <FilterAccordion title="Admin Rating" isOpen={expandedSections['rating']} onToggle={() => toggleAccordion('rating')} count={filters.rating.length}>
-                      <CheckboxGroup options={[1, 2, 3, 4, 5].map(r => ({ label: `${r} Stars`, value: r }))} selectedValues={filters.rating} onChange={(vals) => setFilters({ ...filters, rating: vals })} language={language} tagTranslations={tagTranslations} />
+                      <CheckboxGroup options={[{ label: t("Not recommended"), value: 0 }, ...[1, 2, 3, 4, 5].map(r => ({ label: `${r} Stars`, value: r }))]} selectedValues={filters.rating} onChange={(vals) => setFilters({ ...filters, rating: vals })} language={language} tagTranslations={tagTranslations} />
                     </FilterAccordion>
                   )}
 
@@ -2827,7 +2790,10 @@ export default function AdvancedHistoryArchive() {
                 <AnimatePresence>
                   {paginatedResults.map((item) => {
                     const { uniqueId, parent, child, isFullPaper, matchedChildrenCount } = item;
-                    const isMissingChi = user?.email === 'clng@ktls.edu.hk' && !parent.fileUrlChi;
+
+                    const isMissingChiPdf = parent.paperType !== "Paper 2 (Essay)" && !parent.fileUrlChi;
+                    const isMissingChiTranslation = parent.subQuestions.some(sq => !sq.contentChi || sq.contentChi.trim() === '');
+                    const isMissingChi = user?.email === 'clng@ktls.edu.hk' && (isMissingChiPdf || isMissingChiTranslation);
 
                     if (isFullPaper) {
                       // --- FULL PAPER RENDER ---
@@ -2835,8 +2801,7 @@ export default function AdvancedHistoryArchive() {
                       // Check if any sub-question specific filters are active
                       const hasActiveFilters = filters.questionType.length > 0 || filters.sourceType.length > 0 || filters.marks.length > 0 || filters.topic.length > 0;
                       const hasSearch = searchTerm.trim().length > 0 || hasActiveFilters;
-                      const subQuestionsToDisplay = hasSearch ? item.matchedChildren : parent.subQuestions;
-
+                      const subQuestionsToDisplay = (hasSearch || !item.hasFullAccess) ? item.matchedChildren : parent.subQuestions;
                       return (
                         <motion.div
                           key={uniqueId}
@@ -4189,7 +4154,7 @@ export default function AdvancedHistoryArchive() {
                                       const isUsingChi = language === 'zh' && sq.contentChi;
                                       const text = isUsingChi ? sq.contentChi : sq.content;
                                       if (!text) return <span className="text-slate-400 italic text-xs md:text-sm">{t("No text content available.")}</span>;
-                                      return text;
+                                      return text.replace(/\*\*/g, '');
                                     })()}
                                   </div>
                                   {showTags && (
@@ -4225,7 +4190,7 @@ export default function AdvancedHistoryArchive() {
                                   const isUsingChi = language === 'zh' && previewItem.child.contentChi;
                                   const text = isUsingChi ? previewItem.child.contentChi : previewItem.child.content;
                                   if (!text) return <span className="text-slate-400 italic text-xs md:text-sm">{t("No text content available. Please refer to the PDF.")}</span>;
-                                  return text;
+                                  return text.replace(/\*\*/g, '');
                                 })()}
                               </div>
 
@@ -4607,7 +4572,8 @@ export default function AdvancedHistoryArchive() {
                                 <Star size={14} /> {t("Admin Rating (0-5 Stars)")}
                               </label>
                               <select className="input-field" value={uploadForm.rating || 0} onChange={(e) => handleParentChange('rating', Number(e.target.value))}>
-                                {[0, 1, 2, 3, 4, 5].map(r => <option key={r} value={r}>{r} {r === 1 ? t("Star") : t("Stars")}</option>)}
+                                <option value={0}>{t("Not recommended")}</option>
+                                {[1, 2, 3, 4, 5].map(r => <option key={r} value={r}>{r} {r === 1 ? t("Star") : t("Stars")}</option>)}
                               </select>
                             </div>
 
@@ -4780,7 +4746,7 @@ export default function AdvancedHistoryArchive() {
                                       placeholder={uploadLangTab === 'zh' ? "在此輸入中文題目內容..." : t("Type the full question text or essay prompt here...")}
                                       rows={4}
                                       className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none mb-4"
-                                      value={uploadLangTab === 'zh' ? (sub.contentChi || '') : sub.content}
+                                      value={uploadLangTab === 'zh' ? (sub.contentChi || '') : (sub.content || '')}
                                       onChange={(e) => updateSubQuestion(index, uploadLangTab === 'zh' ? 'contentChi' : 'content', e.target.value)}
                                     />
                                   </div>
@@ -4857,15 +4823,15 @@ export default function AdvancedHistoryArchive() {
                 {/* BATCH EXAM UPLOAD FORM */}
                 {uploadSelection === 'batch' && (
                   <div className="flex flex-col lg:flex-row h-full">
-                    <div className="flex-1 p-6 overflow-y-auto custom-scrollbar lg:w-1/2 border-r border-slate-200">
+                    <div className="flex-1 overflow-y-auto custom-scrollbar lg:w-1/2 border-r border-slate-200 relative">
 
-                      <div className="flex border-b border-slate-200 mb-4 overflow-x-auto">
+                      <div className="sticky top-0 z-20 bg-slate-50/95 backdrop-blur-sm px-6 pt-6 pb-2 border-b border-slate-200 mb-4 flex overflow-x-auto shadow-sm">
                         <button type="button" onClick={() => setBatchLangTab('en')} className={`px-6 py-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${batchLangTab === 'en' ? 'border-teal-600 text-teal-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>English Version</button>
                         <button type="button" onClick={() => setBatchLangTab('zh')} className={`px-6 py-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${batchLangTab === 'zh' ? 'border-teal-600 text-teal-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>Chinese Version (中文版)</button>
                         <button type="button" onClick={() => setBatchLangTab('perf')} className={`px-6 py-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${batchLangTab === 'perf' ? 'border-teal-600 text-teal-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>Candidate Performances</button>
                       </div>
 
-                      <form id="batch-form" onSubmit={handleBatchSubmit} className="space-y-6">
+                      <form id="batch-form" onSubmit={handleBatchSubmit} className="space-y-6 px-6 pb-6">
                         {batchLangTab !== 'perf' && (
                           <>
                             <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
@@ -5070,6 +5036,85 @@ export default function AdvancedHistoryArchive() {
                               <div className="flex justify-between items-center">
                                 <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">{t("Questions")}</h3>
                                 <div className="flex gap-2 items-center">
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      try {
+                                        let text = await navigator.clipboard.readText();
+                                        if (!text) return;
+                                        text = text.replace(/\*\*/g, '');
+                                        // Split by double newline (empty line separation)
+                                        const pastedItems = text.split(/\n\s*\n/).map(item => item.trim()).filter(item => item);
+                                        if (pastedItems.length === 0) return;
+
+                                        const newQ = [...batchForm.questions];
+                                        let pasteIndex = 0;
+                                        const markRegex = /\s*\(\s*(\d+)\s*(?:分|marks?|Marks?)\s*\)[^\w]*$/;
+
+                                        // Fill existing sub-questions sequentially
+                                        for (let qIdx = 0; qIdx < newQ.length; qIdx++) {
+                                          for (let sqIdx = 0; sqIdx < newQ[qIdx].subQuestions.length; sqIdx++) {
+                                            if (pasteIndex < pastedItems.length) {
+                                              const itemText = pastedItems[pasteIndex];
+                                              let extractedMark = '';
+                                              let cleanText = itemText;
+
+                                              // Auto-extract marks and remove them from text
+                                              const markMatch = itemText.match(markRegex);
+                                              if (markMatch) {
+                                                extractedMark = markMatch[1];
+                                                cleanText = itemText.replace(markRegex, '').trim();
+                                              }
+
+                                              if (batchLangTab === 'zh') newQ[qIdx].subQuestions[sqIdx].contentChi = cleanText;
+                                              else newQ[qIdx].subQuestions[sqIdx].content = cleanText;
+
+                                              if (extractedMark && !newQ[qIdx].subQuestions[sqIdx].marks) {
+                                                newQ[qIdx].subQuestions[sqIdx].marks = extractedMark;
+                                              }
+                                              pasteIndex++;
+                                            }
+                                          }
+                                        }
+
+                                        // If there are leftover pasted items, append them to the last question
+                                        if (pasteIndex < pastedItems.length && newQ.length > 0) {
+                                          const lastQIdx = newQ.length - 1;
+                                          while (pasteIndex < pastedItems.length) {
+                                            const itemText = pastedItems[pasteIndex];
+                                            let extractedMark = '';
+                                            let cleanText = itemText;
+
+                                            const markMatch = itemText.match(markRegex);
+                                            if (markMatch) {
+                                              extractedMark = markMatch[1];
+                                              cleanText = itemText.replace(markRegex, '').trim();
+                                            }
+
+                                            newQ[lastQIdx].subQuestions.push({
+                                              id: Date.now() + pasteIndex,
+                                              label: getNextLabel(newQ[lastQIdx].subQuestions.length, newQ[lastQIdx].paperType),
+                                              questionType: [],
+                                              content: batchLangTab === 'en' ? cleanText : '',
+                                              contentChi: batchLangTab === 'zh' ? cleanText : '',
+                                              topic: [],
+                                              sourceType: [],
+                                              marks: extractedMark
+                                            });
+                                            pasteIndex++;
+                                          }
+                                        }
+                                        setBatchForm({ ...batchForm, questions: newQ });
+                                      } catch (err) {
+                                        console.error("Failed to read clipboard", err);
+                                        alert("Failed to paste from clipboard. Please allow clipboard permissions in your browser.");
+                                      }
+                                    }}
+                                    className="text-sm font-bold text-indigo-600 flex items-center gap-1 hover:text-indigo-800 transition-colors"
+                                    title={t("Paste questions from clipboard (separated by empty lines)")}
+                                  >
+                                    <FileText size={16} /> {t("Paste All")}
+                                  </button>
                                   <div className="w-48">
                                     <CreatableSelect
                                       options={archives.map(a => a.title)}
@@ -5100,6 +5145,10 @@ export default function AdvancedHistoryArchive() {
                                   </div>
                                   <button type="button" onClick={() => setBatchForm(prev => ({ ...prev, questions: [...prev.questions, { id: Date.now(), paperType: 'Paper 1 (DBQ)', topic: [], pagesStr: '', ansPagesStr: '', ansSource: 'answer', pagesStrChi: '', ansPagesStrChi: '', ansSourceChi: 'answer', hasFile: false, hasAnswer: false, subQuestions: [{ id: Date.now() + 1, label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' }] }] }))} className="text-sm font-bold text-teal-600 flex items-center gap-1"><Plus size={16} /> {t("Add Question")}</button>
                                 </div>
+                              </div>
+
+                              <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg text-xs text-amber-700">
+                                <span className="font-bold">{t("Instruction:")}</span> {t("Please copy/screenshot only the content of the paragraphs/questions without adding the question numbering (i.e. (a), (b)).")}
                               </div>
 
                               {batchForm.questions.map((q, qIdx) => {
@@ -5154,7 +5203,8 @@ export default function AdvancedHistoryArchive() {
                                             <div className="flex flex-col col-span-2">
                                               <label className="text-xs font-bold text-slate-500 mb-1 flex items-center gap-1"><Star size={12} /> {t("Admin Rating (Whole DBQ)")}</label>
                                               <select className="w-full p-2 border rounded mt-auto" value={q.rating || 0} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].rating = Number(e.target.value); setBatchForm({ ...batchForm, questions: newQ }); }}>
-                                                {[0, 1, 2, 3, 4, 5].map(r => <option key={r} value={r}>{r} {r === 1 ? t("Star") : t("Stars")}</option>)}
+                                                <option value={0}>{t("Not recommended")}</option>
+                                                {[1, 2, 3, 4, 5].map(r => <option key={r} value={r}>{r} {r === 1 ? t("Star") : t("Stars")}</option>)}
                                               </select>
                                             </div>
                                           )}
@@ -5214,7 +5264,7 @@ export default function AdvancedHistoryArchive() {
                                                   <CreatableSelect options={availableQuestionTypes[q.paperType] || []} value={sq.questionType} onChange={(val) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].questionType = val; setBatchForm({ ...batchForm, questions: newQ }); }} onCreate={(val) => handleCreateQuestionType(val, q.paperType)} placeholder={t("Q-Type...")} isMulti={true} />
                                                 </div>
                                               </div>
-                                              <textarea placeholder={batchLangTab === 'zh' ? "在此輸入中文題目內容..." : t("Question content...")} rows={2} className="w-full p-2 border rounded text-sm" value={batchLangTab === 'zh' ? (sq.contentChi || '') : sq.content} onChange={(e) => { const newQ = [...batchForm.questions]; if (batchLangTab === 'zh') { newQ[qIdx].subQuestions[sqIdx].contentChi = e.target.value; } else { newQ[qIdx].subQuestions[sqIdx].content = e.target.value; } setBatchForm({ ...batchForm, questions: newQ }); }} />
+                                              <textarea placeholder={batchLangTab === 'zh' ? "在此輸入中文題目內容..." : t("Question content...")} rows={2} className="w-full p-2 border rounded text-sm" value={batchLangTab === 'zh' ? (sq.contentChi || '') : (sq.content || '')} onChange={(e) => { const newQ = [...batchForm.questions]; if (batchLangTab === 'zh') { newQ[qIdx].subQuestions[sqIdx].contentChi = e.target.value; } else { newQ[qIdx].subQuestions[sqIdx].content = e.target.value; } setBatchForm({ ...batchForm, questions: newQ }); }} />
                                               <div className="grid grid-cols-2 gap-2 items-end">
                                                 {q.paperType === "Paper 1 (DBQ)" && <input type="number" placeholder={t("Marks")} className="p-2 border rounded text-sm w-full" value={sq.marks} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].marks = e.target.value; setBatchForm({ ...batchForm, questions: newQ }); }} />}
                                                 {q.paperType === "Paper 1 (DBQ)" && <div className="w-full"><CreatableSelect options={availableSourceTypes} value={sq.sourceType} onChange={(val) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].sourceType = val; setBatchForm({ ...batchForm, questions: newQ }); }} onCreate={handleCreateSourceType} placeholder={t("Source Type")} isMulti={true} /></div>}
@@ -5226,7 +5276,8 @@ export default function AdvancedHistoryArchive() {
                                                     <div className="col-span-2 flex items-center gap-2 mt-1">
                                                       <label className="text-xs font-bold text-slate-500 flex items-center gap-1"><Star size={12} /> {t("Admin Rating")}</label>
                                                       <select className="p-1 border rounded text-xs" value={sq.rating || 0} onChange={(e) => { const newQ = [...batchForm.questions]; newQ[qIdx].subQuestions[sqIdx].rating = Number(e.target.value); setBatchForm({ ...batchForm, questions: newQ }); }}>
-                                                        {[0, 1, 2, 3, 4, 5].map(r => <option key={r} value={r}>{r} {r === 1 ? t("Star") : t("Stars")}</option>)}
+                                                        <option value={0}>{t("Not recommended")}</option>
+                                                        {[1, 2, 3, 4, 5].map(r => <option key={r} value={r}>{r} {r === 1 ? t("Star") : t("Stars")}</option>)}
                                                       </select>
                                                     </div>
                                                   </>
@@ -5247,12 +5298,81 @@ export default function AdvancedHistoryArchive() {
                         {/* SECTION 3: CANDIDATE PERFORMANCES (NEW TAB FOR BATCH) */}
                         {batchLangTab === 'perf' && (
                           <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-                            <h3 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2">
-                              <FileText size={16} className="text-teal-600" /> {t("Candidate Performances")}
-                            </h3>
-                            <p className="text-xs text-slate-500 mb-6">
+                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+                              <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                                <FileText size={16} className="text-teal-600" /> {t("Candidate Performances")}
+                              </h3>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    try {
+                                      let text = await navigator.clipboard.readText();
+                                      if (!text) return;
+                                      text = text.replace(/\*\*/g, '');
+                                      const pastedItems = text.split(/\n\s*\n/).map(item => item.trim()).filter(item => item);
+                                      if (pastedItems.length === 0) return;
+
+                                      const newQ = [...batchForm.questions];
+                                      let pasteIndex = 0;
+
+                                      for (let qIdx = 0; qIdx < newQ.length; qIdx++) {
+                                        for (let sqIdx = 0; sqIdx < newQ[qIdx].subQuestions.length; sqIdx++) {
+                                          if (pasteIndex < pastedItems.length) {
+                                            newQ[qIdx].subQuestions[sqIdx].candidatePerformance = pastedItems[pasteIndex];
+                                            pasteIndex++;
+                                          }
+                                        }
+                                      }
+                                      setBatchForm({ ...batchForm, questions: newQ });
+                                    } catch (err) {
+                                      console.error("Failed to read clipboard", err);
+                                      alert("Failed to paste from clipboard.");
+                                    }
+                                  }}
+                                  className="text-xs font-bold text-teal-600 bg-teal-50 border border-teal-200 px-3 py-1.5 rounded-lg hover:bg-teal-100 transition-colors flex items-center gap-1"
+                                >
+                                  <FileText size={14} /> {t("Paste All (EN)")}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    try {
+                                      let text = await navigator.clipboard.readText();
+                                      if (!text) return;
+                                      text = text.replace(/\*\*/g, '');
+                                      const pastedItems = text.split(/\n\s*\n/).map(item => item.trim()).filter(item => item);
+                                      if (pastedItems.length === 0) return;
+
+                                      const newQ = [...batchForm.questions];
+                                      let pasteIndex = 0;
+
+                                      for (let qIdx = 0; qIdx < newQ.length; qIdx++) {
+                                        for (let sqIdx = 0; sqIdx < newQ[qIdx].subQuestions.length; sqIdx++) {
+                                          if (pasteIndex < pastedItems.length) {
+                                            newQ[qIdx].subQuestions[sqIdx].candidatePerformanceChi = pastedItems[pasteIndex];
+                                            pasteIndex++;
+                                          }
+                                        }
+                                      }
+                                      setBatchForm({ ...batchForm, questions: newQ });
+                                    } catch (err) {
+                                      console.error("Failed to read clipboard", err);
+                                      alert("Failed to paste from clipboard.");
+                                    }
+                                  }}
+                                  className="text-xs font-bold text-teal-600 bg-teal-50 border border-teal-200 px-3 py-1.5 rounded-lg hover:bg-teal-100 transition-colors flex items-center gap-1"
+                                >
+                                  <FileText size={14} /> {t("Paste All (ZH)")}
+                                </button>
+                              </div>
+                            </div>
+                            <p className="text-xs text-slate-500 mb-4">
                               {t("Enter candidate performances for each sub-question across all batch questions. Both English and Chinese versions are supported.")}
                             </p>
+                            <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg text-xs text-amber-700 mb-6">
+                              <span className="font-bold">{t("Instruction:")}</span> {t("Please copy/screenshot only the content of the paragraphs/questions without adding the question numbering (i.e. (a), (b)).")}
+                            </div>
 
                             <div className="space-y-8">
                               {batchForm.questions.map((q, qIdx) => (
@@ -5305,23 +5425,51 @@ export default function AdvancedHistoryArchive() {
                       </form>
                     </div>
                     <div className="lg:w-1/2 bg-slate-200 h-[50vh] lg:h-full relative border-t lg:border-t-0 lg:border-l border-slate-300 flex flex-col">
-                      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex bg-white rounded-lg shadow-md p-1 border border-slate-200">
-                        <button type="button" onClick={() => setBatchPreviewMode('question')} className={`px-4 py-1.5 text-sm font-bold rounded-md transition-colors ${batchPreviewMode === 'question' ? 'bg-teal-100 text-teal-700' : 'text-slate-500 hover:bg-slate-50'}`}>{t("Main PDF")}</button>
-                        <button type="button" onClick={() => setBatchPreviewMode('answer')} className={`px-4 py-1.5 text-sm font-bold rounded-md transition-colors ${batchPreviewMode === 'answer' ? 'bg-green-100 text-green-700' : 'text-slate-500 hover:bg-slate-50'}`}>{t("Answer PDF")}</button>
+                      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10">
+                        <select
+                          value={batchPreviewMode}
+                          onChange={(e) => setBatchPreviewMode(e.target.value)}
+                          className="px-4 py-2 text-sm font-bold rounded-lg bg-white border border-slate-200 shadow-md outline-none focus:ring-2 focus:ring-teal-500 text-slate-700 cursor-pointer"
+                        >
+                          <option value="question">{t("Main PDF")}</option>
+                          <option value="answer">{t("Answer PDF")}</option>
+                          {batchForm.questions.map((q, idx) => (
+                            <React.Fragment key={q.id}>
+                              {(q.fileUrl || q.fileUrlChi) && <option value={`q_${idx}`}>{t("Question")} {idx + 1}</option>}
+                              {(q.answerFileUrl || q.answerFileUrlChi) && <option value={`ans_${idx}`}>{t("Answer")} {idx + 1}</option>}
+                            </React.Fragment>
+                          ))}
+                        </select>
                       </div>
                       <div className="flex-1 relative">
-                        <div className={`absolute inset-0 ${batchLangTab === 'en' && batchPreviewMode === 'question' ? 'block' : 'hidden'}`}>
-                          {batchPdfPreviewUrl ? <CustomPDFViewer fileUrl={batchPdfPreviewUrl} /> : <div className="flex items-center justify-center h-full text-slate-500">{t("Upload Main PDF to preview")}</div>}
-                        </div>
-                        <div className={`absolute inset-0 ${batchLangTab === 'en' && batchPreviewMode === 'answer' ? 'block' : 'hidden'}`}>
-                          {batchAnsPdfPreviewUrl ? <CustomPDFViewer fileUrl={batchAnsPdfPreviewUrl} /> : <div className="flex items-center justify-center h-full text-slate-500">{t("Upload Answer PDF to preview")}</div>}
-                        </div>
-                        <div className={`absolute inset-0 ${batchLangTab === 'zh' && batchPreviewMode === 'question' ? 'block' : 'hidden'}`}>
-                          {batchPdfPreviewUrlChi ? <CustomPDFViewer fileUrl={batchPdfPreviewUrlChi} /> : <div className="flex items-center justify-center h-full text-slate-500">{t("Upload Chinese Main PDF to preview")}</div>}
-                        </div>
-                        <div className={`absolute inset-0 ${batchLangTab === 'zh' && batchPreviewMode === 'answer' ? 'block' : 'hidden'}`}>
-                          {batchAnsPdfPreviewUrlChi ? <CustomPDFViewer fileUrl={batchAnsPdfPreviewUrlChi} /> : <div className="flex items-center justify-center h-full text-slate-500">{t("Upload Chinese Answer PDF to preview")}</div>}
-                        </div>
+                        {(() => {
+                          let urlToRender = null;
+                          let emptyMessage = "";
+
+                          if (batchPreviewMode === 'question') {
+                            urlToRender = batchLangTab === 'zh' ? batchPdfPreviewUrlChi : batchPdfPreviewUrl;
+                            emptyMessage = batchLangTab === 'zh' ? t("Upload Chinese Main PDF to preview") : t("Upload Main PDF to preview");
+                          } else if (batchPreviewMode === 'answer') {
+                            urlToRender = batchLangTab === 'zh' ? batchAnsPdfPreviewUrlChi : batchAnsPdfPreviewUrl;
+                            emptyMessage = batchLangTab === 'zh' ? t("Upload Chinese Answer PDF to preview") : t("Upload Answer PDF to preview");
+                          } else if (batchPreviewMode.startsWith('q_')) {
+                            const idx = parseInt(batchPreviewMode.split('_')[1], 10);
+                            const q = batchForm.questions[idx];
+                            urlToRender = batchLangTab === 'zh' ? (q?.fileUrlChi || q?.fileUrl) : (q?.fileUrl || q?.fileUrlChi);
+                            emptyMessage = t("No Question PDF attached for Question ") + (idx + 1);
+                          } else if (batchPreviewMode.startsWith('ans_')) {
+                            const idx = parseInt(batchPreviewMode.split('_')[1], 10);
+                            const q = batchForm.questions[idx];
+                            urlToRender = batchLangTab === 'zh' ? (q?.answerFileUrlChi || q?.answerFileUrl) : (q?.answerFileUrl || q?.answerFileUrlChi);
+                            emptyMessage = t("No Answer PDF attached for Question ") + (idx + 1);
+                          }
+
+                          if (urlToRender) {
+                            return <CustomPDFViewer fileUrl={urlToRender} />;
+                          } else {
+                            return <div className="flex items-center justify-center h-full text-slate-500 font-medium">{emptyMessage}</div>;
+                          }
+                        })()}
                       </div>
                     </div>
                   </div>

@@ -8,7 +8,7 @@ import { ArrowLeft, Loader2, AlertCircle } from 'lucide-react';
 // ============================================================================
 // 1. IMPORT YOUR ACTUAL EXERCISE COMPONENTS HERE
 // ============================================================================
-import DocumentNotes from './practice1.jsx'; // Ensure this matches your filename exactly
+import DocumentNotes from './Practice1.jsx'; // Ensure this matches your filename exactly
 
 // ============================================================================
 // 2. REGISTER THEM IN THIS DICTIONARY

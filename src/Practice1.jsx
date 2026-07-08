@@ -30,7 +30,6 @@ export default function DocumentNotes({ savedData, onSave, readOnly }) {
   const [blocks, setBlocks] = useState([]);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Load saved data or randomize items on initial load
   useEffect(() => {
     if (savedData && savedData.length > 0) {
       setBlocks(savedData);
@@ -46,13 +45,28 @@ export default function DocumentNotes({ savedData, onSave, readOnly }) {
   };
 
   const handleDragEnd = (e, info, draggedItem, sourceCategoryId = null) => {
-    const elements = document.elementsFromPoint(info.point.x, info.point.y);
-    
+    // 1. Temporarily hide the dragged element to prevent it from blocking the hit-test
+    const draggedEl = document.querySelector(`[data-drag-id="${draggedItem.id}"]`);
+    if (draggedEl) {
+      draggedEl.style.visibility = 'hidden';
+    }
+
+    // 2. Find all elements exactly under the drop point (adjusted for scroll position)
+    const clientX = info.point.x - window.scrollX;
+    const clientY = info.point.y - window.scrollY;
+    const elements = document.elementsFromPoint(clientX, clientY);
+
+    // 3. Restore visibility immediately
+    if (draggedEl) {
+      draggedEl.style.visibility = 'visible';
+    }
+
     let targetBlockId = null;
     let targetType = null;
 
+    // 4. Find the first valid drop target in the elements list
     for (const el of elements) {
-      if (el.dataset.blockId && el.dataset.blockId !== draggedItem.id) {
+      if (el.dataset && el.dataset.blockId && el.dataset.blockId !== draggedItem.id) {
         targetBlockId = el.dataset.blockId;
         targetType = el.dataset.blockType;
         break;
@@ -81,7 +95,7 @@ export default function DocumentNotes({ savedData, onSave, readOnly }) {
         const catIndex = newBlocks.findIndex((b) => b.id === sourceCategoryId);
         if (catIndex > -1) {
           const updatedItems = newBlocks[catIndex].items.filter((i) => i.id !== draggedItem.id);
-          
+
           if (updatedItems.length === 1) {
             newBlocks.splice(catIndex, 1, updatedItems[0]);
           } else if (updatedItems.length === 0) {
@@ -132,17 +146,17 @@ export default function DocumentNotes({ savedData, onSave, readOnly }) {
 
   return (
     <div className="min-h-screen w-full bg-slate-100 text-slate-800 font-sans py-12 px-4 flex flex-col items-center selection:bg-gray-200">
-      
+
       <div className="w-full max-w-4xl flex flex-col gap-8">
-        {/* Instructions Sidebar (Now centered at the top) */}
-<div className="w-full bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+        {/* Instructions Sidebar */}
+        <div className="w-full bg-white rounded-xl shadow-sm border border-slate-200 p-6">
           <div className="flex items-center justify-between mb-4 text-gray-800">
             <div className="flex items-center gap-2">
               <Info className="w-5 h-5" />
               <h2 className="font-semibold text-lg">Instructions</h2>
             </div>
             {!readOnly && (
-              <button 
+              <button
                 onClick={handleSaveClick}
                 disabled={isSaving}
                 className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-700 transition-colors disabled:opacity-50"
@@ -151,7 +165,7 @@ export default function DocumentNotes({ savedData, onSave, readOnly }) {
               </button>
             )}
           </div>
-          
+
           <ul className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-slate-600">
             <li className="flex gap-3">
               <div className="mt-0.5 bg-gray-100 text-gray-700 border border-gray-200 rounded w-5 h-5 flex items-center justify-center shrink-0 font-medium text-xs">1</div>
@@ -172,23 +186,20 @@ export default function DocumentNotes({ savedData, onSave, readOnly }) {
           </ul>
         </div>
 
-        {/* Main Document Area (Centered with Fixed Dimensions) */}
-        <div 
-          className="w-full bg-white border border-gray-300 shadow-md rounded-sm p-8 md:p-12 text-black font-serif overflow-y-auto"
-          style={{ height: '800px' }}
+        {/* Main Document Area */}
+        <div
+          className="w-full bg-white border border-gray-300 shadow-md rounded-sm p-8 md:p-12 text-black font-serif min-h-[800px]"
         >
-          
-          {/* Document Header */}
+
           <div className="flex gap-4 text-[1.1rem] mb-8 pointer-events-none border-b border-gray-200 pb-4">
             <span className="italic">1.</span>
             <h1 className="italic font-medium">Economic – Recovery and development</h1>
           </div>
 
-          {/* Document Body */}
           <div className="flex flex-col gap-2">
             <AnimatePresence mode="popLayout">
               {blocks.map((block) => {
-                
+
                 // Render a Standalone Item
                 if (block.type === 'item') {
                   return (
@@ -197,11 +208,13 @@ export default function DocumentNotes({ savedData, onSave, readOnly }) {
                       key={block.id}
                       data-block-id={block.id}
                       data-block-type="item"
+                      data-drag-id={block.id}
                       drag={!readOnly}
                       dragSnapToOrigin={true}
                       onDragEnd={(e, info) => handleDragEnd(e, info, block)}
                       whileDrag={{ scale: 1.02, zIndex: 50, backgroundColor: '#f9fafb', boxShadow: '0 4px 15px rgba(0,0,0,0.05)' }}
                       className="flex items-start w-full cursor-grab active:cursor-grabbing p-1 rounded text-[1.1rem] touch-none hover:bg-gray-50 transition-colors"
+                      style={{ touchAction: 'none' }}
                     >
                       <span className="mr-4 mt-[2px] text-sm text-gray-400">■</span>
                       <span className="leading-snug">{block.text}</span>
@@ -217,11 +230,13 @@ export default function DocumentNotes({ savedData, onSave, readOnly }) {
                       key={block.id}
                       data-block-id={block.id}
                       data-block-type="category"
+                      data-drag-id={block.id}
                       drag={!readOnly}
                       dragSnapToOrigin={true}
                       onDragEnd={(e, info) => handleDragEnd(e, info, block)}
                       whileDrag={{ scale: 1.02, zIndex: 40, boxShadow: '0 10px 25px -5px rgba(0,0,0,0.1)' }}
                       className="flex flex-col w-full my-2 bg-gray-50/50 rounded-lg p-2 border border-transparent hover:border-gray-200 transition-colors cursor-grab active:cursor-grabbing touch-none"
+                      style={{ touchAction: 'none' }}
                     >
                       {/* Category Title */}
                       <div className="flex items-start w-full mb-1 text-[1.1rem]">
@@ -230,7 +245,7 @@ export default function DocumentNotes({ savedData, onSave, readOnly }) {
                           type="text"
                           value={block.name}
                           onChange={(e) => updateCategoryName(block.id, e.target.value)}
-                          onPointerDown={(e) => e.stopPropagation()} // Prevent dragging when clicking input
+                          onPointerDown={(e) => e.stopPropagation()}
                           className="bg-transparent w-full focus:outline-none border-b border-transparent focus:border-gray-300 font-medium cursor-text"
                         />
                       </div>
@@ -242,12 +257,14 @@ export default function DocumentNotes({ savedData, onSave, readOnly }) {
                             <motion.div
                               layout
                               key={item.id}
+                              data-drag-id={item.id}
                               drag={!readOnly}
                               dragSnapToOrigin={true}
-                              onPointerDown={(e) => e.stopPropagation()} // Prevent dragging the parent category
+                              onPointerDown={(e) => e.stopPropagation()}
                               onDragEnd={(e, info) => handleDragEnd(e, info, item, block.id)}
                               whileDrag={{ scale: 1.02, zIndex: 50, backgroundColor: 'white', boxShadow: '0 4px 15px rgba(0,0,0,0.05)' }}
                               className="flex items-start p-1 cursor-grab active:cursor-grabbing rounded text-[1.1rem] touch-none hover:bg-white transition-colors"
+                              style={{ touchAction: 'none' }}
                             >
                               <span className="mr-3 font-bold text-gray-400">➔</span>
                               <span className="leading-snug">{item.text}</span>

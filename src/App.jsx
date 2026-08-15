@@ -933,11 +933,22 @@ export default function AdvancedHistoryArchive() {
       try {
         const docRef = doc(db, "system_settings", "config");
         const docSnap = await getDoc(docRef);
+        let currentRoleClasses = {};
         if (docSnap.exists()) {
           const data = docSnap.data();
           if (data.roles && Array.isArray(data.roles)) setSystemRoles(data.roles);
-          if (data.tiers && Array.isArray(data.tiers)) setSystemTiers(data.tiers);
-          if (data.roleClasses) setRoleClasses(data.roleClasses); // NEW
+
+          // ADD DSE VIEW TIER TO SYSTEM TIERS
+          let loadedTiers = data.tiers && Array.isArray(data.tiers) ? data.tiers : Array.from({ length: 10 }, (_, i) => ({ id: String(10 - i), name: `Tier ${10 - i}` }));
+          if (!loadedTiers.some(t => t.id === 'dse_view')) {
+            loadedTiers.push({ id: 'dse_view', name: 'DSE View Only (Shadow Tier)' });
+          }
+          setSystemTiers(loadedTiers);
+
+          if (data.roleClasses) {
+            setRoleClasses(data.roleClasses);
+            currentRoleClasses = data.roleClasses;
+          }
 
           // Fetch available classes for mapping
           const classDocSnap = await getDoc(doc(db, "settings", "classes"));
@@ -962,10 +973,28 @@ export default function AdvancedHistoryArchive() {
 
         // Fetch current user's specific role if not admin
         if (!user.isAdmin) {
-          const userDocRef = doc(db, "user_roles", user.email.toLowerCase().trim());
-          const userDocSnap = await getDoc(userDocRef);
-          if (userDocSnap.exists()) {
-            setCurrentUserRole(userDocSnap.data().role);
+          // If debug mode is active, user.role is already injected by Main.jsx
+          if (user.role && user.role !== 'student' && user.role !== 'viewer') {
+            setCurrentUserRole(user.role);
+          } else {
+            const userDocRef = doc(db, "user_roles", user.email.toLowerCase().trim());
+            const userDocSnap = await getDoc(userDocRef);
+            if (userDocSnap.exists()) {
+              setCurrentUserRole(userDocSnap.data().role);
+            } else {
+              // IT'S A REAL STUDENT OR DEBUG STUDENT: Find their role via students collection and roleClasses
+              const studentQuery = query(collection(db, "students"), where("email", "==", user.email.toLowerCase().trim()));
+              const studentSnap = await getDocs(studentQuery);
+              if (!studentSnap.empty) {
+                const studentClass = studentSnap.docs[0].data().className;
+                for (const [rName, classes] of Object.entries(currentRoleClasses)) {
+                  if (classes.includes(studentClass)) {
+                    setCurrentUserRole(rName);
+                    break;
+                  }
+                }
+              }
+            }
           }
         }
       } catch (error) {
@@ -1373,7 +1402,8 @@ export default function AdvancedHistoryArchive() {
             searchTags.push(`${previewItem.parent.title} Q1`);
           }
           // Add up to 8 subquestion exact tags to stay under Firebase's 10 limit
-          (previewItem.parent.subQuestions || []).slice(0, 8).forEach(sq => {
+          const allowedSubQs = previewItem.hasFullAccess ? previewItem.parent.subQuestions : (previewItem.matchedChildren || []);
+          (allowedSubQs || []).slice(0, 8).forEach(sq => {
             if (previewItem.parent.paperType === "Paper 2 (Essay)") {
               searchTags.push(`${previewItem.parent.title} Q${sq.label}`);
             } else {
@@ -1419,6 +1449,7 @@ export default function AdvancedHistoryArchive() {
 
     // --- CUMULATIVE TIER LOGIC ---
     let maxUnlockedTier = 0;
+    let dseViewUnlocked = false;
     const isDseOnly = currentUserRole === 'dse_only';
 
     if (!user.isAdmin && !isDseOnly) {
@@ -1434,6 +1465,11 @@ export default function AdvancedHistoryArchive() {
           }
         }
       }
+      // Check DSE View Shadow Tier
+      const dseRule = roleAccess['dse_view'];
+      if (dseRule && (dseRule.immediate || (dseRule.date && dseRule.date <= today))) {
+        dseViewUnlocked = true;
+      }
     }
 
     let results = [];
@@ -1441,15 +1477,22 @@ export default function AdvancedHistoryArchive() {
       const parentTierStr = parent.tier || '10';
       const parentTierNum = parseInt(parentTierStr, 10) || 10;
 
-      // --- TIER ACCESS CHECK (Cumulative & DSE Only) ---
+      // --- TIER ACCESS CHECK (Cumulative & DSE Only & DSE View) ---
       let parentAllowedByTier = true;
+      let isDseViewOnly = false;
+
       if (!user.isAdmin) {
         if (isDseOnly) {
           // DSE Only role bypasses tiers but can ONLY see DSE Pastpapers
           if (parent.origin !== "DSE Pastpaper") parentAllowedByTier = false;
         } else if (parentTierNum > maxUnlockedTier) {
           // Normal progressive roles: block if tier is higher than unlocked
-          parentAllowedByTier = false;
+          if (parent.origin === "DSE Pastpaper" && dseViewUnlocked) {
+            parentAllowedByTier = true;
+            isDseViewOnly = true;
+          } else {
+            parentAllowedByTier = false;
+          }
         }
       }
 
@@ -1520,7 +1563,11 @@ export default function AdvancedHistoryArchive() {
         if (matchQuestionType && matchSourceType && matchMarks && matchSearch && matchTopic) {
           // Identify if it's Extra Practice: Tier < 10, unlocked naturally, NOT via dashboard link
           const isExtraPractice = parentTierNum < 10 && parentAllowedByTier && !allowedViewIds.includes(parent.id) && !allowedViewIds.includes(childUniqueId);
-          results.push({ uniqueId: `${parent.id}_${child.id}`, parent, child, isExtraPractice, hasFullAccess });
+
+          // If specifically allowed via dashboard link, override DSE View Only restriction
+          const effectiveDseViewOnly = isDseViewOnly && !allowedViewIds.includes(parent.id) && !allowedViewIds.includes(childUniqueId);
+
+          results.push({ uniqueId: `${parent.id}_${child.id}`, parent, child, isExtraPractice, hasFullAccess, isDseViewOnly: effectiveDseViewOnly });
         }
       });
     });
@@ -1537,7 +1584,8 @@ export default function AdvancedHistoryArchive() {
           matchedChildrenCount: 0,
           matchedChildren: [],
           isExtraPractice: item.isExtraPractice,
-          hasFullAccess: item.hasFullAccess
+          hasFullAccess: item.hasFullAccess,
+          isDseViewOnly: item.isDseViewOnly
         });
       }
       groupedMap.get(item.parent.id).matchedChildrenCount += 1;
@@ -2906,7 +2954,9 @@ export default function AdvancedHistoryArchive() {
                                             parent: parent,
                                             child: child,
                                             isFullPaper: false,
-                                            isExtraPractice: item.isExtraPractice
+                                            isExtraPractice: item.isExtraPractice,
+                                            hasFullAccess: item.hasFullAccess,
+                                            isDseViewOnly: item.isDseViewOnly
                                           });
                                         }}
                                         className="bg-white p-3 md:p-4 rounded-lg border border-slate-200 shadow-sm cursor-pointer hover:border-blue-400 transition-colors"
@@ -3975,7 +4025,7 @@ export default function AdvancedHistoryArchive() {
                     <ShieldAlert size={12} className="md:w-4 md:h-4" /> <span className="hidden sm:inline">{t("Report")}</span>
                   </button>
 
-                  {!viewingAnswer && previewItem.parent.hasAnswer && (
+                  {!viewingAnswer && previewItem.parent.hasAnswer && !previewItem.isDseViewOnly && (
                     <button
                       onClick={() => { setViewingAnswer(true); setActiveSample(null); }}
                       className="flex px-2 md:px-4 py-1 md:py-2 rounded-lg bg-green-600 text-white text-[10px] md:text-sm font-bold hover:bg-green-700 transition-all items-center gap-1 md:gap-2"
@@ -4037,7 +4087,7 @@ export default function AdvancedHistoryArchive() {
                             <FileText size={12} className="md:w-3.5 md:h-3.5" /> {t("Candidate Performance")}
                           </h3>
                           {previewItem.isFullPaper ? (
-                            previewItem.parent.subQuestions.filter(sq => sq.candidatePerformance || sq.candidatePerformanceChi).map(sq => (
+                            (previewItem.hasFullAccess ? previewItem.parent.subQuestions : (previewItem.matchedChildren || [])).filter(sq => sq.candidatePerformance || sq.candidatePerformanceChi).map(sq => (
                               <div key={sq.id} className="bg-white p-3 md:p-4 rounded-xl border border-slate-200 shadow-sm">
                                 <div className="mb-2">
                                   <span className="bg-slate-800 text-white text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 md:py-1 rounded-md font-bold">
@@ -4134,10 +4184,10 @@ export default function AdvancedHistoryArchive() {
                               )}
 
                               <h3 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1 md:gap-2">
-                                <LayoutList size={12} className="md:w-3.5 md:h-3.5" /> {t("All Sub-Questions")}
+                                <LayoutList size={12} className="md:w-3.5 md:h-3.5" /> {previewItem.hasFullAccess ? t("All Sub-Questions") : t("Allowed Sub-Questions")}
                               </h3>
 
-                              {previewItem.parent.subQuestions.map((sq, idx) => (
+                              {(previewItem.hasFullAccess ? previewItem.parent.subQuestions : (previewItem.matchedChildren || [])).map((sq, idx) => (
                                 <div key={sq.id} className="bg-white p-3 md:p-4 rounded-xl border border-slate-200 shadow-sm">
                                   <div className="flex justify-between items-start mb-2">
                                     <span className="bg-slate-800 text-white text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 md:py-1 rounded-md font-bold">
@@ -4239,176 +4289,180 @@ export default function AdvancedHistoryArchive() {
                     </div>
 
                     {/* STUDENT SAMPLES SECTION (Bottom Left) */}
-                    <div className="p-4 border-t border-slate-200 bg-white shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-10 flex flex-col">
-                      <button
-                        onClick={() => setShowStudentSamples(!showStudentSamples)}
-                        className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2 hover:text-indigo-600 transition-colors"
-                      >
-                        <GraduationCap size={14} /> {t("Student Samples")} ({previewSamples.length})
-                        <ChevronDown size={14} className={`transition-transform ${showStudentSamples ? 'rotate-180' : ''}`} />
-                      </button>
+                    {!previewItem.isDseViewOnly && (
+                      <>
+                        <div className="p-4 border-t border-slate-200 bg-white shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-10 flex flex-col">
+                          <button
+                            onClick={() => setShowStudentSamples(!showStudentSamples)}
+                            className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2 hover:text-indigo-600 transition-colors"
+                          >
+                            <GraduationCap size={14} /> {t("Student Samples")} ({previewSamples.length})
+                            <ChevronDown size={14} className={`transition-transform ${showStudentSamples ? 'rotate-180' : ''}`} />
+                          </button>
 
-                      {showStudentSamples && (
-                        <select
-                          value={sampleSortOption}
-                          onChange={(e) => setSampleSortOption(e.target.value)}
-                          className="text-xs border border-slate-200 rounded p-1 outline-none focus:border-indigo-500"
-                        >
-                          <option value="mark_desc">{t("Mark (High to Low)")}</option>
-                          <option value="lang_en_ch">{t("Language (EN to CH)")}</option>
-                          <option value="both">{t("Both (Lang then Mark)")}</option>
-                        </select>
-                      )}
-                    </div>
+                          {showStudentSamples && (
+                            <select
+                              value={sampleSortOption}
+                              onChange={(e) => setSampleSortOption(e.target.value)}
+                              className="text-xs border border-slate-200 rounded p-1 outline-none focus:border-indigo-500"
+                            >
+                              <option value="mark_desc">{t("Mark (High to Low)")}</option>
+                              <option value="lang_en_ch">{t("Language (EN to CH)")}</option>
+                              <option value="both">{t("Both (Lang then Mark)")}</option>
+                            </select>
+                          )}
+                        </div>
 
-                    <AnimatePresence>
-                      {showStudentSamples && (
-                        <motion.div
-                          initial={{ height: 0, opacity: 0 }}
-                          animate={{ height: 'auto', opacity: 1 }}
-                          exit={{ height: 0, opacity: 0 }}
-                          className="space-y-2 max-h-[36rem] overflow-y-auto custom-scrollbar pr-1"
-                        >
-                          {previewSamples.length === 0 ? (
-                            <div className="text-sm text-slate-500 italic p-4 text-center border border-slate-200 rounded-lg bg-slate-50">
-                              {t("There is currently no sample available.")}
-                            </div>
-                          ) : previewSamples.sort((a, b) => {
-                            // Helper to get marks for sorting
-                            const getMark = (sample) => {
-                              if (previewItem.isFullPaper) {
-                                let maxMark = 0;
-                                Object.keys(sample.scoresData || {}).forEach(tag => {
-                                  if (tag.startsWith(previewItem.parent.title)) {
-                                    const m = parseFloat(sample.scoresData[tag].mark) || 0;
-                                    if (m > maxMark) maxMark = m;
+                        <AnimatePresence>
+                          {showStudentSamples && (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: 'auto', opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              className="space-y-2 max-h-[36rem] overflow-y-auto custom-scrollbar pr-1"
+                            >
+                              {previewSamples.length === 0 ? (
+                                <div className="text-sm text-slate-500 italic p-4 text-center border border-slate-200 rounded-lg bg-slate-50">
+                                  {t("There is currently no sample available.")}
+                                </div>
+                              ) : previewSamples.sort((a, b) => {
+                                // Helper to get marks for sorting
+                                const getMark = (sample) => {
+                                  if (previewItem.isFullPaper) {
+                                    let maxMark = 0;
+                                    Object.keys(sample.scoresData || {}).forEach(tag => {
+                                      if (tag.startsWith(previewItem.parent.title)) {
+                                        const m = parseFloat(sample.scoresData[tag].mark) || 0;
+                                        if (m > maxMark) maxMark = m;
+                                      }
+                                    });
+                                    return maxMark;
+                                  } else {
+                                    const tags = [
+                                      previewItem.parent.paperType === "Paper 2 (Essay)" ? `${previewItem.parent.title} Q${previewItem.child.label}` : `${previewItem.parent.title} Q1${previewItem.child.label}`,
+                                      previewItem.parent.paperType === "Paper 2 (Essay)" ? `${previewItem.parent.title} Q${previewItem.child.label.replace(/[a-z]/gi, '')}` : `${previewItem.parent.title} Q1`,
+                                      previewItem.parent.title,
+                                      `${previewItem.parent.title}${previewItem.child.label}`
+                                    ];
+                                    for (let t of tags) {
+                                      if (sample.scoresData[t]?.mark) return parseFloat(sample.scoresData[t].mark) || 0;
+                                    }
+                                    return 0;
                                   }
-                                });
-                                return maxMark;
-                              } else {
-                                const tags = [
-                                  previewItem.parent.paperType === "Paper 2 (Essay)" ? `${previewItem.parent.title} Q${previewItem.child.label}` : `${previewItem.parent.title} Q1${previewItem.child.label}`,
-                                  previewItem.parent.paperType === "Paper 2 (Essay)" ? `${previewItem.parent.title} Q${previewItem.child.label.replace(/[a-z]/gi, '')}` : `${previewItem.parent.title} Q1`,
-                                  previewItem.parent.title,
-                                  `${previewItem.parent.title}${previewItem.child.label}`
-                                ];
-                                for (let t of tags) {
-                                  if (sample.scoresData[t]?.mark) return parseFloat(sample.scoresData[t].mark) || 0;
+                                };
+
+                                const markA = getMark(a);
+                                const markB = getMark(b);
+                                const langA = a.language || '';
+                                const langB = b.language || '';
+
+                                if (sampleSortOption === 'mark_desc') return markB - markA;
+                                if (sampleSortOption === 'lang_en_ch') return langA.localeCompare(langB);
+                                if (sampleSortOption === 'both') {
+                                  if (langA !== langB) return langA.localeCompare(langB);
+                                  return markB - markA;
                                 }
                                 return 0;
-                              }
-                            };
+                              }).map(sample => {
+                                let scoreData = null;
+                                let displayTag = "";
 
-                            const markA = getMark(a);
-                            const markB = getMark(b);
-                            const langA = a.language || '';
-                            const langB = b.language || '';
+                                if (previewItem.isFullPaper) {
+                                  // Find the best matching score data for the full paper
+                                  const matchingTag = Object.keys(sample.scoresData || {}).find(tag => tag.startsWith(previewItem.parent.title));
+                                  if (matchingTag) {
+                                    scoreData = sample.scoresData[matchingTag];
+                                    displayTag = matchingTag;
+                                  }
+                                } else {
+                                  const exactTag = previewItem.parent.paperType === "Paper 2 (Essay)"
+                                    ? `${previewItem.parent.title} Q${previewItem.child.label}`
+                                    : `${previewItem.parent.title} Q1${previewItem.child.label}`;
+                                  const parentTag = previewItem.parent.paperType === "Paper 2 (Essay)"
+                                    ? `${previewItem.parent.title} Q${previewItem.child.label.replace(/[a-z]/gi, '')}`
+                                    : `${previewItem.parent.title} Q1`;
 
-                            if (sampleSortOption === 'mark_desc') return markB - markA;
-                            if (sampleSortOption === 'lang_en_ch') return langA.localeCompare(langB);
-                            if (sampleSortOption === 'both') {
-                              if (langA !== langB) return langA.localeCompare(langB);
-                              return markB - markA;
-                            }
-                            return 0;
-                          }).map(sample => {
-                            let scoreData = null;
-                            let displayTag = "";
+                                  const titleTag = previewItem.parent.title;
+                                  const titleWithChildTag = `${previewItem.parent.title}${previewItem.child.label}`;
 
-                            if (previewItem.isFullPaper) {
-                              // Find the best matching score data for the full paper
-                              const matchingTag = Object.keys(sample.scoresData || {}).find(tag => tag.startsWith(previewItem.parent.title));
-                              if (matchingTag) {
-                                scoreData = sample.scoresData[matchingTag];
-                                displayTag = matchingTag;
-                              }
-                            } else {
-                              const exactTag = previewItem.parent.paperType === "Paper 2 (Essay)"
-                                ? `${previewItem.parent.title} Q${previewItem.child.label}`
-                                : `${previewItem.parent.title} Q1${previewItem.child.label}`;
-                              const parentTag = previewItem.parent.paperType === "Paper 2 (Essay)"
-                                ? `${previewItem.parent.title} Q${previewItem.child.label.replace(/[a-z]/gi, '')}`
-                                : `${previewItem.parent.title} Q1`;
+                                  // Check all possible tag combinations
+                                  scoreData = sample.scoresData[exactTag] ||
+                                    sample.scoresData[parentTag] ||
+                                    sample.scoresData[titleTag] ||
+                                    sample.scoresData[titleWithChildTag];
+                                }
 
-                              const titleTag = previewItem.parent.title;
-                              const titleWithChildTag = `${previewItem.parent.title}${previewItem.child.label}`;
+                                // If we still don't have scoreData, skip rendering this sample
+                                if (!scoreData) return null;
 
-                              // Check all possible tag combinations
-                              scoreData = sample.scoresData[exactTag] ||
-                                sample.scoresData[parentTag] ||
-                                sample.scoresData[titleTag] ||
-                                sample.scoresData[titleWithChildTag];
-                            }
-
-                            // If we still don't have scoreData, skip rendering this sample
-                            if (!scoreData) return null;
-
-                            return (
-                              <div key={sample.id} className={`p-3 border rounded-lg transition-colors ${activeSample?.id === sample.id ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-slate-200 hover:border-indigo-300'}`}>
-                                <div className="flex justify-between items-start mb-2">
-                                  <div className="text-xs font-medium text-slate-700">
-                                    <span className="font-bold text-slate-900">[{sample.language}]</span> {t("Overall grade:")} <span className="font-bold text-indigo-600">{sample.overallGrade}</span>
-                                  </div>
-                                </div>
-                                <div className="flex justify-between items-end">
-                                  <div className="flex flex-col gap-1">
-                                    <div className="text-xs text-slate-600">
-                                      {previewItem.isFullPaper ? `${t("Mark")} (${displayTag}): ` : `${t("Mark (this question)")}: `}
-                                      <span className="font-bold text-slate-900">{scoreData?.mark}</span>
-                                    </div>
-                                    {scoreData?.subMarks && Object.keys(scoreData.subMarks).length > 0 && (
-                                      <div className="flex flex-wrap gap-1 mt-1">
-                                        {Object.entries(scoreData.subMarks)
-                                          .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
-                                          .map(([subQ, sMark]) => (
-                                            <span key={subQ} className="text-[10px] bg-white border border-slate-200 px-1.5 py-0.5 rounded text-slate-500">
-                                              Q{subQ}: <span className="font-bold text-slate-700">{sMark}</span>
-                                            </span>
-                                          ))}
+                                return (
+                                  <div key={sample.id} className={`p-3 border rounded-lg transition-colors ${activeSample?.id === sample.id ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-slate-200 hover:border-indigo-300'}`}>
+                                    <div className="flex justify-between items-start mb-2">
+                                      <div className="text-xs font-medium text-slate-700">
+                                        <span className="font-bold text-slate-900">[{sample.language}]</span> {t("Overall grade:")} <span className="font-bold text-indigo-600">{sample.overallGrade}</span>
                                       </div>
-                                    )}
-                                  </div>
-                                  <>
-                                    {/* Desktop View Button */}
-                                    <button
-                                      onClick={() => {
-                                        const tag = Object.keys(sample.scoresData).find(k => sample.scoresData[k] === scoreData);
-                                        if (activeSample?.id === sample.id) {
-                                          setActiveSample(null);
-                                          setCompareSample(null);
-                                        } else if (compareSample?.id === sample.id) {
-                                          setCompareSample(null);
-                                        } else if (activeSample) {
-                                          setCompareSample({ ...sample, currentFileUrl: scoreData.fileUrl, currentTag: tag });
-                                        } else {
-                                          setActiveSample({ ...sample, currentFileUrl: scoreData.fileUrl, currentTag: tag });
-                                          setEditingComment(false);
-                                          setCommentText(scoreData.comment || "");
-                                        }
-                                      }}
-                                      className={`hidden md:block text-xs font-bold px-3 py-1.5 rounded-md transition-colors h-fit ${activeSample?.id === sample.id || compareSample?.id === sample.id ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'}`}
-                                    >
-                                      {activeSample?.id === sample.id || compareSample?.id === sample.id ? t("Close") : (activeSample ? t("Compare") : t("View Sample"))}
-                                    </button>
+                                    </div>
+                                    <div className="flex justify-between items-end">
+                                      <div className="flex flex-col gap-1">
+                                        <div className="text-xs text-slate-600">
+                                          {previewItem.isFullPaper ? `${t("Mark")} (${displayTag}): ` : `${t("Mark (this question)")}: `}
+                                          <span className="font-bold text-slate-900">{scoreData?.mark}</span>
+                                        </div>
+                                        {scoreData?.subMarks && Object.keys(scoreData.subMarks).length > 0 && (
+                                          <div className="flex flex-wrap gap-1 mt-1">
+                                            {Object.entries(scoreData.subMarks)
+                                              .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+                                              .map(([subQ, sMark]) => (
+                                                <span key={subQ} className="text-[10px] bg-white border border-slate-200 px-1.5 py-0.5 rounded text-slate-500">
+                                                  Q{subQ}: <span className="font-bold text-slate-700">{sMark}</span>
+                                                </span>
+                                              ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                      <>
+                                        {/* Desktop View Button */}
+                                        <button
+                                          onClick={() => {
+                                            const tag = Object.keys(sample.scoresData).find(k => sample.scoresData[k] === scoreData);
+                                            if (activeSample?.id === sample.id) {
+                                              setActiveSample(null);
+                                              setCompareSample(null);
+                                            } else if (compareSample?.id === sample.id) {
+                                              setCompareSample(null);
+                                            } else if (activeSample) {
+                                              setCompareSample({ ...sample, currentFileUrl: scoreData.fileUrl, currentTag: tag });
+                                            } else {
+                                              setActiveSample({ ...sample, currentFileUrl: scoreData.fileUrl, currentTag: tag });
+                                              setEditingComment(false);
+                                              setCommentText(scoreData.comment || "");
+                                            }
+                                          }}
+                                          className={`hidden md:block text-xs font-bold px-3 py-1.5 rounded-md transition-colors h-fit ${activeSample?.id === sample.id || compareSample?.id === sample.id ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'}`}
+                                        >
+                                          {activeSample?.id === sample.id || compareSample?.id === sample.id ? t("Close") : (activeSample ? t("Compare") : t("View Sample"))}
+                                        </button>
 
-                                    {/* Mobile Direct Download/View Button */}
-                                    <a
-                                      href={getSecurePdfUrl(scoreData.fileUrl)}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      onClick={() => handleDownloadTracking("Student Sample")}
-                                      className="md:hidden text-xs font-bold px-3 py-1.5 rounded-md transition-colors h-fit bg-indigo-600 text-white flex items-center gap-1.5 shadow-sm"
-                                    >
-                                      <Download size={12} /> {t("View PDF")}
-                                    </a>
-                                  </>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
+                                        {/* Mobile Direct Download/View Button */}
+                                        <a
+                                          href={getSecurePdfUrl(scoreData.fileUrl)}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          onClick={() => handleDownloadTracking("Student Sample")}
+                                          className="md:hidden text-xs font-bold px-3 py-1.5 rounded-md transition-colors h-fit bg-indigo-600 text-white flex items-center gap-1.5 shadow-sm"
+                                        >
+                                          <Download size={12} /> {t("View PDF")}
+                                        </a>
+                                      </>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </>
+                    )}
                   </div>
                 )}
 

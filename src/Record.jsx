@@ -67,7 +67,12 @@ export default function Record() {
 
           let visibleClasses = classObjects;
           if (user?.email !== 'clng@ktls.edu.hk') {
-            visibleClasses = classObjects.filter(c => c.owner === user?.email);
+            if (user?.isAdmin || user?.role === 'admin') {
+              visibleClasses = classObjects.filter(c => c.owner === user?.email);
+            } else {
+              // Fallback for non-admins if they somehow access this page
+              visibleClasses = classObjects.filter(c => c.owner === user?.email);
+            }
           }
 
           // Keep as objects so we can group them by owner in the dropdown
@@ -252,9 +257,11 @@ export default function Record() {
           return c;
         });
         await setDoc(classDocRef, { list: updatedList }, { merge: true });
-        const remainingClasses = classes.filter(c => c !== selectedClass);
+
+        // FIX: Compare object name to string, and extract name for selection
+        const remainingClasses = classes.filter(c => c.name !== selectedClass);
         setClasses(remainingClasses);
-        setSelectedClass(remainingClasses.length > 0 ? remainingClasses[0] : '');
+        setSelectedClass(remainingClasses.length > 0 ? remainingClasses[0].name : '');
         alert("Class archived successfully.");
       }
     } catch (error) {
@@ -272,20 +279,33 @@ export default function Record() {
         try {
           const batch = writeBatch(db);
 
+          // 1. Delete students in this class
           const q = query(collection(db, "students"), where("className", "==", selectedClass));
           const querySnapshot = await getDocs(q);
           querySnapshot.forEach((document) => {
             batch.delete(document.ref);
           });
 
-          const remainingClasses = classes.filter(c => c !== selectedClass);
-          batch.set(doc(db, "settings", "classes"), { list: remainingClasses }, { merge: true });
+          // 2. Safely remove the class from the global list without affecting other admins
+          const classDocRef = doc(db, "settings", "classes");
+          const classDocSnap = await getDoc(classDocRef);
+          let updatedGlobalList = [];
+          if (classDocSnap.exists()) {
+            const rawList = classDocSnap.data().list || [];
+            updatedGlobalList = rawList.filter(c => {
+              const cName = typeof c === 'string' ? c : c.name;
+              return cName !== selectedClass;
+            });
+          }
+          batch.set(classDocRef, { list: updatedGlobalList }, { merge: true });
 
           await batch.commit();
 
+          // 3. Update local UI state properly
+          const remainingClasses = classes.filter(c => c.name !== selectedClass);
           setClasses(remainingClasses);
           setStudents(students.filter(s => s.className !== selectedClass));
-          setSelectedClass(remainingClasses.length > 0 ? remainingClasses[0] : '');
+          setSelectedClass(remainingClasses.length > 0 ? remainingClasses[0].name : '');
           setConfirmDialog({ isOpen: false });
           alert("Class and all associated students deleted successfully.");
         } catch (error) {

@@ -952,7 +952,11 @@ export default function AdvancedHistoryArchive() {
 
           // Fetch available classes for mapping
           const classDocSnap = await getDoc(doc(db, "settings", "classes"));
-          if (classDocSnap.exists()) setAvailableClasses(classDocSnap.data().list || []);
+          if (classDocSnap.exists()) {
+            const rawList = classDocSnap.data().list || [];
+            const activeClasses = rawList.map(c => typeof c === 'string' ? { name: c, owner: 'unknown', isArchived: false } : c).filter(c => !c.isArchived);
+            setAvailableClasses(activeClasses);
+          }
           if (data.tierAccess) {
             // Migrate old string format to object format if necessary
             const formattedAccess = {};
@@ -3617,24 +3621,32 @@ export default function AdvancedHistoryArchive() {
                                   </button>
                                 )}
                               </div>
-                              <div className="flex flex-wrap gap-1 mt-1">
-                                {availableClasses.map(c => (
-                                  <label key={c} className="flex items-center text-xs gap-1 cursor-pointer bg-white px-1.5 py-0.5 rounded border border-slate-200">
-                                    <input
-                                      type="checkbox"
-                                      checked={roleClasses[role]?.includes(c) || false}
-                                      onChange={(e) => {
-                                        const current = roleClasses[role] || [];
-                                        setRoleClasses(prev => ({
-                                          ...prev,
-                                          [role]: e.target.checked ? [...current, c] : current.filter(cls => cls !== c)
-                                        }));
-                                      }}
-                                    />
-                                    {c}
-                                  </label>
-                                ))}
-                              </div>
+                              {role === 'admin' ? (
+                                <div className="mt-2 text-[10px] text-slate-500 italic">
+                                  Admins automatically manage their self-created classes.
+                                </div>
+                              ) : (
+                                <div className="mt-2">
+                                  <select
+                                    value={roleClasses[role]?.[0] || ""}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setRoleClasses(prev => ({
+                                        ...prev,
+                                        [role]: val ? [val] : []
+                                      }));
+                                    }}
+                                    className="w-full p-1.5 bg-white border border-slate-200 rounded text-xs outline-none focus:ring-2 focus:ring-blue-500"
+                                  >
+                                    <option value="">-- No Class Assigned --</option>
+                                    {availableClasses.map(c => (
+                                      <option key={c.name} value={c.name}>
+                                        {c.name.replace(/\u200B/g, '')} ({c.owner})
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              )}
                             </div>
                           ))}
                         </div>

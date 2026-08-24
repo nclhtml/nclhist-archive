@@ -43,7 +43,7 @@ export default function Marks() {
   const [archivedClasses, setArchivedClasses] = useState([]);
   const [students, setStudents] = useState([]);
   const [categories, setCategories] = useState([
-    'Assignments', 'Quizzes', 'Uniform Test', 'Exam', 'Others'
+    'Assignments', 'Quizzes', 'Uniform Test', 'Exam', 'RAC', 'Others'
   ]);
   const [archives, setArchives] = useState([]);
 
@@ -67,6 +67,10 @@ export default function Marks() {
   // Form State
   const [newCategoryName, setNewCategoryName] = useState('');
   const [showAddCategory, setShowAddCategory] = useState(false);
+  const [newCategoryIsMulti, setNewCategoryIsMulti] = useState(false);
+  const [editingCategory, setEditingCategory] = useState(null);
+  const [editCategoryName, setEditCategoryName] = useState('');
+  const [multiSectionCategories, setMultiSectionCategories] = useState(['Uniform Test', 'Exam']);
 
   const [showAddAssessment, setShowAddAssessment] = useState(false);
   const [isEditingAssessment, setIsEditingAssessment] = useState(false);
@@ -76,6 +80,7 @@ export default function Marks() {
   const [paperFullMark, setPaperFullMark] = useState(100);
   const [formTerm, setFormTerm] = useState('');
   const [linkedDocId, setLinkedDocId] = useState('');
+  const [forceMultiSection, setForceMultiSection] = useState(false); // NEW: Force multi-section for any item
 
   // Multi-section State for UT/Exam
   const [sectionsConfig, setSectionsConfig] = useState([
@@ -128,6 +133,7 @@ export default function Marks() {
   const [showPresetManager, setShowPresetManager] = useState(false);
   const [newPresetName, setNewPresetName] = useState('');
   const [newPresetWeights, setNewPresetWeights] = useState({});
+  const [isSharedPreset, setIsSharedPreset] = useState(false);
 
   // Modal specific selections
   const [modalClasses, setModalClasses] = useState([]);
@@ -161,7 +167,7 @@ export default function Marks() {
   const [selectedCompareId, setSelectedCompareId] = useState('');
 
   // Helper to check if current category requires multi-section layout
-  const isMultiSectionCategory = ['Uniform Test', 'Exam'].includes(selectedCategory);
+  const isMultiSectionCategory = multiSectionCategories.includes(selectedCategory) || forceMultiSection || (selectedAssessment && selectedAssessment.sectionsConfig && selectedAssessment.sectionsConfig.length > 0);
 
   // Fetch Comparison Assessments
   useEffect(() => {
@@ -235,16 +241,6 @@ export default function Marks() {
           }
           // ---------------------------
 
-          // Strict Owner Filter
-          let visibleClasses = classObjects;
-          if (user?.email !== 'clng@ktls.edu.hk') {
-            visibleClasses = classObjects.filter(c => c.owner === user?.email);
-          }
-
-          // Keep as objects for grouping in dropdowns
-          loadedClasses = visibleClasses.filter(c => !c.isArchived);
-          loadedArchivedClasses = visibleClasses.filter(c => c.isArchived);
-
           // Fetch user role if not present on the user object
           let currentUserRole = user?.role;
           if (!currentUserRole && user?.email) {
@@ -256,12 +252,22 @@ export default function Marks() {
             }
           }
 
-          // Filter classes based on role (Super admin bypasses this)
-          if (currentUserRole && user?.email !== 'clng@ktls.edu.hk') {
-            const allowed = roleClasses[currentUserRole] || [];
-            loadedClasses = loadedClasses.filter(c => allowed.includes(c));
-            loadedArchivedClasses = loadedArchivedClasses.filter(c => allowed.includes(c));
+          // Strict Owner & Role Filter
+          let visibleClasses = classObjects;
+          if (user?.email !== 'clng@ktls.edu.hk') {
+            if (user?.isAdmin || currentUserRole === 'admin') {
+              // Admins see their own created classes
+              visibleClasses = classObjects.filter(c => c.owner === user?.email);
+            } else {
+              // Non-admins see the class assigned to their role
+              const allowed = roleClasses[currentUserRole] || [];
+              visibleClasses = classObjects.filter(c => allowed.includes(c.name));
+            }
           }
+
+          // Keep as objects for grouping in dropdowns
+          loadedClasses = visibleClasses.filter(c => !c.isArchived);
+          loadedArchivedClasses = visibleClasses.filter(c => c.isArchived);
 
           loadedClasses.sort((a, b) => a.name.localeCompare(b.name));
           loadedArchivedClasses.sort((a, b) => a.name.localeCompare(b.name));
@@ -296,15 +302,28 @@ export default function Marks() {
 
         const catDocRef = doc(db, "settings", "categories");
         const catDocSnap = await getDoc(catDocRef);
-        if (catDocSnap.exists() && catDocSnap.data().list) {
-          setCategories(catDocSnap.data().list);
+        let loadedCategories = ['Assignments', 'Quizzes', 'Uniform Test', 'Exam', 'RAC', 'Others'];
+        let loadedMultiCat = ['Uniform Test', 'Exam'];
+        if (catDocSnap.exists()) {
+          const data = catDocSnap.data();
+          if (user?.email && data[user.email]) {
+            loadedCategories = data[user.email];
+          } else if (data.list && user?.email === 'clng@ktls.edu.hk') {
+            loadedCategories = data.list;
+            if (!loadedCategories.includes('RAC')) loadedCategories.push('RAC');
+          }
+          if (data.multiSection) {
+            loadedMultiCat = data.multiSection;
+          }
         }
+        setCategories(loadedCategories);
+        setMultiSectionCategories(loadedMultiCat);
 
         const presetsRef = doc(db, "settings", "presets");
         const presetsSnap = await getDoc(presetsRef);
-        let loadedPresets = [];
+        let allPresets = [];
         if (presetsSnap.exists() && presetsSnap.data().list) {
-          loadedPresets = presetsSnap.data().list;
+          allPresets = presetsSnap.data().list;
         }
 
         const classPresetsRef = doc(db, "settings", "classPresets");
@@ -315,43 +334,56 @@ export default function Marks() {
 
         let presetsUpdated = false;
 
-        if (!loadedPresets.some(p => p.name === 'JS Geography')) {
-          loadedPresets.push({
+        if (!allPresets.some(p => p.name === 'JS Geography')) {
+          allPresets.push({
             id: 'js-geog-preset',
             name: 'JS Geography',
             weights: { 'Assignments': 0, 'Quizzes': 0, 'Uniform Test': 50 },
-            isCustom: true
+            isCustom: true,
+            isShared: true,
+            owner: 'clng@ktls.edu.hk'
           });
           presetsUpdated = true;
         }
 
-        if (!loadedPresets.some(p => p.name === 'Learning Attitude (Homework)')) {
-          loadedPresets.push({
+        if (!allPresets.some(p => p.name === 'Learning Attitude (Homework)')) {
+          allPresets.push({
             id: 'la-hw-preset',
             name: 'Learning Attitude (Homework)',
             weights: {},
-            isCustom: true
+            isCustom: true,
+            isShared: true,
+            owner: 'clng@ktls.edu.hk'
           });
           presetsUpdated = true;
         }
 
-        if (!loadedPresets.some(p => p.name === 'Learning Attitude (Lesson)')) {
-          loadedPresets.push({
+        if (!allPresets.some(p => p.name === 'Learning Attitude (Lesson)')) {
+          allPresets.push({
             id: 'la-lesson-preset',
             name: 'Learning Attitude (Lesson)',
             weights: {},
-            isCustom: true
+            isCustom: true,
+            isShared: true,
+            owner: 'clng@ktls.edu.hk'
           });
           presetsUpdated = true;
         }
 
         if (presetsUpdated) {
-          await setDoc(doc(db, "settings", "presets"), { list: loadedPresets }, { merge: true });
+          await setDoc(doc(db, "settings", "presets"), { list: allPresets }, { merge: true });
         }
 
-        setPresets(loadedPresets);
-        if (loadedPresets.length > 0) {
-          setSelectedPresetId(loadedPresets.find(p => p.name === 'JS Geography')?.id || loadedPresets[0].id);
+        // Filter presets for current user (show shared ones OR ones they own)
+        // Normal admins will no longer see old presets without an owner unless they are shared
+        const visiblePresets = allPresets.filter(p => {
+          if (user?.email === 'clng@ktls.edu.hk') return true; // Super admin sees all
+          return p.isShared || p.owner === user?.email;
+        });
+        setPresets(visiblePresets);
+
+        if (visiblePresets.length > 0) {
+          setSelectedPresetId(visiblePresets.find(p => p.name === 'JS Geography')?.id || visiblePresets[0].id);
         }
 
         const querySnapshot = await getDocs(collection(db, "students"));
@@ -523,9 +555,17 @@ export default function Marks() {
     if (catName && !categories.includes(catName)) {
       try {
         const updatedCategories = [...categories, catName];
-        await setDoc(doc(db, "settings", "categories"), { list: updatedCategories }, { merge: true });
+        await setDoc(doc(db, "settings", "categories"), { [user.email]: updatedCategories }, { merge: true });
         setCategories(updatedCategories);
+
+        if (newCategoryIsMulti) {
+          const updatedMulti = [...multiSectionCategories, catName];
+          await setDoc(doc(db, "settings", "categories"), { multiSection: updatedMulti }, { merge: true });
+          setMultiSectionCategories(updatedMulti);
+        }
+
         setNewCategoryName('');
+        setNewCategoryIsMulti(false);
         setShowAddCategory(false);
         setSelectedCategory(catName);
       } catch (error) {
@@ -541,8 +581,15 @@ export default function Marks() {
 
     try {
       const updatedCategories = categories.filter(c => c !== catToDelete);
-      await setDoc(doc(db, "settings", "categories"), { list: updatedCategories }, { merge: true });
+      await setDoc(doc(db, "settings", "categories"), { [user.email]: updatedCategories }, { merge: true });
       setCategories(updatedCategories);
+
+      if (multiSectionCategories.includes(catToDelete)) {
+        const updatedMulti = multiSectionCategories.filter(c => c !== catToDelete);
+        await setDoc(doc(db, "settings", "categories"), { multiSection: updatedMulti }, { merge: true });
+        setMultiSectionCategories(updatedMulti);
+      }
+
       if (selectedCategory === catToDelete) {
         setSelectedCategory(updatedCategories.length > 0 ? updatedCategories[0] : '');
       }
@@ -550,6 +597,34 @@ export default function Marks() {
       console.error("Error deleting category:", error);
       alert("Failed to delete category.");
     }
+  };
+
+  const handleUpdateCategory = async (oldName) => {
+    const catName = editCategoryName.trim();
+    if (catName && catName !== oldName && !categories.includes(catName)) {
+      try {
+        const updatedCategories = categories.map(c => c === oldName ? catName : c);
+        await setDoc(doc(db, "settings", "categories"), { [user.email]: updatedCategories }, { merge: true });
+        setCategories(updatedCategories);
+
+        if (multiSectionCategories.includes(oldName)) {
+          const updatedMulti = multiSectionCategories.map(c => c === oldName ? catName : c);
+          await setDoc(doc(db, "settings", "categories"), { multiSection: updatedMulti }, { merge: true });
+          setMultiSectionCategories(updatedMulti);
+        }
+
+        const q = query(collection(db, "assessments"), where("category", "==", oldName));
+        const snap = await getDocs(q);
+        const updates = snap.docs.map(d => updateDoc(doc(db, "assessments", d.id), { category: catName }));
+        await Promise.all(updates);
+
+        if (selectedCategory === oldName) setSelectedCategory(catName);
+      } catch (error) {
+        console.error("Error renaming category:", error);
+        alert("Failed to rename category.");
+      }
+    }
+    setEditingCategory(null);
   };
 
   // ============================================================================
@@ -1291,14 +1366,24 @@ export default function Marks() {
     const presetData = {
       id: generateId(),
       name: newPresetName,
-      weights: newPresetWeights
+      weights: newPresetWeights,
+      owner: user.email,
+      isShared: user.email === 'clng@ktls.edu.hk' ? isSharedPreset : false
     };
 
-    const updatedPresets = [...presets, presetData];
     try {
-      await setDoc(doc(db, "settings", "presets"), { list: updatedPresets }, { merge: true });
-      setPresets(updatedPresets);
+      const presetsRef = doc(db, "settings", "presets");
+      const presetsSnap = await getDoc(presetsRef);
+      let allPresets = presetsSnap.exists() && presetsSnap.data().list ? presetsSnap.data().list : [];
+
+      allPresets.push(presetData);
+      await setDoc(presetsRef, { list: allPresets }, { merge: true });
+
+      const visiblePresets = allPresets.filter(p => p.isShared || p.owner === user?.email || !p.owner);
+      setPresets(visiblePresets);
       setNewPresetName('');
+      setNewPresetWeights({});
+      setIsSharedPreset(false);
       setSelectedPresetId(presetData.id);
       setShowPresetManager(false);
     } catch (error) {
@@ -1308,15 +1393,49 @@ export default function Marks() {
   };
 
   const handleDeletePreset = async (id) => {
-    const updatedPresets = presets.filter(p => p.id !== id);
+    const presetToDelete = presets.find(p => p.id === id);
+    if (presetToDelete?.isShared && presetToDelete?.owner !== user.email && user?.email !== 'clng@ktls.edu.hk') {
+      alert("You cannot delete a shared preset created by the super admin.");
+      return;
+    }
+
     try {
-      await setDoc(doc(db, "settings", "presets"), { list: updatedPresets }, { merge: true });
-      setPresets(updatedPresets);
+      const presetsRef = doc(db, "settings", "presets");
+      const presetsSnap = await getDoc(presetsRef);
+      let allPresets = presetsSnap.exists() && presetsSnap.data().list ? presetsSnap.data().list : [];
+
+      allPresets = allPresets.filter(p => p.id !== id);
+      await setDoc(presetsRef, { list: allPresets }, { merge: true });
+
+      const visiblePresets = allPresets.filter(p => {
+        if (user?.email === 'clng@ktls.edu.hk') return true;
+        return p.isShared || p.owner === user?.email;
+      });
+      setPresets(visiblePresets);
       if (selectedPresetId === id) {
-        setSelectedPresetId(updatedPresets.length > 0 ? updatedPresets[0].id : '');
+        setSelectedPresetId(visiblePresets.length > 0 ? visiblePresets[0].id : '');
       }
     } catch (error) {
       console.error("Error deleting preset:", error);
+    }
+  };
+
+  const handleToggleShareExistingPreset = async (id, currentShareStatus) => {
+    try {
+      const presetsRef = doc(db, "settings", "presets");
+      const presetsSnap = await getDoc(presetsRef);
+      let allPresets = presetsSnap.exists() && presetsSnap.data().list ? presetsSnap.data().list : [];
+
+      allPresets = allPresets.map(p => p.id === id ? { ...p, isShared: !currentShareStatus } : p);
+      await setDoc(presetsRef, { list: allPresets }, { merge: true });
+
+      const visiblePresets = allPresets.filter(p => {
+        if (user?.email === 'clng@ktls.edu.hk') return true;
+        return p.isShared || p.owner === user?.email;
+      });
+      setPresets(visiblePresets);
+    } catch (error) {
+      console.error("Error toggling preset share status:", error);
     }
   };
 
@@ -2207,17 +2326,28 @@ export default function Marks() {
           </div>
 
           {showAddCategory && (
-            <form onSubmit={handleAddCategory} className="p-3 bg-blue-50 border-b border-gray-200 flex space-x-2">
-              <input
-                type="text"
-                value={newCategoryName}
-                onChange={(e) => setNewCategoryName(e.target.value)}
-                placeholder="New category..."
-                className="flex-1 border border-gray-300 rounded p-1 text-sm outline-none w-full"
-                data-gramm="false" data-gramm_editor="false"
-                autoFocus
-              />
-              <button type="submit" className="bg-blue-600 text-white px-2 rounded text-sm">Add</button>
+            <form onSubmit={handleAddCategory} className="p-3 bg-blue-50 border-b border-gray-200 flex flex-col space-y-2">
+              <div className="flex space-x-2">
+                <input
+                  type="text"
+                  value={newCategoryName}
+                  onChange={(e) => setNewCategoryName(e.target.value)}
+                  placeholder="New category..."
+                  className="flex-1 border border-gray-300 rounded p-1 text-sm outline-none w-full"
+                  data-gramm="false" data-gramm_editor="false"
+                  autoFocus
+                />
+                <button type="submit" className="bg-blue-600 text-white px-2 rounded text-sm">Add</button>
+              </div>
+              <label className="flex items-center text-xs text-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newCategoryIsMulti}
+                  onChange={(e) => setNewCategoryIsMulti(e.target.checked)}
+                  className="mr-1.5 rounded text-blue-600 focus:ring-blue-500"
+                />
+                Enable Multi-Section Layout (Like UT/Exam)
+              </label>
             </form>
           )}
 
@@ -2233,23 +2363,38 @@ export default function Marks() {
               return preset.weights[cat] > 0;
             }).map(cat => (
               <li key={cat}>
-                <div
-                  onClick={() => { setSelectedCategory(cat); setSelectedAssessment(null); }}
-                  className={`w-full text-left px-4 py-3 text-sm font-medium transition-colors flex items-center justify-between cursor-pointer ${selectedCategory === cat ? 'bg-blue-50 text-blue-700 border-l-4 border-blue-600' : 'text-gray-600 hover:bg-gray-50'
-                    }`}
-                >
-                  <span className="truncate mr-2">{cat}</span>
-                  <div className="flex items-center space-x-2 flex-shrink-0">
-                    <button
-                      onClick={(e) => handleDeleteCategory(cat, e)}
-                      className="text-gray-400 hover:text-red-500 transition-colors"
-                      title="Delete Category"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                    {selectedCategory === cat && <ChevronRight className="w-4 h-4" />}
+                {editingCategory === cat ? (
+                  <div className="flex items-center px-4 py-2 space-x-2 bg-blue-50">
+                    <input
+                      type="text"
+                      value={editCategoryName}
+                      onChange={(e) => setEditCategoryName(e.target.value)}
+                      className="flex-1 border border-gray-300 rounded p-1 text-sm outline-none"
+                      autoFocus
+                    />
+                    <button onClick={() => handleUpdateCategory(cat)} className="text-green-600 hover:text-green-800"><CheckCircle className="w-4 h-4" /></button>
+                    <button onClick={() => setEditingCategory(null)} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
                   </div>
-                </div>
+                ) : (
+                  <div
+                    onDoubleClick={() => { setEditingCategory(cat); setEditCategoryName(cat); }}
+                    onClick={() => { setSelectedCategory(cat); setSelectedAssessment(null); }}
+                    className={`w-full text-left px-4 py-3 text-sm font-medium transition-colors flex items-center justify-between cursor-pointer ${selectedCategory === cat ? 'bg-blue-50 text-blue-700 border-l-4 border-blue-600' : 'text-gray-600 hover:bg-gray-50'
+                      }`}
+                  >
+                    <span className="truncate mr-2" title="Double-click to rename">{cat}</span>
+                    <div className="flex items-center space-x-2 flex-shrink-0">
+                      <button
+                        onClick={(e) => handleDeleteCategory(cat, e)}
+                        className="text-gray-400 hover:text-red-500 transition-colors"
+                        title="Delete Category"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                      {selectedCategory === cat && <ChevronRight className="w-4 h-4" />}
+                    </div>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -3018,7 +3163,7 @@ export default function Marks() {
                     </select>
                   </div>
 
-                  {!isMultiSectionCategory && (
+                  {(!isMultiSectionCategory && !forceMultiSection) && (
                     <div>
                       <label className="block text-sm font-semibold text-gray-700 mb-1">Full Mark</label>
                       <input
@@ -3033,6 +3178,21 @@ export default function Marks() {
                     </div>
                   )}
                 </div>
+
+                {!multiSectionCategories.includes(selectedCategory) && (
+                  <div className="flex items-center mt-2 mb-4">
+                    <input
+                      type="checkbox"
+                      id="forceMultiSection"
+                      checked={forceMultiSection}
+                      onChange={(e) => setForceMultiSection(e.target.checked)}
+                      className="mr-2 rounded text-blue-600 focus:ring-blue-500"
+                    />
+                    <label htmlFor="forceMultiSection" className="text-sm font-semibold text-gray-700">
+                      Enable Multi-Section Layout for this specific item
+                    </label>
+                  </div>
+                )}
 
                 {/* Classes Selection */}
                 <div>
@@ -3916,6 +4076,18 @@ export default function Marks() {
                     </div>
                   ))}
                 </div>
+                {user?.email === 'clng@ktls.edu.hk' && (
+                  <div className="mb-4 flex items-center">
+                    <input
+                      type="checkbox"
+                      id="sharePreset"
+                      checked={isSharedPreset}
+                      onChange={(e) => setIsSharedPreset(e.target.checked)}
+                      className="mr-2 rounded text-purple-600 focus:ring-purple-500"
+                    />
+                    <label htmlFor="sharePreset" className="text-sm text-gray-700 font-medium">Share this calculation method with all admins</label>
+                  </div>
+                )}
                 <button type="submit" className="w-full bg-purple-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-purple-700">Save Preset</button>
               </form>
 
@@ -3924,18 +4096,33 @@ export default function Marks() {
                 {presets.map((p) => (
                   <li key={p.id} className="flex justify-between items-center p-3 hover:bg-gray-50">
                     <div>
-                      <span className="text-sm font-bold text-gray-700 block">{p.name}</span>
+                      <span className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                        {p.name}
+                        {p.isShared && <span className="bg-blue-100 text-blue-700 text-[10px] px-2 py-0.5 rounded-full">Shared</span>}
+                      </span>
                       <span className="text-xs text-gray-500">
-                        {p.isCustom ? "Custom Calculation Logic Applied" : Object.entries(p.weights).filter(([_, w]) => w > 0).map(([c, w]) => `${c}: ${w}%`).join(', ')}
+                        {p.isCustom ? "Custom Calculation Logic Applied" : Object.entries(p.weights || {}).filter(([_, w]) => w > 0).map(([c, w]) => `${c}: ${w}%`).join(', ')}
                       </span>
                     </div>
-                    <button
-                      onClick={() => handleDeletePreset(p.id)}
-                      className="text-red-400 hover:text-red-600 p-1 ml-2"
-                      title="Delete Preset"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center gap-2">
+                      {user?.email === 'clng@ktls.edu.hk' && (
+                        <button
+                          onClick={() => handleToggleShareExistingPreset(p.id, p.isShared)}
+                          className={`text-xs px-2 py-1 rounded font-medium ${p.isShared ? 'bg-gray-200 text-gray-700 hover:bg-gray-300' : 'bg-purple-100 text-purple-700 hover:bg-purple-200'}`}
+                        >
+                          {p.isShared ? 'Unshare' : 'Share'}
+                        </button>
+                      )}
+                      {(!p.isShared || user?.email === p.owner || user?.email === 'clng@ktls.edu.hk') && (
+                        <button
+                          onClick={() => handleDeletePreset(p.id)}
+                          className="text-red-400 hover:text-red-600 p-1 ml-2"
+                          title="Delete Preset"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
                   </li>
                 ))}
                 {presets.length === 0 && <li className="p-3 text-sm text-gray-500 text-center">No presets available.</li>}

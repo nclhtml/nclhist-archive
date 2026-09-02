@@ -1531,17 +1531,20 @@ export default function Marks() {
         return { raw: totalRaw, full: totalFull };
       };
 
+      const utAssessmentsGlobal = allTermAssessments.filter(a => a.category === 'Uniform Test');
+      const examAssessmentsGlobal = allTermAssessments.filter(a => a.category === 'Exam');
+
       if (preset.name === 'JS Geography') {
         const assignAssessments = allTermAssessments.filter(a => a.category === 'Assignments');
         const quizAssessments = allTermAssessments.filter(a => a.category === 'Quizzes');
-        const utAssessments = allTermAssessments.filter(a => a.category === 'Uniform Test');
 
         scoresData = modalStudents.map(student => {
           let categoryScores = {};
 
           const aStats = sumAssessments(assignAssessments, student);
           const qStats = sumAssessments(quizAssessments, student);
-          const utStats = sumAssessments(utAssessments, student);
+          const utStats = sumAssessments(utAssessmentsGlobal, student);
+          const examStats = sumAssessments(examAssessmentsGlobal, student);
 
           const combinedAQRaw = aStats.raw + qStats.raw;
           const combinedAQFull = aStats.full + qStats.full;
@@ -1557,7 +1560,9 @@ export default function Marks() {
           return {
             student,
             categoryScores,
-            overallScore: overallScore.toFixed(1)
+            overallScore: overallScore.toFixed(1),
+            rawUT: utStats.raw,
+            rawExam: examStats.raw
           };
         });
       } else if (preset.name === 'Learning Attitude (Homework)') {
@@ -1565,6 +1570,9 @@ export default function Marks() {
 
         scoresData = modalStudents.map(student => {
           const aStats = sumAssessments(assignAssessments, student);
+          const utStats = sumAssessments(utAssessmentsGlobal, student);
+          const examStats = sumAssessments(examAssessmentsGlobal, student);
+
           let score = 0;
           if (aStats.full > 0) {
             score = Math.round((aStats.raw / aStats.full) * 5);
@@ -1577,7 +1585,9 @@ export default function Marks() {
           return {
             student,
             categoryScores,
-            overallScore: score.toString()
+            overallScore: score.toString(),
+            rawUT: utStats.raw,
+            rawExam: examStats.raw
           };
         });
       } else if (preset.name === 'Learning Attitude (Lesson)') {
@@ -1585,6 +1595,9 @@ export default function Marks() {
 
         scoresData = modalStudents.map(student => {
           const aStats = sumAssessments(assignAssessments, student);
+          const utStats = sumAssessments(utAssessmentsGlobal, student);
+          const examStats = sumAssessments(examAssessmentsGlobal, student);
+
           let assignPercent = aStats.full > 0 ? (aStats.raw / aStats.full) : 0;
           let recordCount = student.recordCount || 0;
 
@@ -1603,7 +1616,9 @@ export default function Marks() {
           return {
             student,
             categoryScores,
-            overallScore: score.toString()
+            overallScore: score.toString(),
+            rawUT: utStats.raw,
+            rawExam: examStats.raw
           };
         });
       } else {
@@ -1627,10 +1642,15 @@ export default function Marks() {
             }
           });
 
+          const utStats = sumAssessments(utAssessmentsGlobal, student);
+          const examStats = sumAssessments(examAssessmentsGlobal, student);
+
           return {
             student,
             categoryScores,
-            overallScore: overallScore.toFixed(1)
+            overallScore: overallScore.toFixed(1),
+            rawUT: utStats.raw,
+            rawExam: examStats.raw
           };
         });
       }
@@ -1646,15 +1666,25 @@ export default function Marks() {
 
   const displayCategories = termScoresData.length > 0 ? Object.keys(termScoresData[0].categoryScores) : [];
 
-  // Copy ONLY the overall Term Scores to clipboard
-  const handleCopyTermScores = () => {
+  const getTermPrefix = () => {
+    return modalTerm.includes('Term 2') ? 'T2' : 'T1';
+  };
+
+  const handleCopyScores = (type) => {
     if (termScoresData.length === 0) return;
 
-    const rows = termScoresData.map(data => data.overallScore);
+    let rows = [];
+    if (type === 'A1') {
+      rows = termScoresData.map(data => data.overallScore);
+    } else if (type === 'A2') {
+      rows = termScoresData.map(data => data.rawExam !== undefined ? data.rawExam.toFixed(1) : '');
+    } else if (type === 'A3') {
+      rows = termScoresData.map(data => data.rawUT !== undefined ? data.rawUT.toFixed(1) : '');
+    }
 
     const textToCopy = rows.join('\n');
     navigator.clipboard.writeText(textToCopy).then(() => {
-      setTermCopySuccess(true);
+      setTermCopySuccess(type);
       setTimeout(() => setTermCopySuccess(false), 2000);
     }).catch(err => {
       console.error('Failed to copy text: ', err);
@@ -3839,7 +3869,7 @@ export default function Marks() {
       {/* Term Score Modal */}
       {showTermScoreModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-5xl h-[85vh] flex flex-col">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-7xl h-[92vh] flex flex-col">
             <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-lg">
               <h2 className="text-lg font-bold text-gray-800 flex items-center">
                 <Calculator className="w-5 h-5 mr-2 text-purple-600" />
@@ -3853,29 +3883,37 @@ export default function Marks() {
               </button>
             </div>
 
-            <div className="p-4 bg-white flex flex-col md:flex-row justify-between items-center border-b border-gray-200 gap-4">
-              <div className="flex items-center space-x-3 w-full md:w-auto flex-wrap gap-y-2">
+            <div className="p-4 bg-white flex flex-col xl:flex-row justify-between items-start xl:items-center border-b border-gray-200 gap-4">
+              <div className="flex items-center space-x-4 w-full xl:w-auto flex-wrap gap-y-3">
                 <div className="flex items-center space-x-2">
                   <label className="font-semibold text-gray-700 text-sm">Classes:</label>
-                  <div className="flex flex-wrap gap-1 max-w-[200px] max-h-16 overflow-y-auto">
-                    {classes.map(c => (
-                      <label key={c.name} className="flex items-center text-xs bg-gray-100 px-2 py-1 rounded cursor-pointer hover:bg-gray-200">
-                        <input
-                          type="checkbox"
-                          checked={modalClasses.includes(c.name)}
-                          onChange={() => {
-                            setModalClasses(prev => prev.includes(c.name) ? prev.filter(x => x !== c.name) : [...prev, c.name]);
-                            setTermScoresData([]);
-                          }}
-                          className="mr-1 rounded text-purple-600 focus:ring-purple-500"
-                        />
-                        {c.name}
-                      </label>
-                    ))}
+                  <div className="relative group">
+                    <button className="border border-gray-300 rounded-md p-1.5 text-sm bg-white flex items-center justify-between min-w-[140px] hover:border-purple-400 focus:outline-none">
+                      <span className="truncate max-w-[100px]">{modalClasses.length} Selected</span>
+                      <ChevronDown className="w-4 h-4 ml-2 text-gray-500" />
+                    </button>
+                    <div className="absolute left-0 top-full mt-1 w-56 bg-white border border-gray-200 shadow-xl rounded-md hidden group-hover:block z-50 max-h-64 overflow-y-auto">
+                      <div className="p-2 flex flex-col gap-1">
+                        {classes.map(c => (
+                          <label key={c.name} className="flex items-center text-sm p-1.5 hover:bg-purple-50 rounded cursor-pointer transition-colors">
+                            <input
+                              type="checkbox"
+                              checked={modalClasses.includes(c.name)}
+                              onChange={() => {
+                                setModalClasses(prev => prev.includes(c.name) ? prev.filter(x => x !== c.name) : [...prev, c.name]);
+                                setTermScoresData([]);
+                              }}
+                              className="mr-2 rounded text-purple-600 focus:ring-purple-500"
+                            />
+                            {c.name}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </div>
 
-                <div className="flex items-center space-x-2 pl-2 border-l border-gray-200">
+                <div className="flex items-center space-x-2 pl-4 border-l border-gray-200">
                   <label className="font-semibold text-gray-700 text-sm">Term:</label>
                   <select
                     value={modalTerm}
@@ -3889,7 +3927,7 @@ export default function Marks() {
                   </select>
                 </div>
 
-                <div className="flex items-center space-x-2 pl-2 border-l border-gray-200">
+                <div className="flex items-center space-x-2 pl-4 border-l border-gray-200">
                   <label className="font-semibold text-gray-700 text-sm">Preset:</label>
                   <select
                     value={selectedPresetId}
@@ -3904,30 +3942,61 @@ export default function Marks() {
                   </select>
                   <button
                     onClick={() => setShowPresetManager(true)}
-                    className="text-sm bg-gray-100 text-gray-700 px-2 py-1.5 rounded-md hover:bg-gray-200 transition-colors font-medium border border-gray-300"
+                    className="text-sm bg-gray-100 text-gray-700 px-3 py-1.5 rounded-md hover:bg-gray-200 transition-colors font-medium border border-gray-300"
                   >
                     Manage
                   </button>
                 </div>
               </div>
 
-              <div className="flex items-center space-x-3 w-full md:w-auto">
-                <button
-                  onClick={handleCopyTermScores}
-                  disabled={termScoresData.length === 0}
-                  className="bg-teal-50 text-teal-700 px-4 py-2 rounded-md font-medium hover:bg-teal-100 transition-colors flex items-center disabled:opacity-50 border border-teal-200 shadow-sm"
-                  title="Copy ONLY overall scores to clipboard"
-                >
-                  {termCopySuccess ? <CheckCircle className="w-4 h-4 mr-2" /> : <Copy className="w-4 h-4 mr-2" />}
-                  {termCopySuccess ? 'Copied!' : 'Copy Scores'}
-                </button>
+              <div className="flex items-center justify-end w-full xl:w-auto flex-wrap gap-2">
+                {(() => {
+                  const preset = presets.find(p => p.id === selectedPresetId);
+                  const isLearningAttitude = preset && preset.name.includes('Learning Attitude');
+                  const tPrefix = getTermPrefix();
+
+                  return (
+                    <>
+                      <button
+                        onClick={() => handleCopyScores('A1')}
+                        disabled={termScoresData.length === 0}
+                        className="bg-teal-50 text-teal-700 px-3 py-2 rounded-md font-medium hover:bg-teal-100 transition-colors flex items-center disabled:opacity-50 border border-teal-200 shadow-sm text-sm"
+                      >
+                        {termCopySuccess === 'A1' ? <CheckCircle className="w-4 h-4 mr-1.5" /> : <Copy className="w-4 h-4 mr-1.5" />}
+                        Copy {isLearningAttitude ? 'Learning Attitude' : `${tPrefix}A1`}
+                      </button>
+
+                      {!isLearningAttitude && (
+                        <>
+                          <button
+                            onClick={() => handleCopyScores('A2')}
+                            disabled={termScoresData.length === 0}
+                            className="bg-blue-50 text-blue-700 px-3 py-2 rounded-md font-medium hover:bg-blue-100 transition-colors flex items-center disabled:opacity-50 border border-blue-200 shadow-sm text-sm"
+                          >
+                            {termCopySuccess === 'A2' ? <CheckCircle className="w-4 h-4 mr-1.5" /> : <Copy className="w-4 h-4 mr-1.5" />}
+                            Copy {tPrefix}A2
+                          </button>
+                          <button
+                            onClick={() => handleCopyScores('A3')}
+                            disabled={termScoresData.length === 0}
+                            className="bg-indigo-50 text-indigo-700 px-3 py-2 rounded-md font-medium hover:bg-indigo-100 transition-colors flex items-center disabled:opacity-50 border border-indigo-200 shadow-sm text-sm"
+                          >
+                            {termCopySuccess === 'A3' ? <CheckCircle className="w-4 h-4 mr-1.5" /> : <Copy className="w-4 h-4 mr-1.5" />}
+                            Copy {tPrefix}A3
+                          </button>
+                        </>
+                      )}
+                    </>
+                  );
+                })()}
+
                 <button
                   onClick={calculateTermScores}
                   disabled={!selectedPresetId || isCalculatingScores || modalClasses.length === 0}
-                  className="bg-purple-600 text-white px-6 py-2 rounded-md font-medium hover:bg-purple-700 transition-colors flex items-center disabled:opacity-50 shadow-sm"
+                  className="bg-purple-600 text-white px-6 py-2 rounded-md font-medium hover:bg-purple-700 transition-colors flex items-center disabled:opacity-50 shadow-sm ml-2"
                 >
                   {isCalculatingScores ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Calculator className="w-4 h-4 mr-2" />}
-                  Calculate Scores
+                  Calculate
                 </button>
               </div>
             </div>
@@ -3976,29 +4045,58 @@ export default function Marks() {
                       <th className="p-3 border-b border-gray-200">Name</th>
                       {displayCategories.map(cat => {
                         const weight = termScoresData[0].categoryScores[cat]?.weight || 0;
+                        const tPrefix = getTermPrefix();
+                        let headerName = cat;
+                        if (cat === 'Uniform Test') headerName = `Uniform Test (${tPrefix}A3)`;
+
                         return (
                           <th key={cat} className="p-3 border-b border-gray-200 text-center">
-                            {cat} <span className="text-xs text-purple-600 block normal-case font-bold">{weight}%</span>
+                            {headerName} <span className="text-xs text-purple-600 block normal-case font-bold">{weight}%</span>
                           </th>
                         );
                       })}
-                      <th className="p-3 border-b border-gray-200 text-center text-purple-800 font-bold">Overall Score</th>
+
+                      {(() => {
+                        const preset = presets.find(p => p.id === selectedPresetId);
+                        const isLearningAttitude = preset && preset.name.includes('Learning Attitude');
+                        const tPrefix = getTermPrefix();
+                        const overallTitle = isLearningAttitude ? 'Learning Attitude' : `Daily Marks (${tPrefix}A1)`;
+
+                        return (
+                          <>
+                            <th className="p-3 border-b border-gray-200 text-center text-purple-800 font-bold border-l-2 border-purple-200">
+                              {overallTitle}
+                            </th>
+                            {!isLearningAttitude && (
+                              <>
+                                <th className="w-4 border-b border-gray-200 bg-gray-50"></th>
+                                <th className="p-3 border-b border-gray-200 text-center text-blue-800 font-bold border-l-2 border-blue-200">
+                                  Exam ({tPrefix}A2)
+                                </th>
+                              </>
+                            )}
+                          </>
+                        );
+                      })()}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {termScoresData.map((data, idx) => {
                       let rowBg = 'hover:bg-gray-50';
-                      let scoreBg = 'bg-purple-50/50 text-purple-700';
+                      let scoreBg = 'bg-purple-50/50 text-purple-700 border-l-2 border-purple-200';
                       if (data.highlight === 'top') {
                         rowBg = 'bg-green-50 hover:bg-green-100';
-                        scoreBg = 'bg-green-100 text-green-800';
+                        scoreBg = 'bg-green-100 text-green-800 border-l-2 border-green-300';
                       } else if (data.highlight === 'middle') {
                         rowBg = 'bg-blue-50 hover:bg-blue-100';
-                        scoreBg = 'bg-blue-100 text-blue-800';
+                        scoreBg = 'bg-blue-100 text-blue-800 border-l-2 border-blue-300';
                       } else if (data.highlight === 'bottom') {
                         rowBg = 'bg-orange-50 hover:bg-orange-100';
-                        scoreBg = 'bg-orange-100 text-orange-800';
+                        scoreBg = 'bg-orange-100 text-orange-800 border-l-2 border-orange-300';
                       }
+
+                      const preset = presets.find(p => p.id === selectedPresetId);
+                      const isLearningAttitude = preset && preset.name.includes('Learning Attitude');
 
                       return (
                         <tr key={idx} className={rowBg}>
@@ -4019,6 +4117,14 @@ export default function Marks() {
                           <td className={`p-3 text-center font-bold text-lg ${scoreBg}`}>
                             {data.overallScore}
                           </td>
+                          {!isLearningAttitude && (
+                            <>
+                              <td className="w-4 bg-gray-50"></td>
+                              <td className="p-3 text-center font-bold text-lg bg-blue-50/30 text-blue-700 border-l-2 border-blue-200">
+                                {data.rawExam !== undefined ? data.rawExam.toFixed(1) : '-'}
+                              </td>
+                            </>
+                          )}
                         </tr>
                       );
                     })}

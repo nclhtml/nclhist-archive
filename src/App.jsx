@@ -496,6 +496,12 @@ export default function AdvancedHistoryArchive() {
   // --- STATE ---
   const [archives, setArchives] = useState([]);
 
+  // Export Modal State
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [selectedExportItems, setSelectedExportItems] = useState([]);
+  const [exportSearchTerm, setExportSearchTerm] = useState('');
+  const [exportLanguage, setExportLanguage] = useState('en'); // 'en' or 'zh'
+
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [uploadSelection, setUploadSelection] = useState(null); // 'question' | 'sample' | null
   const [isManageFiltersOpen, setIsManageFiltersOpen] = useState(false);
@@ -2581,10 +2587,98 @@ export default function AdvancedHistoryArchive() {
     setCompareSample(null);
   };
 
+  const handleExportDoc = () => {
+    if (selectedExportItems.length === 0) return alert("Please select at least one question set.");
+
+    let htmlContent = `
+      <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+      <head><meta charset='utf-8'><title>Exported Question Sets</title>
+      <style>
+        body { font-family: Arial, sans-serif; }
+        h1 { color: #2563eb; font-size: 24pt; border-bottom: 2px solid #2563eb; padding-bottom: 5px; }
+        h2 { color: #1e40af; font-size: 18pt; margin-top: 20px; }
+        h3 { color: #475569; font-size: 14pt; }
+        .section { margin-bottom: 30px; padding: 15px; border: 1px solid #cbd5e1; background-color: #f8fafc; }
+        .placeholder { color: #dc2626; font-weight: bold; padding: 10px; border: 1px dashed #dc2626; background: #fef2f2; margin: 10px 0; }
+        .content-box { margin-bottom: 15px; }
+        a { color: #2563eb; text-decoration: none; }
+      </style>
+      </head><body>
+      <h1>AI Processing Document</h1>
+    `;
+
+    selectedExportItems.forEach((docItem, index) => {
+      const ansUrl = exportLanguage === 'zh' ? (docItem.answerFileUrlChi || docItem.answerFileUrl) : docItem.answerFileUrl;
+      const ansLinkHtml = ansUrl ? `<p><a href="${ansUrl}">[Link to Answer PDF]</a></p>` : `<div class="placeholder">[ANSWER PLACEHOLDER]</div>`;
+
+      htmlContent += `
+        <div class="section">
+          <h2>Question Set ${index + 1}: ${docItem.title} (${docItem.year} - ${docItem.origin})</h2>
+          
+          <div class="content-box">
+            <h3>[SOURCE PLACEHOLDER]</h3>
+            <div class="placeholder">[SOURCE PLACEHOLDER]</div>
+          </div>
+
+          <div class="content-box">
+            <h3>Questions</h3>
+      `;
+
+      docItem.subQuestions.forEach(sq => {
+        const content = exportLanguage === 'zh' ? (sq.contentChi || 'No Chinese content') : (sq.content || 'No English content');
+        htmlContent += `
+            <p><strong>Q${sq.label} (${sq.marks || 0} marks):</strong> ${content}</p>
+        `;
+      });
+
+      htmlContent += `
+          </div>
+
+          <div class="content-box">
+            <h3>Answer Key</h3>
+            ${ansLinkHtml}
+          </div>
+
+          <div class="content-box">
+            <h3>Candidate Performance</h3>
+      `;
+
+      docItem.subQuestions.forEach(sq => {
+        const perf = exportLanguage === 'zh' ? sq.candidatePerformanceChi : sq.candidatePerformance;
+        if (perf) {
+          htmlContent += `
+            <p><strong>Q${sq.label} Performance:</strong><br/>${perf}</p>
+          `;
+        }
+      });
+
+      htmlContent += `
+          </div>
+        </div>
+        <br clear=all style='mso-special-character:line-break;page-break-before:always'>
+      `;
+    });
+
+    htmlContent += `</body></html>`;
+
+    const blob = new Blob(['\ufeff', htmlContent], { type: 'application/msword' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `AI_Processing_Export_${exportLanguage}_${Date.now()}.doc`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    setIsExportModalOpen(false);
+    setSelectedExportItems([]);
+  };
+
   useEffect(() => {
-    document.body.style.overflow = (isUploadModalOpen || previewItem || isManageFiltersOpen || isUserManagementOpen || showMarksModal) ? 'hidden' : 'unset';
+    document.body.style.overflow = (isUploadModalOpen || previewItem || isManageFiltersOpen || isUserManagementOpen || showMarksModal || isExportModalOpen) ? 'hidden' : 'unset';
     return () => { document.body.style.overflow = 'unset'; };
-  }, [isUploadModalOpen, previewItem, isManageFiltersOpen, isUserManagementOpen, showMarksModal]);
+  }, [isUploadModalOpen, previewItem, isManageFiltersOpen, isUserManagementOpen, showMarksModal, isExportModalOpen]);
 
   // --- RENDER CONTENT ---
   const showTags = user?.isAdmin || currentUserRole === 'dse_only';
@@ -2647,6 +2741,14 @@ export default function AdvancedHistoryArchive() {
 
           {user && user.isAdmin && (
             <div className="flex gap-1.5 md:gap-2 w-full md:w-auto mt-2 md:mt-0 flex-nowrap md:flex-wrap">
+              {user.email === 'clng@ktls.edu.hk' && (
+                <button
+                  onClick={() => setIsExportModalOpen(true)}
+                  className="btn-secondary flex-1 md:flex-none hover:bg-amber-50 hover:text-amber-700 hover:border-amber-200 text-[10px] md:text-sm px-2 py-1.5 md:px-4 md:py-2"
+                >
+                  <FileText className="w-3.5 h-3.5 md:w-[18px] md:h-[18px]" /> <span className="whitespace-nowrap">Export AI Doc</span>
+                </button>
+              )}
               <button
                 onClick={() => setIsUserManagementOpen(true)}
                 className="btn-secondary flex-1 md:flex-none hover:bg-purple-50 hover:text-purple-700 hover:border-purple-200 text-[10px] md:text-sm px-2 py-1.5 md:px-4 md:py-2"
@@ -6165,6 +6267,109 @@ export default function AdvancedHistoryArchive() {
           </div>
         )}
       </AnimatePresence >
+
+      {/* --- EXPORT TO AI MODAL --- */}
+      <AnimatePresence>
+        {isExportModalOpen && user?.isAdmin && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[90] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-white rounded-xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+              <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    <FileText size={20} className="text-amber-600" /> Export to AI (.doc)
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-1">Select up to 4 question sets to generate a structured document for AI processing.</p>
+                </div>
+                <button onClick={() => setIsExportModalOpen(false)} className="text-slate-400 hover:text-slate-800"><X size={20} /></button>
+              </div>
+
+              <div className="p-5 flex-1 overflow-hidden flex flex-col gap-4 bg-slate-50/50">
+                {/* Language Selection */}
+                <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm shrink-0 flex items-center gap-4">
+                  <label className="text-sm font-bold text-slate-700">Export Language:</label>
+                  <select
+                    value={exportLanguage}
+                    onChange={(e) => setExportLanguage(e.target.value)}
+                    className="p-2 border border-slate-200 rounded-md text-sm outline-none focus:ring-2 focus:ring-amber-500"
+                  >
+                    <option value="en">English</option>
+                    <option value="zh">Chinese (中文)</option>
+                  </select>
+                </div>
+
+                {/* Selected Items Area */}
+                <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm shrink-0">
+                  <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Selected Sets ({selectedExportItems.length}/4)</h3>
+                  <div className="flex flex-col gap-2">
+                    {selectedExportItems.length === 0 ? (
+                      <div className="text-sm text-slate-400 italic">No sets selected yet. Search below to add.</div>
+                    ) : (
+                      selectedExportItems.map(item => (
+                        <div key={item.id} className="flex justify-between items-center bg-amber-50 border border-amber-200 p-2 rounded text-sm text-amber-900">
+                          <span className="font-bold">{item.title} <span className="font-normal text-amber-700">({item.year} - {item.origin})</span></span>
+                          <button onClick={() => setSelectedExportItems(prev => prev.filter(i => i.id !== item.id))} className="text-amber-500 hover:text-red-600"><X size={16} /></button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                {/* Search Area */}
+                <div className="flex-1 flex flex-col min-h-0 bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
+                  <div className="p-3 border-b border-slate-100 relative shrink-0">
+                    <Search className="absolute left-6 top-5 text-slate-400 w-4 h-4" />
+                    <input
+                      type="text"
+                      placeholder="Search by title, year, or origin to add..."
+                      value={exportSearchTerm}
+                      onChange={(e) => setExportSearchTerm(e.target.value)}
+                      className="w-full pl-9 pr-4 py-2 text-sm bg-slate-50 border border-slate-200 rounded-md focus:ring-2 focus:ring-amber-500 outline-none"
+                    />
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+                    {archives
+                      .filter(a =>
+                        !selectedExportItems.find(s => s.id === a.id) &&
+                        (exportSearchTerm === '' ||
+                          a.title.toLowerCase().includes(exportSearchTerm.toLowerCase()) ||
+                          String(a.year).includes(exportSearchTerm) ||
+                          a.origin.toLowerCase().includes(exportSearchTerm.toLowerCase()))
+                      )
+                      .slice(0, 50) // Limit to 50 for performance
+                      .map(archive => (
+                        <div key={archive.id} className="flex justify-between items-center p-3 hover:bg-slate-50 rounded-md border border-transparent hover:border-slate-200 transition-colors cursor-pointer" onClick={() => {
+                          if (selectedExportItems.length >= 4) {
+                            alert("You can only select up to 4 question sets.");
+                            return;
+                          }
+                          setSelectedExportItems([...selectedExportItems, archive]);
+                        }}>
+                          <div>
+                            <div className="font-bold text-slate-700 text-sm">{archive.title}</div>
+                            <div className="text-xs text-slate-500">{archive.year} • {archive.origin} • {archive.paperType}</div>
+                          </div>
+                          <button className="text-blue-600 bg-blue-50 px-2 py-1 rounded text-xs font-bold hover:bg-blue-100"><Plus size={14} /></button>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-4 border-t border-slate-100 bg-white flex justify-end gap-3 shrink-0">
+                <button onClick={() => setIsExportModalOpen(false)} className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg text-sm font-medium transition-colors">Cancel</button>
+                <button
+                  onClick={handleExportDoc}
+                  disabled={selectedExportItems.length === 0}
+                  className="px-6 py-2 bg-amber-600 text-white rounded-lg text-sm font-bold hover:bg-amber-700 disabled:opacity-50 transition-colors flex items-center gap-2"
+                >
+                  <Download size={16} /> Export .doc
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       <style>{`
         .custom-scrollbar::-webkit-scrollbar {
           width: 4px;

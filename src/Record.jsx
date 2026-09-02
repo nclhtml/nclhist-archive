@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AlertTriangle, Users, BookX, CheckCircle, Save, Upload, Plus, Trash2, Archive, Calendar, Loader2, MinusCircle, History, X } from 'lucide-react';
+import { AlertTriangle, Users, BookX, CheckCircle, Save, Upload, Plus, Trash2, Archive, Calendar, Loader2, MinusCircle, History, X, Printer, DollarSign, ChevronDown, ChevronUp } from 'lucide-react';
 import { collection, getDocs, doc, writeBatch, updateDoc, setDoc, getDoc, query, where, deleteDoc, addDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import { useAuth } from './main.jsx';
@@ -30,6 +30,18 @@ export default function Record() {
   const [notifications, setNotifications] = useState([]);
   const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, title: '', message: '', onConfirm: null });
   const [selectedStudent, setSelectedStudent] = useState(null); // For detailed student view
+
+  // Printing Record State
+  const [printingOrders, setPrintingOrders] = useState([]);
+  const [printingSettings, setPrintingSettings] = useState({
+    S1: { studentCount: 0, saving: 0 }, S2: { studentCount: 0, saving: 0 },
+    S3: { studentCount: 0, saving: 0 }, S4: { studentCount: 0, saving: 0 },
+    S5: { studentCount: 0, saving: 0 }, S6: { studentCount: 0, saving: 0 },
+  });
+  const [selectedForm, setSelectedForm] = useState('S1');
+  const [showArchived, setShowArchived] = useState(false);
+  const [newOrder, setNewOrder] = useState({ date: new Date().toISOString().split('T')[0], amount: '', type: 'Notes' });
+  const [addSavingAmount, setAddSavingAmount] = useState('');
 
   // ============================================================================
   // 1. FETCH DATA FROM FIREBASE
@@ -92,6 +104,16 @@ export default function Record() {
         const rolesList = rolesSnap.docs.map(d => d.id);
         setAvailableEmails(rolesList);
 
+        // Fetch Printing Data (Only for superadmin)
+        if (user?.email === 'clng@ktls.edu.hk') {
+          const printSettingsSnap = await getDoc(doc(db, "settings", "printing"));
+          if (printSettingsSnap.exists()) {
+            setPrintingSettings(prev => ({ ...prev, ...printSettingsSnap.data() }));
+          }
+          const printOrdersSnap = await getDocs(collection(db, "printing_orders"));
+          setPrintingOrders(printOrdersSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+        }
+
         // Check for pending orange sheets on load
         const pendingNotifications = [];
         studentsList.forEach(student => {
@@ -128,39 +150,56 @@ export default function Record() {
     const lines = bulkInput.split('\n');
     const newStudents = [];
 
-    for (const line of lines) {
-      if (!line.trim()) continue;
+    for (let line of lines) {
+      line = line.trim();
+      if (!line) continue;
+
+      // Automatically skip the header row if you copied it from Excel
+      const upperLine = line.toUpperCase();
+      if (upperLine.includes('CLASSNAME') || upperLine.includes('CLASSCODE') || upperLine.includes('ENNAME')) {
+        continue;
+      }
 
       let classNumber = '';
       let englishName = '';
       let chineseName = '';
       let email = '';
 
-      // Split by tabs and remove any empty parts caused by multiple tabs
+      // Split by tabs (which is how Excel formats copied cells)
       const parts = line.split('\t').map(p => p.trim()).filter(p => p !== '');
 
-      if (parts.length >= 4 && /^\d+$/.test(parts[1])) {
-        classNumber = parts[0] + parts[1];
-        englishName = parts[2];
-        chineseName = parts[3];
-        email = parts[4] || ''; // Optional 5th column for email
-      } else if (parts.length >= 3) {
+      // Format from your Excel: [Class] [ClassNo] [RegNo] [EnName] [ChName]
+      if (parts.length >= 5) {
+        const rowClass = parts[0];
+        const rowClassNo = parts[1];
+        // parts[2] is RegNo, which we completely ignore
+        englishName = parts[3];
+        chineseName = parts[4];
+        email = parts[5] || '';
+
+        // If the class in Excel matches the selected class, just use the class number (e.g. "1")
+        // If it's different, combine them (e.g. "4B" + "1" = "4B1")
+        if (rowClass === selectedClass) {
+          classNumber = rowClassNo;
+        } else {
+          classNumber = rowClass + rowClassNo;
+        }
+      }
+      // Fallback for simpler 3-column formats: [ClassNo] [EnName] [ChName]
+      else if (parts.length === 3) {
         classNumber = parts[0];
         englishName = parts[1];
         chineseName = parts[2];
-        email = parts[3] || ''; // Optional 4th column for email
-      } else {
+      }
+      else {
         // Fallback to regex if spaces are used instead of tabs
         const cleanLine = line.trim();
-
-        // First try to match 4 parts separated by spaces: [Class] [Number] [English] [Chinese]
         const match4 = cleanLine.match(/^([A-Za-z0-9]+)\s+(\d+)\s+(.+?)\s+([^\x00-\x7F]+)$/);
         if (match4) {
-          classNumber = match4[1] + match4[2]; // Combine class and number
+          classNumber = match4[1] === selectedClass ? match4[2] : match4[1] + match4[2];
           englishName = match4[3];
           chineseName = match4[4];
         } else {
-          // Then try 3 parts: [ClassNumber] [English] [Chinese]
           const match3 = cleanLine.match(/^([A-Za-z0-9]+)\s+(.+?)\s+([^\x00-\x7F]+)$/);
           if (match3) {
             classNumber = match3[1];
@@ -602,6 +641,74 @@ export default function Record() {
   };
 
   // ============================================================================
+  // 9. PRINTING RECORDS FUNCTIONS
+  // ============================================================================
+  const handleSavePrintingSettings = async (form, field, value) => {
+    const updatedSettings = {
+      ...printingSettings,
+      [form]: { ...printingSettings[form], [field]: Number(value) }
+    };
+    setPrintingSettings(updatedSettings);
+    await setDoc(doc(db, "settings", "printing"), updatedSettings, { merge: true });
+  };
+
+  const handleAddSaving = async () => {
+    if (!addSavingAmount || isNaN(addSavingAmount)) return;
+    const currentSaving = printingSettings[selectedForm]?.saving || 0;
+    const newSaving = currentSaving + Number(addSavingAmount);
+    await handleSavePrintingSettings(selectedForm, 'saving', newSaving);
+    setAddSavingAmount('');
+  };
+
+  const handleCreateOrder = async (e) => {
+    e.preventDefault();
+    const orderData = {
+      form: selectedForm,
+      date: newOrder.date,
+      amount: Number(newOrder.amount) || 0,
+      type: newOrder.type,
+      isArchived: false,
+      title: 'Manual Entry'
+    };
+    const docRef = await addDoc(collection(db, "printing_orders"), orderData);
+    setPrintingOrders([...printingOrders, { id: docRef.id, ...orderData }]);
+    setNewOrder({ date: new Date().toISOString().split('T')[0], amount: '', type: 'Notes' });
+  };
+
+  const handleUpdateOrderAmount = async (orderId, newAmount) => {
+    await updateDoc(doc(db, "printing_orders", orderId), { amount: Number(newAmount) });
+    setPrintingOrders(printingOrders.map(o => o.id === orderId ? { ...o, amount: Number(newAmount) } : o));
+  };
+
+  const handlePaymentPaid = async () => {
+    const currentOrders = printingOrders.filter(o => o.form === selectedForm && !o.isArchived);
+    if (currentOrders.length === 0) return alert("No active invoices to archive.");
+
+    if (!window.confirm("Are you sure you want to mark these as paid? This will archive the current list and deduct the total from your savings.")) return;
+
+    const totalAmount = currentOrders.reduce((sum, o) => sum + (Number(o.amount) || 0), 0);
+    const currentSaving = printingSettings[selectedForm]?.saving || 0;
+    const remainingSaving = currentSaving - totalAmount;
+
+    const batch = writeBatch(db);
+    const batchId = new Date().toISOString();
+
+    currentOrders.forEach(order => {
+      const ref = doc(db, "printing_orders", order.id);
+      batch.update(ref, { isArchived: true, archiveBatch: batchId });
+    });
+
+    await batch.commit();
+
+    await handleSavePrintingSettings(selectedForm, 'saving', remainingSaving);
+
+    setPrintingOrders(printingOrders.map(o =>
+      (o.form === selectedForm && !o.isArchived) ? { ...o, isArchived: true, archiveBatch: batchId } : o
+    ));
+    alert("Payment processed and invoices archived.");
+  };
+
+  // ============================================================================
   // UI RENDERING
   // ============================================================================
   if (isLoading) {
@@ -745,6 +852,15 @@ export default function Record() {
           <Users className="w-5 h-5 mr-2" />
           Manage Classes & Students
         </button>
+        {user?.email === 'clng@ktls.edu.hk' && (
+          <button
+            onClick={() => setActiveTab('printing')}
+            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${activeTab === 'printing' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-200'}`}
+          >
+            <Printer className="w-5 h-5 mr-2" />
+            Printing Record
+          </button>
+        )}
       </div>
 
       {/* Notifications Panel */}
@@ -1018,9 +1134,9 @@ export default function Record() {
             <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
               <h2 className="text-lg font-semibold mb-2 text-gray-800">Bulk Import Students</h2>
               <p className="text-xs text-gray-500 mb-4">
-                Paste your list below. Format: <br />
-                <code className="bg-gray-100 px-1 py-0.5 rounded text-gray-700">1 CHAN WING YAU 陳泳攸</code><br />
-                <code className="bg-gray-100 px-1 py-0.5 rounded text-gray-700 mt-1 inline-block">5A1 AU KYLIE 歐依穎</code>
+                Copy the cells from your Excel file from top-left to bottom-right, <strong>including all headers</strong>, and paste them below. <br /><br />
+                Expected columns: <br />
+                <code className="bg-gray-100 px-1 py-0.5 rounded text-gray-700 mt-1 inline-block">CLASSNAME | CLASSNO | REGNO | ENNAME | CHNAME</code>
               </p>
 
               <form onSubmit={handleBulkImport} className="space-y-4">
@@ -1029,7 +1145,7 @@ export default function Record() {
                   onChange={(e) => setBulkInput(e.target.value)}
                   rows="8"
                   className="w-full border border-gray-300 rounded-md p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-mono whitespace-pre"
-                  placeholder="1 CHAN WING YAU 陳泳攸&#10;5A1 AU KYLIE 歐依穎"
+                  placeholder={`CLASSCODE\tCLASSNO\tREGNO\tENNAME\tCHNAME\n4B\t6\t231017\tXXX HINATA\t周XX\n4C\t10\t231016\tYYY SIBI\t陳YY\n...`}
                   required
                   disabled={!selectedClass}
                 />
@@ -1112,6 +1228,202 @@ export default function Record() {
                   )}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 4: Printing Record (Superadmin Only) */}
+      {activeTab === 'printing' && user?.email === 'clng@ktls.edu.hk' && (
+        <div className="max-w-5xl mx-auto space-y-6">
+          {/* Form Selector */}
+          <div className="flex space-x-2 overflow-x-auto pb-2">
+            {['S1', 'S2', 'S3', 'S4', 'S5', 'S6'].map(form => (
+              <button
+                key={form}
+                onClick={() => setSelectedForm(form)}
+                className={`px-6 py-2 rounded-md font-bold transition-colors ${selectedForm === form ? 'bg-gray-800 text-white' : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-100'}`}
+              >
+                {form}
+              </button>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Left Column: Settings & Create */}
+            <div className="space-y-6">
+              <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+                <h2 className="text-lg font-semibold mb-4 text-gray-800">Form Settings</h2>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm text-gray-600 mb-1">Number of Students</label>
+                    <input
+                      type="number"
+                      value={printingSettings[selectedForm]?.studentCount || ''}
+                      onChange={(e) => handleSavePrintingSettings(selectedForm, 'studentCount', e.target.value)}
+                      className="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500"
+                      placeholder="e.g. 120"
+                    />
+                  </div>
+                  <div className="p-3 bg-blue-50 rounded-md border border-blue-100">
+                    <label className="block text-sm font-medium text-blue-800 mb-1">Original Saving ($)</label>
+                    <input
+                      type="number"
+                      value={printingSettings[selectedForm]?.saving || ''}
+                      onChange={(e) => handleSavePrintingSettings(selectedForm, 'saving', e.target.value)}
+                      className="w-full border border-blue-200 rounded p-2 outline-none focus:border-blue-500 mb-2"
+                    />
+                    <div className="flex space-x-2">
+                      <input
+                        type="number"
+                        value={addSavingAmount}
+                        onChange={(e) => setAddSavingAmount(e.target.value)}
+                        placeholder="Add amount..."
+                        className="w-full border border-blue-200 rounded p-2 outline-none text-sm"
+                      />
+                      <button onClick={handleAddSaving} className="bg-blue-600 text-white px-3 rounded hover:bg-blue-700">Add</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+                <h2 className="text-lg font-semibold mb-4 text-gray-800">Create Invoice</h2>
+                <form onSubmit={handleCreateOrder} className="space-y-4">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Date</label>
+                    <input type="date" required value={newOrder.date} onChange={e => setNewOrder({ ...newOrder, date: e.target.value })} className="w-full border border-gray-300 rounded p-2" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Type</label>
+                    <select value={newOrder.type} onChange={e => setNewOrder({ ...newOrder, type: e.target.value })} className="w-full border border-gray-300 rounded p-2">
+                      <option value="Notes">Notes (筆記)</option>
+                      <option value="Assignment">Assignment (習作)</option>
+                      <option value="Quiz">Quiz (小測)</option>
+                      <option value="Others">Others</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Amount ($)</label>
+                    <input type="number" step="0.1" required value={newOrder.amount} onChange={e => setNewOrder({ ...newOrder, amount: e.target.value })} className="w-full border border-gray-300 rounded p-2" placeholder="0.00" />
+                  </div>
+                  <button type="submit" className="w-full bg-green-600 text-white p-2 rounded hover:bg-green-700 flex justify-center items-center">
+                    <Plus className="w-4 h-4 mr-1" /> Add Invoice
+                  </button>
+                </form>
+              </div>
+            </div>
+
+            {/* Right Column: Invoices */}
+            <div className="lg:col-span-2 space-y-6">
+              <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-xl font-semibold text-gray-800">Current Invoices: {selectedForm}</h2>
+                  <button onClick={handlePaymentPaid} className="bg-purple-600 text-white px-4 py-2 rounded-md hover:bg-purple-700 flex items-center text-sm font-medium">
+                    <CheckCircle className="w-4 h-4 mr-2" /> Payment Paid
+                  </button>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse mb-4">
+                    <thead>
+                      <tr className="bg-gray-100 text-gray-600 text-sm">
+                        <th className="p-3 border-b">Date</th>
+                        <th className="p-3 border-b">Title / Source</th>
+                        <th className="p-3 border-b">Type</th>
+                        <th className="p-3 border-b text-right">Amount ($)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {printingOrders.filter(o => o.form === selectedForm && !o.isArchived).map(order => (
+                        <tr key={order.id} className="border-b hover:bg-gray-50">
+                          <td className="p-3 text-sm">{order.date}</td>
+                          <td className="p-3 text-sm text-gray-600">{order.title || 'Manual Entry'}</td>
+                          <td className="p-3 text-sm">
+                            <span className="px-2 py-1 bg-gray-100 rounded text-xs">{order.type}</span>
+                          </td>
+                          <td className="p-3 text-right">
+                            <input
+                              type="number"
+                              step="0.1"
+                              value={order.amount === 0 ? '' : order.amount}
+                              onChange={(e) => handleUpdateOrderAmount(order.id, e.target.value)}
+                              className="w-24 border border-gray-300 rounded p-1 text-right outline-none focus:border-blue-500"
+                              placeholder="0.00"
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                      {printingOrders.filter(o => o.form === selectedForm && !o.isArchived).length === 0 && (
+                        <tr><td colSpan="4" className="p-4 text-center text-gray-500">No active invoices.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Summaries */}
+                {(() => {
+                  const currentOrders = printingOrders.filter(o => o.form === selectedForm && !o.isArchived);
+                  const totalAmount = currentOrders.reduce((sum, o) => sum + (Number(o.amount) || 0), 0);
+                  const studentCount = printingSettings[selectedForm]?.studentCount || 0;
+                  const perStudent = studentCount > 0 ? (totalAmount / studentCount).toFixed(2) : '0.00';
+                  const currentSaving = printingSettings[selectedForm]?.saving || 0;
+                  const remainingSaving = currentSaving - totalAmount;
+
+                  return (
+                    <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 flex flex-wrap justify-between items-center gap-4">
+                      <div>
+                        <p className="text-sm text-gray-500">Total Amount</p>
+                        <p className="text-xl font-bold text-gray-800">${totalAmount.toFixed(2)}</p>
+                        <p className="text-xs text-gray-500 mt-1">${perStudent} per student</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm text-gray-500">Remaining Saving</p>
+                        <p className={`text-xl font-bold ${remainingSaving < 0 ? 'text-red-600' : 'text-green-600'}`}>
+                          ${remainingSaving.toFixed(2)}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Archived Invoices */}
+              <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+                <button
+                  onClick={() => setShowArchived(!showArchived)}
+                  className="flex items-center justify-between w-full text-left font-semibold text-gray-800"
+                >
+                  <span>Past / Paid Invoices</span>
+                  {showArchived ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                </button>
+
+                {showArchived && (
+                  <div className="mt-4 overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-gray-100 text-gray-600 text-sm">
+                          <th className="p-3 border-b">Date</th>
+                          <th className="p-3 border-b">Title</th>
+                          <th className="p-3 border-b">Type</th>
+                          <th className="p-3 border-b text-right">Amount ($)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {printingOrders.filter(o => o.form === selectedForm && o.isArchived).map(order => (
+                          <tr key={order.id} className="border-b text-gray-500">
+                            <td className="p-3 text-sm">{order.date}</td>
+                            <td className="p-3 text-sm">{order.title || 'Manual Entry'}</td>
+                            <td className="p-3 text-sm">{order.type}</td>
+                            <td className="p-3 text-right">${Number(order.amount).toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
             </div>
           </div>
         </div>

@@ -115,11 +115,27 @@ export default function StudentDashboard() {
             let loadedClasses = [];
 
             if (user?.isAdmin) {
-                // Admins can see all classes
                 const classDocRef = doc(db, "settings", "classes");
                 const classDocSnap = await getDoc(classDocRef);
                 if (classDocSnap.exists()) {
-                    loadedClasses = classDocSnap.data().list || [];
+                    const rawList = classDocSnap.data().list || [];
+
+                    // Check if the user is a super admin (adjust this check based on your actual user object)
+                    const isSuperAdmin = user.isSuperAdmin || user.role === 'superadmin' || user.role === 'super_admin';
+
+                    if (isSuperAdmin) {
+                        // Super Admins see ALL classes
+                        loadedClasses = rawList.map(c => typeof c === 'string' ? c : c.name);
+                    } else {
+                        // Regular Admins only see classes they own
+                        loadedClasses = rawList
+                            .filter(c => {
+                                // If it's an old string format, we can't check the owner, so we might hide it or show it. 
+                                // Assuming we only show objects where owner matches:
+                                return typeof c === 'object' && c.owner === user.email;
+                            })
+                            .map(c => c.name);
+                    }
                 }
             } else if (user?.email) {
                 const userEmail = user.email.toLowerCase().trim();

@@ -30,6 +30,8 @@ export default function Record() {
   const [notifications, setNotifications] = useState([]);
   const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, title: '', message: '', onConfirm: null });
   const [selectedStudent, setSelectedStudent] = useState(null); // For detailed student view
+  const [deleteStudentDialog, setDeleteStudentDialog] = useState({ isOpen: false, student: null, keepRecord: true });
+  const [showDeletedStudents, setShowDeletedStudents] = useState(false);
 
   // Printing Record State
   const [printingOrders, setPrintingOrders] = useState([]);
@@ -42,6 +44,29 @@ export default function Record() {
   const [showArchived, setShowArchived] = useState(false);
   const [newOrder, setNewOrder] = useState({ date: new Date().toISOString().split('T')[0], amount: '', type: 'Notes' });
   const [addSavingAmount, setAddSavingAmount] = useState('');
+
+  // Email Draft State
+  const [emailForm, setEmailForm] = useState('S1');
+  const [emailSubject, setEmailSubject] = useState('歷史科');
+  const [emailType, setEmailType] = useState('筆記');
+  const [emailTypeCustom, setEmailTypeCustom] = useState('');
+  const [emailPhone, setEmailPhone] = useState('');
+  const [emailDate, setEmailDate] = useState(new Date().toISOString().split('T')[0]);
+  const [emailJuniorClasses, setEmailJuniorClasses] = useState(['A', 'B', 'C', 'D']);
+  const [emailCustomAmount, setEmailCustomAmount] = useState('');
+  const [emailSeniorAmount, setEmailSeniorAmount] = useState('');
+  const [emailSize, setEmailSize] = useState('A4紙');
+  const [emailSizeCustom, setEmailSizeCustom] = useState('');
+  const [emailSpec, setEmailSpec] = useState('黑白雙面');
+  const [emailBinding, setEmailBinding] = useState('騎馬釘小册子 (A3摺A4)');
+  const [emailBindingCustom, setEmailBindingCustom] = useState('');
+  const [emailRemarksHole, setEmailRemarksHole] = useState(true);
+  const [emailRemarksLate, setEmailRemarksLate] = useState(false);
+  const [emailRemarksPage, setEmailRemarksPage] = useState(false);
+  const [emailRemarksPageNum, setEmailRemarksPageNum] = useState('');
+  const [emailRemarksOther, setEmailRemarksOther] = useState(false);
+  const [emailRemarksOtherText, setEmailRemarksOtherText] = useState('');
+  const [emailTeacher, setEmailTeacher] = useState('');
 
   // ============================================================================
   // 1. FETCH DATA FROM FIREBASE
@@ -104,12 +129,14 @@ export default function Record() {
         const rolesList = rolesSnap.docs.map(d => d.id);
         setAvailableEmails(rolesList);
 
-        // Fetch Printing Data (Only for superadmin)
+        // Fetch Printing Settings for EVERYONE (needed for calculating student counts in email draft)
+        const printSettingsSnap = await getDoc(doc(db, "settings", "printing"));
+        if (printSettingsSnap.exists()) {
+          setPrintingSettings(prev => ({ ...prev, ...printSettingsSnap.data() }));
+        }
+
+        // Fetch Printing Orders (Only for superadmin)
         if (user?.email === 'clng@ktls.edu.hk') {
-          const printSettingsSnap = await getDoc(doc(db, "settings", "printing"));
-          if (printSettingsSnap.exists()) {
-            setPrintingSettings(prev => ({ ...prev, ...printSettingsSnap.data() }));
-          }
           const printOrdersSnap = await getDocs(collection(db, "printing_orders"));
           setPrintingOrders(printOrdersSnap.docs.map(d => ({ id: d.id, ...d.data() })));
         }
@@ -358,27 +385,36 @@ export default function Record() {
 
   const handleDeleteStudent = (student, e) => {
     if (e) e.stopPropagation(); // Prevent opening the student details modal
-    setConfirmDialog({
+    setDeleteStudentDialog({
       isOpen: true,
-      title: 'Delete Student',
-      message: `Are you sure you want to remove ${student.englishName} (No. ${student.classNumber}) from ${student.className}? This will permanently delete all their records.`,
-      onConfirm: async () => {
-        try {
-          await deleteDoc(doc(db, "students", student.id));
-          setStudents(students.filter(s => s.id !== student.id));
-          setConfirmDialog({ isOpen: false });
-
-          // Close modal if the deleted student was currently being viewed
-          if (selectedStudent?.id === student.id) {
-            setSelectedStudent(null);
-          }
-        } catch (error) {
-          console.error("Error deleting student:", error);
-          alert("Failed to delete student.");
-          setConfirmDialog({ isOpen: false });
-        }
-      }
+      student: student,
+      keepRecord: true
     });
+  };
+
+  const confirmDeleteStudent = async () => {
+    const { student, keepRecord } = deleteStudentDialog;
+    if (!student) return;
+
+    try {
+      if (keepRecord) {
+        await updateDoc(doc(db, "students", student.id), { isDeleted: true });
+        setStudents(students.map(s => s.id === student.id ? { ...s, isDeleted: true } : s));
+      } else {
+        await deleteDoc(doc(db, "students", student.id));
+        setStudents(students.filter(s => s.id !== student.id));
+      }
+      setDeleteStudentDialog({ isOpen: false, student: null, keepRecord: true });
+
+      // Close modal if the deleted student was currently being viewed
+      if (selectedStudent?.id === student.id) {
+        setSelectedStudent(null);
+      }
+    } catch (error) {
+      console.error("Error deleting student:", error);
+      alert("Failed to delete student.");
+      setDeleteStudentDialog({ isOpen: false, student: null, keepRecord: true });
+    }
   };
 
   const handleUpdateEmail = async (studentId, newEmail) => {
@@ -641,8 +677,127 @@ export default function Record() {
   };
 
   // ============================================================================
-  // 9. PRINTING RECORDS FUNCTIONS
+  // 8.5. DRAFT EMAIL FUNCTIONS
   // ============================================================================
+  useEffect(() => {
+    const savedPhone = localStorage.getItem('ktls_email_phone');
+    const savedTeacher = localStorage.getItem('ktls_email_teacher');
+    if (savedPhone) setEmailPhone(savedPhone);
+    if (savedTeacher) setEmailTeacher(savedTeacher);
+  }, []);
+
+  useEffect(() => {
+    if (['S4', 'S5', 'S6'].includes(emailForm)) {
+      const savedAmt = localStorage.getItem(`ktls_email_amt_${emailForm}`);
+      if (savedAmt) {
+        setEmailSeniorAmount(savedAmt);
+      } else {
+        setEmailSeniorAmount(printingSettings[emailForm]?.studentCount || '');
+      }
+    }
+  }, [emailForm, printingSettings]);
+
+  const handlePhoneChange = (val) => {
+    setEmailPhone(val);
+    localStorage.setItem('ktls_email_phone', val);
+  };
+
+  const handleTeacherChange = (val) => {
+    setEmailTeacher(val);
+    localStorage.setItem('ktls_email_teacher', val);
+  };
+
+  const handleSeniorAmountChange = (val) => {
+    setEmailSeniorAmount(val);
+    localStorage.setItem(`ktls_email_amt_${emailForm}`, val);
+  };
+
+  const handleJuniorClassToggle = (cls) => {
+    if (cls === 'Others') {
+      setEmailJuniorClasses(['Others']);
+    } else if (cls === 'All') {
+      setEmailJuniorClasses(['A', 'B', 'C', 'D']);
+    } else {
+      let newClasses = emailJuniorClasses.filter(c => c !== 'Others');
+      if (newClasses.includes(cls)) {
+        newClasses = newClasses.filter(c => c !== cls);
+      } else {
+        newClasses.push(cls);
+      }
+      setEmailJuniorClasses(newClasses);
+    }
+  };
+
+  const handleGenerateEmail = () => {
+    const formMap = { S1: '中一級', S2: '中二級', S3: '中三級', S4: '中四級', S5: '中五級', S6: '中六級' };
+    const formName = formMap[emailForm];
+    const actualType = emailType === 'Others' ? emailTypeCustom : emailType;
+    const actualSize = emailSize === 'Others' ? emailSizeCustom : emailSize;
+    const actualBinding = emailBinding === 'Others' ? emailBindingCustom : emailBinding;
+
+    const title = `九龍真光中學${formName}${emailSubject}${actualType}影印`;
+
+    let total = 0;
+    let breakdown = '';
+    const isJunior = ['S1', 'S2', 'S3'].includes(emailForm);
+
+    if (isJunior) {
+      if (emailJuniorClasses.includes('Others')) {
+        total = Number(emailCustomAmount) || 0;
+      } else {
+        const formNum = emailForm.replace('S', '');
+        const classesToPrint = [];
+        ['A', 'B', 'C', 'D'].forEach(cls => {
+          if (emailJuniorClasses.includes(cls)) {
+            const count = Number(printingSettings[emailForm]?.[`studentCount${cls}`]) || 0;
+            total += count;
+            classesToPrint.push(`${formNum}${cls} ${count}`);
+          }
+        });
+        if (classesToPrint.length > 1) {
+          breakdown = classesToPrint.join('\n');
+        }
+      }
+    } else {
+      total = Number(emailSeniorAmount) || 0;
+    }
+
+    const d = new Date(emailDate);
+    const formattedDate = `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
+
+    let bindingStr = actualBinding === '無' ? '' : actualBinding;
+    if (emailRemarksHole && bindingStr && !bindingStr.includes('打孔')) {
+      bindingStr += '、打孔';
+    } else if (emailRemarksHole && !bindingStr) {
+      bindingStr = '打孔';
+    }
+
+    let remarksStr = '';
+    let rCount = 1;
+    if (emailRemarksHole) { remarksStr += `${rCount}. 請打孔。\n`; rCount++; }
+    if (emailRemarksLate) { remarksStr += `${rCount}. 如今日內無法送到學校，煩請告知。\n`; rCount++; }
+    if (emailRemarksPage && emailRemarksPageNum) { remarksStr += `${rCount}. 第${emailRemarksPageNum}頁的頁面方向與其他不同，影印時請注意。\n`; rCount++; }
+    if (emailRemarksOther && emailRemarksOtherText) { remarksStr += `${rCount}. ${emailRemarksOtherText}\n`; rCount++; }
+
+    let body = `李小姐：\n\n`;
+    body += `級別及科目：${formName}${emailSubject}${actualType}\n`;
+    body += `電話：${emailPhone}\n`;
+    body += `取件日期：${formattedDate}\n`;
+    body += `份數：共${total}份\n`;
+    body += `尺寸：${actualSize}\n`;
+    body += `規格：${emailSpec}\n`;
+    body += `釘裝： ${bindingStr}\n`;
+    if (remarksStr) {
+      body += `備註：\n${remarksStr}`;
+    }
+    if (breakdown) {
+      body += `\n請分班：\n${breakdown}\n`;
+    }
+    body += `\n${emailTeacher}老師\n`;
+
+    const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=unioncopyli@gmail.com&su=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
+    window.open(gmailUrl, '_blank');
+  };
   const handleSavePrintingSettings = async (form, field, value) => {
     const updatedSettings = {
       ...printingSettings,
@@ -678,6 +833,17 @@ export default function Record() {
   const handleUpdateOrderAmount = async (orderId, newAmount) => {
     await updateDoc(doc(db, "printing_orders", orderId), { amount: Number(newAmount) });
     setPrintingOrders(printingOrders.map(o => o.id === orderId ? { ...o, amount: Number(newAmount) } : o));
+  };
+
+  const handleDeleteOrder = async (orderId) => {
+    if (!window.confirm("Are you sure you want to delete this invoice?")) return;
+    try {
+      await deleteDoc(doc(db, "printing_orders", orderId));
+      setPrintingOrders(printingOrders.filter(o => o.id !== orderId));
+    } catch (error) {
+      console.error("Error deleting order:", error);
+      alert("Failed to delete invoice.");
+    }
   };
 
   const handlePaymentPaid = async () => {
@@ -740,6 +906,44 @@ export default function Record() {
                 className="px-4 py-2 text-white bg-red-600 hover:bg-red-700 rounded-md transition-colors"
               >
                 Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Student Modal */}
+      {deleteStudentDialog.isOpen && deleteStudentDialog.student && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-lg shadow-xl max-w-md w-full">
+            <h3 className="text-xl font-bold text-gray-900 mb-2">Delete Student</h3>
+            <p className="text-gray-600 mb-4">
+              Are you sure you want to remove <strong>{deleteStudentDialog.student.englishName}</strong> (No. {deleteStudentDialog.student.classNumber}) from {deleteStudentDialog.student.className}?
+            </p>
+            <label className="flex items-start space-x-3 mb-6 p-3 bg-gray-50 rounded-md border border-gray-200 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={deleteStudentDialog.keepRecord}
+                onChange={(e) => setDeleteStudentDialog({ ...deleteStudentDialog, keepRecord: e.target.checked })}
+                className="mt-1 rounded text-blue-600 focus:ring-blue-500"
+              />
+              <span className="text-sm text-gray-700">
+                <strong>Keep student record</strong><br />
+                The student will be hidden from active lists and marks, but you can still view their past records if needed. Uncheck to permanently delete.
+              </span>
+            </label>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setDeleteStudentDialog({ isOpen: false, student: null, keepRecord: true })}
+                className="px-4 py-2 text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeleteStudent}
+                className="px-4 py-2 text-white bg-red-600 hover:bg-red-700 rounded-md transition-colors"
+              >
+                Delete
               </button>
             </div>
           </div>
@@ -852,12 +1056,19 @@ export default function Record() {
           <Users className="w-5 h-5 mr-2" />
           Manage Classes & Students
         </button>
+        <button
+          onClick={() => setActiveTab('draft')}
+          className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${activeTab === 'draft' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-200'}`}
+        >
+          <Printer className="w-5 h-5 mr-2" />
+          Draft Printing Email
+        </button>
         {user?.email === 'clng@ktls.edu.hk' && (
           <button
             onClick={() => setActiveTab('printing')}
             className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${activeTab === 'printing' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-200'}`}
           >
-            <Printer className="w-5 h-5 mr-2" />
+            <DollarSign className="w-5 h-5 mr-2" />
             Printing Record
           </button>
         )}
@@ -1164,9 +1375,20 @@ export default function Record() {
           <div className="lg:col-span-2 bg-white p-6 rounded-lg shadow-sm border border-gray-200">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-semibold text-gray-800">Student List: {selectedClass || 'None'}</h2>
-              <span className="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-1 rounded-full">
-                {students.filter(s => s.className === selectedClass).length} Students
-              </span>
+              <div className="flex items-center space-x-3">
+                <label className="flex items-center text-sm text-gray-600 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={showDeletedStudents}
+                    onChange={(e) => setShowDeletedStudents(e.target.checked)}
+                    className="mr-2 rounded text-blue-600 focus:ring-blue-500"
+                  />
+                  Show deleted students
+                </label>
+                <span className="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-1 rounded-full">
+                  {students.filter(s => s.className === selectedClass && (!s.isDeleted || showDeletedStudents)).length} Students
+                </span>
+              </div>
             </div>
             <p className="text-sm text-gray-500 mb-4 italic">Click on a student row to view and manage their detailed records.</p>
 
@@ -1184,7 +1406,7 @@ export default function Record() {
                 </thead>
                 <tbody>
                   {students
-                    .filter(s => s.className === selectedClass)
+                    .filter(s => s.className === selectedClass && (!s.isDeleted || showDeletedStudents))
                     // Updated sorting logic to properly handle alphanumeric sorting (e.g., 5A2 comes before 5A14)
                     .sort((a, b) => String(a.classNumber).localeCompare(String(b.classNumber), undefined, { numeric: true }))
                     .map(student => {
@@ -1197,7 +1419,10 @@ export default function Record() {
                           title="Click to view details"
                         >
                           <td className="p-3 font-medium text-gray-800">{student.classNumber}</td>
-                          <td className="p-3 text-gray-700">{student.englishName}</td>
+                          <td className="p-3 text-gray-700">
+                            {student.englishName}
+                            {student.isDeleted && <span className="ml-2 text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded">Deleted</span>}
+                          </td>
                           <td className="p-3 text-gray-700">{student.chineseName}</td>
                           <td className="p-3 text-center">
                             <span className={`px-2 py-1 rounded-full text-xs font-bold ${(student.recordCount || 0) > 0 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
@@ -1233,7 +1458,244 @@ export default function Record() {
         </div>
       )}
 
-      {/* TAB 4: Printing Record (Superadmin Only) */}
+      {/* TAB: Draft Printing Email */}
+      {activeTab === 'draft' && (
+        <div className="max-w-5xl mx-auto bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+          <h2 className="text-2xl font-semibold mb-6 text-gray-800 flex items-center">
+            <Printer className="w-6 h-6 mr-2 text-blue-600" />
+            Draft Printing Order Email
+          </h2>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            {/* Left Column: Settings */}
+            <div className="space-y-5">
+              {/* Form & Subject & Type */}
+              <div className="flex space-x-3">
+                <div className="flex-1">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">級別</label>
+                  <select value={emailForm} onChange={e => setEmailForm(e.target.value)} className="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500">
+                    <option value="S1">中一級</option>
+                    <option value="S2">中二級</option>
+                    <option value="S3">中三級</option>
+                    <option value="S4">中四級</option>
+                    <option value="S5">中五級</option>
+                    <option value="S6">中六級</option>
+                  </select>
+                </div>
+                <div className="flex-1">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">科目</label>
+                  <input type="text" value={emailSubject} onChange={e => setEmailSubject(e.target.value)} className="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500" />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">種類</label>
+                  <select value={emailType} onChange={e => setEmailType(e.target.value)} className="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500">
+                    <option value="筆記">筆記</option>
+                    <option value="習作">習作</option>
+                    <option value="小測">小測</option>
+                    <option value="Others">其他 (Others)...</option>
+                  </select>
+                  {emailType === 'Others' && (
+                    <input type="text" value={emailTypeCustom} onChange={e => setEmailTypeCustom(e.target.value)} className="mt-2 w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500" placeholder="請輸入種類" />
+                  )}
+                </div>
+              </div>
+
+              {/* Phone & Date */}
+              <div className="flex space-x-3">
+                <div className="flex-1">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">電話 <span className="text-xs text-gray-500 font-normal ml-1">(輸入後將自動儲存為預設)</span></label>
+                  <input type="text" value={emailPhone} onChange={e => handlePhoneChange(e.target.value)} className="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500" />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">取件日期</label>
+                  <div className="flex space-x-2">
+                    <input type="date" value={emailDate} min={new Date().toISOString().split('T')[0]} onChange={e => setEmailDate(e.target.value)} className="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500" />
+                    <button type="button" onClick={() => {
+                      const tmr = new Date();
+                      tmr.setDate(tmr.getDate() + 1);
+                      setEmailDate(tmr.toISOString().split('T')[0]);
+                    }} className="px-4 bg-gray-100 border border-gray-300 rounded hover:bg-gray-200 text-sm whitespace-nowrap transition-colors">明天</button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Amount */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">份數</label>
+                {['S1', 'S2', 'S3'].includes(emailForm) ? (
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap gap-2">
+                      <button onClick={() => handleJuniorClassToggle('All')} className={`px-4 py-1.5 rounded-md border text-sm font-medium transition-colors ${emailJuniorClasses.length === 4 && !emailJuniorClasses.includes('Others') ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}>全級 (Full Form)</button>
+                      {['A', 'B', 'C', 'D'].map(cls => (
+                        <button key={cls} onClick={() => handleJuniorClassToggle(cls)} className={`px-4 py-1.5 rounded-md border text-sm font-medium transition-colors ${emailJuniorClasses.includes(cls) ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}>{emailForm.replace('S', '')}{cls}</button>
+                      ))}
+                      <button onClick={() => handleJuniorClassToggle('Others')} className={`px-4 py-1.5 rounded-md border text-sm font-medium transition-colors ${emailJuniorClasses.includes('Others') ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}>Others</button>
+                    </div>
+                    {emailJuniorClasses.includes('Others') && (
+                      <input type="number" value={emailCustomAmount} onChange={e => setEmailCustomAmount(e.target.value)} placeholder="自訂份數" className="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500" />
+                    )}
+                  </div>
+                ) : (
+                  <input type="number" value={emailSeniorAmount} onChange={e => handleSeniorAmountChange(e.target.value)} className="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500" placeholder="輸入份數" />
+                )}
+              </div>
+
+              {/* Size & Specs */}
+              <div className="flex space-x-3">
+                <div className="flex-1">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">尺寸</label>
+                  <select value={emailSize} onChange={e => setEmailSize(e.target.value)} className="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500">
+                    <option value="A4紙">A4紙</option>
+                    <option value="A3紙">A3紙</option>
+                    <option value="B4紙">B4紙</option>
+                    <option value="Others">其他 (Others)...</option>
+                  </select>
+                  {emailSize === 'Others' && (
+                    <input type="text" value={emailSizeCustom} onChange={e => setEmailSizeCustom(e.target.value)} className="mt-2 w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500" placeholder="請輸入尺寸" />
+                  )}
+                </div>
+                <div className="flex-1">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">規格</label>
+                  <select value={emailSpec} onChange={e => setEmailSpec(e.target.value)} className="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500">
+                    <option value="黑白雙面">黑白雙面</option>
+                    <option value="黑白單面">黑白單面</option>
+                    <option value="彩色雙面">彩色雙面</option>
+                    <option value="彩色單面">彩色單面</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Binding */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">釘裝</label>
+                <select value={emailBinding} onChange={e => setEmailBinding(e.target.value)} className="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500">
+                  <option value="騎馬釘小册子 (A3摺A4)">騎馬釘小册子 (A3摺A4)</option>
+                  <option value="角釘">角釘</option>
+                  <option value="無">無</option>
+                  <option value="Others">其他 (Others)...</option>
+                </select>
+                {emailBinding === 'Others' && (
+                  <input type="text" value={emailBindingCustom} onChange={e => setEmailBindingCustom(e.target.value)} className="mt-2 w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500" placeholder="請輸入釘裝" />
+                )}
+              </div>
+
+              {/* Remarks */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">備註</label>
+                <div className="space-y-3 text-sm text-gray-700">
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input type="checkbox" checked={emailRemarksHole} onChange={e => setEmailRemarksHole(e.target.checked)} className="rounded w-4 h-4 text-blue-600 focus:ring-blue-500" />
+                    <span>請打孔。</span>
+                  </label>
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input type="checkbox" checked={emailRemarksLate} onChange={e => setEmailRemarksLate(e.target.checked)} className="rounded w-4 h-4 text-blue-600 focus:ring-blue-500" />
+                    <span>如今日內無法送到學校，煩請告知。</span>
+                  </label>
+                  <div className="flex items-center space-x-2">
+                    <input type="checkbox" checked={emailRemarksPage} onChange={e => setEmailRemarksPage(e.target.checked)} className="rounded w-4 h-4 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+                    <span>第</span>
+                    <input type="text" value={emailRemarksPageNum} onChange={e => setEmailRemarksPageNum(e.target.value)} className="border border-gray-300 rounded px-2 py-1 w-12 text-center outline-none focus:border-blue-500" disabled={!emailRemarksPage} />
+                    <span>頁的頁面方向與其他不同，影印時請注意。</span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <input type="checkbox" checked={emailRemarksOther} onChange={e => setEmailRemarksOther(e.target.checked)} className="rounded w-4 h-4 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+                    <span>Others:</span>
+                    <input type="text" value={emailRemarksOtherText} onChange={e => setEmailRemarksOtherText(e.target.value)} className="border border-gray-300 rounded px-2 py-1 flex-1 outline-none focus:border-blue-500" disabled={!emailRemarksOther} />
+                  </div>
+                </div>
+              </div>
+
+              {/* Teacher */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">老師名稱 <span className="text-xs text-gray-500 font-normal ml-1">(輸入後將自動儲存為預設)</span></label>
+                <div className="flex items-center space-x-2">
+                  <input type="text" value={emailTeacher} onChange={e => handleTeacherChange(e.target.value)} className="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500" />
+                  <span className="text-gray-600 font-medium">老師</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Right Column: Preview & Action */}
+            <div className="bg-gray-50 p-6 rounded-lg border border-gray-200 flex flex-col h-full">
+              <h3 className="text-lg font-medium text-gray-800 mb-4">Email Preview</h3>
+              <div className="flex-1 bg-white p-5 rounded-md border border-gray-300 text-sm whitespace-pre-wrap font-mono overflow-y-auto text-gray-700 shadow-inner min-h-[400px]">
+                {(() => {
+                  const formMap = { S1: '中一級', S2: '中二級', S3: '中三級', S4: '中四級', S5: '中五級', S6: '中六級' };
+                  const formName = formMap[emailForm];
+                  const actualType = emailType === 'Others' ? emailTypeCustom : emailType;
+                  const actualSize = emailSize === 'Others' ? emailSizeCustom : emailSize;
+                  const actualBinding = emailBinding === 'Others' ? emailBindingCustom : emailBinding;
+
+                  const title = `九龍真光中學${formName}${emailSubject}${actualType}影印`;
+
+                  let total = 0;
+                  let breakdown = '';
+                  const isJunior = ['S1', 'S2', 'S3'].includes(emailForm);
+
+                  if (isJunior) {
+                    if (emailJuniorClasses.includes('Others')) {
+                      total = Number(emailCustomAmount) || 0;
+                    } else {
+                      const formNum = emailForm.replace('S', '');
+                      const classesToPrint = [];
+                      ['A', 'B', 'C', 'D'].forEach(cls => {
+                        if (emailJuniorClasses.includes(cls)) {
+                          const count = Number(printingSettings[emailForm]?.[`studentCount${cls}`]) || 0;
+                          total += count;
+                          classesToPrint.push(`${formNum}${cls} ${count}`);
+                        }
+                      });
+                      if (classesToPrint.length > 1) {
+                        breakdown = classesToPrint.join('\n');
+                      }
+                    }
+                  } else {
+                    total = Number(emailSeniorAmount) || 0;
+                  }
+
+                  const d = new Date(emailDate);
+                  const formattedDate = `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
+
+                  let bindingStr = actualBinding === '無' ? '' : actualBinding;
+                  if (emailRemarksHole && bindingStr && !bindingStr.includes('打孔')) {
+                    bindingStr += '、打孔';
+                  } else if (emailRemarksHole && !bindingStr) {
+                    bindingStr = '打孔';
+                  }
+
+                  let remarksStr = '';
+                  let rCount = 1;
+                  if (emailRemarksHole) { remarksStr += `${rCount}. 請打孔。\n`; rCount++; }
+                  if (emailRemarksLate) { remarksStr += `${rCount}. 如今日內無法送到學校，煩請告知。\n`; rCount++; }
+                  if (emailRemarksPage && emailRemarksPageNum) { remarksStr += `${rCount}. 第${emailRemarksPageNum}頁的頁面方向與其他不同，影印時請注意。\n`; rCount++; }
+                  if (emailRemarksOther && emailRemarksOtherText) { remarksStr += `${rCount}. ${emailRemarksOtherText}\n`; rCount++; }
+
+                  let body = `標題：${title}\n\n`;
+                  body += `李小姐：\n\n`;
+                  body += `級別及科目：${formName}${emailSubject}${actualType}\n`;
+                  body += `電話：${emailPhone}\n`;
+                  body += `取件日期：${formattedDate}\n`;
+                  body += `份數：共${total}份\n`;
+                  body += `尺寸：${actualSize}\n`;
+                  body += `規格：${emailSpec}\n`;
+                  body += `釘裝： ${bindingStr}\n`;
+                  if (remarksStr) {
+                    body += `備註：\n${remarksStr}`;
+                  }
+                  if (breakdown) {
+                    body += `\n請分班：\n${breakdown}\n`;
+                  }
+                  body += `\n${emailTeacher}老師\n`;
+                  return body;
+                })()}
+              </div>
+              <button onClick={handleGenerateEmail} className="mt-6 w-full bg-blue-600 text-white p-3 rounded-md hover:bg-blue-700 transition-colors font-medium flex justify-center items-center shadow-sm">
+                <Printer className="w-5 h-5 mr-2" /> Open Draft in Gmail
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {activeTab === 'printing' && user?.email === 'clng@ktls.edu.hk' && (
         <div className="max-w-5xl mx-auto space-y-6">
           {/* Form Selector */}
@@ -1257,13 +1719,38 @@ export default function Record() {
                 <div className="space-y-4">
                   <div>
                     <label className="block text-sm text-gray-600 mb-1">Number of Students</label>
-                    <input
-                      type="number"
-                      value={printingSettings[selectedForm]?.studentCount || ''}
-                      onChange={(e) => handleSavePrintingSettings(selectedForm, 'studentCount', e.target.value)}
-                      className="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500"
-                      placeholder="e.g. 120"
-                    />
+                    {['S1', 'S2', 'S3'].includes(selectedForm) ? (
+                      <div className="grid grid-cols-2 gap-2">
+                        {['A', 'B', 'C', 'D'].map(cls => (
+                          <div key={cls} className="flex items-center">
+                            <span className="w-6 text-sm font-medium text-gray-500">{cls}:</span>
+                            <input
+                              type="number"
+                              value={printingSettings[selectedForm]?.[`studentCount${cls}`] || ''}
+                              onChange={(e) => handleSavePrintingSettings(selectedForm, `studentCount${cls}`, e.target.value)}
+                              className="w-full border border-gray-300 rounded p-1 outline-none focus:border-blue-500 text-sm"
+                              placeholder="0"
+                            />
+                          </div>
+                        ))}
+                        <div className="col-span-2 text-sm text-gray-500 mt-1 text-right">
+                          Total: {
+                            (Number(printingSettings[selectedForm]?.studentCountA) || 0) +
+                            (Number(printingSettings[selectedForm]?.studentCountB) || 0) +
+                            (Number(printingSettings[selectedForm]?.studentCountC) || 0) +
+                            (Number(printingSettings[selectedForm]?.studentCountD) || 0)
+                          }
+                        </div>
+                      </div>
+                    ) : (
+                      <input
+                        type="number"
+                        value={printingSettings[selectedForm]?.studentCount || ''}
+                        onChange={(e) => handleSavePrintingSettings(selectedForm, 'studentCount', e.target.value)}
+                        className="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500"
+                        placeholder="e.g. 120"
+                      />
+                    )}
                   </div>
                   <div className="p-3 bg-blue-50 rounded-md border border-blue-100">
                     <label className="block text-sm font-medium text-blue-800 mb-1">Original Saving ($)</label>
@@ -1332,6 +1819,7 @@ export default function Record() {
                         <th className="p-3 border-b">Title / Source</th>
                         <th className="p-3 border-b">Type</th>
                         <th className="p-3 border-b text-right">Amount ($)</th>
+                        <th className="p-3 border-b text-center w-12"></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1352,10 +1840,19 @@ export default function Record() {
                               placeholder="0.00"
                             />
                           </td>
+                          <td className="p-3 text-center">
+                            <button
+                              onClick={() => handleDeleteOrder(order.id)}
+                              className="text-gray-400 hover:text-red-600 p-1 rounded transition-colors"
+                              title="Delete Invoice"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </td>
                         </tr>
                       ))}
                       {printingOrders.filter(o => o.form === selectedForm && !o.isArchived).length === 0 && (
-                        <tr><td colSpan="4" className="p-4 text-center text-gray-500">No active invoices.</td></tr>
+                        <tr><td colSpan="5" className="p-4 text-center text-gray-500">No active invoices.</td></tr>
                       )}
                     </tbody>
                   </table>
@@ -1365,7 +1862,17 @@ export default function Record() {
                 {(() => {
                   const currentOrders = printingOrders.filter(o => o.form === selectedForm && !o.isArchived);
                   const totalAmount = currentOrders.reduce((sum, o) => sum + (Number(o.amount) || 0), 0);
-                  const studentCount = printingSettings[selectedForm]?.studentCount || 0;
+
+                  let studentCount = 0;
+                  if (['S1', 'S2', 'S3'].includes(selectedForm)) {
+                    studentCount = (Number(printingSettings[selectedForm]?.studentCountA) || 0) +
+                      (Number(printingSettings[selectedForm]?.studentCountB) || 0) +
+                      (Number(printingSettings[selectedForm]?.studentCountC) || 0) +
+                      (Number(printingSettings[selectedForm]?.studentCountD) || 0);
+                  } else {
+                    studentCount = printingSettings[selectedForm]?.studentCount || 0;
+                  }
+
                   const perStudent = studentCount > 0 ? (totalAmount / studentCount).toFixed(2) : '0.00';
                   const currentSaving = printingSettings[selectedForm]?.saving || 0;
                   const remainingSaving = currentSaving - totalAmount;

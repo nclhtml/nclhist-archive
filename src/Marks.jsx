@@ -387,10 +387,10 @@ export default function Marks() {
         }
 
         const querySnapshot = await getDocs(collection(db, "students"));
-        // Filter out dummy students so they don't affect stats or appear in the list
+        // Filter out dummy and deleted students so they don't affect stats or appear in the list
         const studentsList = querySnapshot.docs
           .map(doc => ({ id: doc.id, ...doc.data() }))
-          .filter(student => !student.isDummy);
+          .filter(student => !student.isDummy && !student.isDeleted);
         setStudents(studentsList);
 
         // Fetch Archives for linking

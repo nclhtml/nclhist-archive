@@ -680,36 +680,67 @@ export default function Record() {
   // 8.5. DRAFT EMAIL FUNCTIONS
   // ============================================================================
   useEffect(() => {
-    const savedPhone = localStorage.getItem('ktls_email_phone');
-    const savedTeacher = localStorage.getItem('ktls_email_teacher');
-    if (savedPhone) setEmailPhone(savedPhone);
-    if (savedTeacher) setEmailTeacher(savedTeacher);
-  }, []);
+    const fetchEmailSettings = async () => {
+      if (!user?.email) return;
+      try {
+        const docRef = doc(db, "settings", `email_defaults_${user.email}`);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data.phone) setEmailPhone(data.phone);
+          if (data.teacher) setEmailTeacher(data.teacher);
+          if (data.seniorAmounts) {
+            // Store fetched amounts in a temporary object to use when form changes
+            window.seniorAmountsCache = data.seniorAmounts;
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching email defaults:", error);
+      }
+    };
+    fetchEmailSettings();
+  }, [user]);
 
   useEffect(() => {
     if (['S4', 'S5', 'S6'].includes(emailForm)) {
-      const savedAmt = localStorage.getItem(`ktls_email_amt_${emailForm}`);
-      if (savedAmt) {
-        setEmailSeniorAmount(savedAmt);
+      const cachedAmt = window.seniorAmountsCache?.[emailForm];
+      if (cachedAmt) {
+        setEmailSeniorAmount(cachedAmt);
       } else {
         setEmailSeniorAmount(printingSettings[emailForm]?.studentCount || '');
       }
     }
   }, [emailForm, printingSettings]);
 
+  const saveEmailSettingToFirebase = async (field, value) => {
+    if (!user?.email) return;
+    try {
+      const docRef = doc(db, "settings", `email_defaults_${user.email}`);
+      await setDoc(docRef, { [field]: value }, { merge: true });
+    } catch (error) {
+      console.error("Error saving email setting:", error);
+    }
+  };
+
   const handlePhoneChange = (val) => {
     setEmailPhone(val);
-    localStorage.setItem('ktls_email_phone', val);
+    saveEmailSettingToFirebase('phone', val);
   };
 
   const handleTeacherChange = (val) => {
     setEmailTeacher(val);
-    localStorage.setItem('ktls_email_teacher', val);
+    saveEmailSettingToFirebase('teacher', val);
   };
 
   const handleSeniorAmountChange = (val) => {
     setEmailSeniorAmount(val);
-    localStorage.setItem(`ktls_email_amt_${emailForm}`, val);
+    if (!window.seniorAmountsCache) window.seniorAmountsCache = {};
+    window.seniorAmountsCache[emailForm] = val;
+
+    if (user?.email) {
+      const docRef = doc(db, "settings", `email_defaults_${user.email}`);
+      setDoc(docRef, { seniorAmounts: window.seniorAmountsCache }, { merge: true });
+    }
   };
 
   const handleJuniorClassToggle = (cls) => {
@@ -830,9 +861,20 @@ export default function Record() {
     setNewOrder({ date: new Date().toISOString().split('T')[0], amount: '', type: 'Notes' });
   };
 
-  const handleUpdateOrderAmount = async (orderId, newAmount) => {
-    await updateDoc(doc(db, "printing_orders", orderId), { amount: Number(newAmount) });
-    setPrintingOrders(printingOrders.map(o => o.id === orderId ? { ...o, amount: Number(newAmount) } : o));
+  const handleUpdateOrderAmountLocal = (orderId, newAmount) => {
+    // Only updates the screen so typing is fast and smooth
+    setPrintingOrders(printingOrders.map(o => o.id === orderId ? { ...o, amount: newAmount } : o));
+  };
+
+  const handleSaveOrderAmount = async (orderId, currentAmount) => {
+    // Saves to Firebase only when the save button is clicked
+    try {
+      await updateDoc(doc(db, "printing_orders", orderId), { amount: Number(currentAmount) });
+      alert("Amount saved!");
+    } catch (error) {
+      console.error("Error saving amount:", error);
+      alert("Failed to save amount.");
+    }
   };
 
   const handleDeleteOrder = async (orderId) => {
@@ -1830,15 +1872,22 @@ export default function Record() {
                           <td className="p-3 text-sm">
                             <span className="px-2 py-1 bg-gray-100 rounded text-xs">{order.type}</span>
                           </td>
-                          <td className="p-3 text-right">
+                          <td className="p-3 text-right flex items-center justify-end space-x-2">
                             <input
                               type="number"
                               step="0.1"
                               value={order.amount === 0 ? '' : order.amount}
-                              onChange={(e) => handleUpdateOrderAmount(order.id, e.target.value)}
+                              onChange={(e) => handleUpdateOrderAmountLocal(order.id, e.target.value)}
                               className="w-24 border border-gray-300 rounded p-1 text-right outline-none focus:border-blue-500"
                               placeholder="0.00"
                             />
+                            <button
+                              onClick={() => handleSaveOrderAmount(order.id, order.amount)}
+                              className="bg-blue-100 text-blue-600 hover:bg-blue-200 p-1.5 rounded transition-colors"
+                              title="Save Amount"
+                            >
+                              <Save className="w-4 h-4" />
+                            </button>
                           </td>
                           <td className="p-3 text-center">
                             <button

@@ -2785,14 +2785,24 @@ export default function Marks() {
                   {hasSections && (
                     <tr className="text-gray-600 text-sm uppercase tracking-wider border-b border-gray-200">
                       <th colSpan={2} className="p-3 border-r border-gray-200"></th>
-                      {selectedAssessment.sectionsConfig.map(sec => (
-                        <th key={sec.id} colSpan={sec.hasSubSections ? sec.subSections.length + 1 : 1} className="p-2 border-r border-gray-200 text-center bg-gray-100">
-                          <div className="font-bold text-gray-700">{sec.name}</div>
-                          <div className="text-[10px] text-gray-500 normal-case font-normal">
-                            Full: {sec.fullMark} | Weight: {sec.weight}%
-                          </div>
-                        </th>
-                      ))}
+                      {selectedAssessment.sectionsConfig.map((sec, i) => {
+                        const isLastInGroup = sec.groupName && (i === selectedAssessment.sectionsConfig.length - 1 || selectedAssessment.sectionsConfig[i + 1].groupName !== sec.groupName);
+                        return (
+                          <React.Fragment key={sec.id}>
+                            <th colSpan={sec.hasSubSections ? sec.subSections.length + 1 : 1} className="p-2 border-r border-gray-200 text-center bg-gray-100">
+                              <div className="font-bold text-gray-700">{sec.name}</div>
+                              <div className="text-[10px] text-gray-500 normal-case font-normal">
+                                Full: {sec.fullMark} | Weight: {sec.weight}%
+                              </div>
+                            </th>
+                            {isLastInGroup && (
+                              <th rowSpan={1} className="p-2 border-r border-gray-200 text-center bg-purple-100">
+                                <div className="font-bold text-purple-800">{sec.groupName} Group</div>
+                              </th>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
                       <th colSpan={(!studentView && showDeduct) ? 4 : 3}></th>
                     </tr>
                   )}
@@ -2802,29 +2812,37 @@ export default function Marks() {
 
                     {hasSections ? (
                       <>
-                        {selectedAssessment.sectionsConfig.map(sec => (
-                          <React.Fragment key={sec.id}>
-                            {sec.hasSubSections ? (
-                              <>
-                                {sec.subSections.map(sub => (
-                                  <th key={sub.id} className="p-3 border-b w-24 align-top text-center">
-                                    <div className="mb-1 text-xs">{sub.name}</div>
-                                    <div className="text-[10px] text-gray-400 normal-case font-normal">
-                                      Full: {sub.fullMark}
-                                    </div>
+                        {selectedAssessment.sectionsConfig.map((sec, i) => {
+                          const isLastInGroup = sec.groupName && (i === selectedAssessment.sectionsConfig.length - 1 || selectedAssessment.sectionsConfig[i + 1].groupName !== sec.groupName);
+                          return (
+                            <React.Fragment key={sec.id}>
+                              {sec.hasSubSections ? (
+                                <>
+                                  {sec.subSections.map(sub => (
+                                    <th key={sub.id} className="p-3 border-b w-24 align-top text-center">
+                                      <div className="mb-1 text-xs">{sub.name}</div>
+                                      <div className="text-[10px] text-gray-400 normal-case font-normal">
+                                        Full: {sub.fullMark}
+                                      </div>
+                                    </th>
+                                  ))}
+                                  <th className="p-3 border-b w-24 text-gray-700 bg-gray-50 font-bold align-top text-center border-r border-gray-200">
+                                    <div className="mb-1 text-xs">Total</div>
                                   </th>
-                                ))}
-                                <th className="p-3 border-b w-24 text-gray-700 bg-gray-50 font-bold align-top text-center border-r border-gray-200">
+                                </>
+                              ) : (
+                                <th className="p-3 border-b w-24 align-top text-center border-r border-gray-200">
+                                  <div className="mb-1 text-xs">Mark</div>
+                                </th>
+                              )}
+                              {isLastInGroup && (
+                                <th className="p-3 border-b w-24 text-purple-700 bg-purple-50 font-bold align-top text-center border-r border-gray-200">
                                   <div className="mb-1 text-xs">Total</div>
                                 </th>
-                              </>
-                            ) : (
-                              <th className="p-3 border-b w-24 align-top text-center border-r border-gray-200">
-                                <div className="mb-1 text-xs">Mark</div>
-                              </th>
-                            )}
-                          </React.Fragment>
-                        ))}
+                              )}
+                            </React.Fragment>
+                          );
+                        })}
                         <th className="p-3 border-b w-28 text-gray-700 font-bold align-top text-center">
                           <div className="flex flex-col items-center justify-center">
                             <span>Total ({showRawTotal ? selectedAssessment.paperFullMark : '100%'})</span>
@@ -2933,8 +2951,25 @@ export default function Marks() {
 
                             {hasSections ? (
                               <>
-                                {selectedAssessment.sectionsConfig.map(sec => {
+                                {selectedAssessment.sectionsConfig.map((sec, i) => {
                                   const secRawTotal = calculateSectionRawTotal(studentMarks, sec);
+                                  const isLastInGroup = sec.groupName && (i === selectedAssessment.sectionsConfig.length - 1 || selectedAssessment.sectionsConfig[i + 1].groupName !== sec.groupName);
+
+                                  let groupTotal = null;
+                                  if (isLastInGroup) {
+                                    let tempTotal = 0;
+                                    let hasAnyGroupMark = false;
+                                    const groupSecs = selectedAssessment.sectionsConfig.filter(s => s.groupName === sec.groupName);
+                                    groupSecs.forEach(gs => {
+                                      const gsTotal = calculateSectionRawTotal(studentMarks, gs);
+                                      if (gsTotal !== null) {
+                                        tempTotal += gsTotal;
+                                        hasAnyGroupMark = true;
+                                      }
+                                    });
+                                    if (hasAnyGroupMark) groupTotal = tempTotal;
+                                  }
+
                                   return (
                                     <React.Fragment key={sec.id}>
                                       {sec.hasSubSections ? (
@@ -2985,6 +3020,11 @@ export default function Marks() {
                                               />
                                             );
                                           })()}
+                                        </td>
+                                      )}
+                                      {isLastInGroup && (
+                                        <td className={`p-3 font-bold text-center text-purple-700 border-r border-gray-200 ${groupTotal === null ? 'bg-red-50' : 'bg-purple-50/50'}`}>
+                                          {groupTotal === null ? '-' : (studentView ? '***' : groupTotal.toFixed(1))}
                                         </td>
                                       )}
                                     </React.Fragment>
@@ -3267,8 +3307,40 @@ export default function Marks() {
                 {/* Multi-Section Config */}
                 {isMultiSectionCategory && (
                   <div className="border-t border-gray-200 pt-6 mt-6">
-                    <div className="flex justify-between items-center mb-4">
-                      <h3 className="text-lg font-bold text-gray-800">Paper & Sections Configuration</h3>
+                    <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-4 gap-4">
+                      <div>
+                        <h3 className="text-lg font-bold text-gray-800">Paper & Sections Configuration</h3>
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          <span className="text-xs text-gray-500 font-semibold uppercase mt-1">Presets:</span>
+                          <button type="button" onClick={() => {
+                            setSectionsConfig([
+                              { id: generateId(), name: 'DBQ 1', groupName: 'DBQ', fullMark: 15, weight: 50, hasSubSections: true, subSections: [{ id: generateId(), name: 'a', fullMark: '' }, { id: generateId(), name: 'b', fullMark: '' }, { id: generateId(), name: 'c', fullMark: 8 }] },
+                              { id: generateId(), name: 'DBQ 2', groupName: 'DBQ', fullMark: 15, weight: 50, hasSubSections: true, subSections: [{ id: generateId(), name: 'a', fullMark: '' }, { id: generateId(), name: 'b', fullMark: '' }, { id: generateId(), name: 'c', fullMark: 8 }] }
+                            ]);
+                            setPaperFullMark(30);
+                          }} className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs font-bold hover:bg-purple-200 transition-colors">2DBQ</button>
+
+                          <button type="button" onClick={() => {
+                            setSectionsConfig([
+                              { id: generateId(), name: 'DBQ 1', groupName: 'DBQ', fullMark: 15, weight: 30, hasSubSections: true, subSections: [{ id: generateId(), name: 'a', fullMark: '' }, { id: generateId(), name: 'b', fullMark: '' }, { id: generateId(), name: 'c', fullMark: 8 }] },
+                              { id: generateId(), name: 'DBQ 2', groupName: 'DBQ', fullMark: 15, weight: 30, hasSubSections: true, subSections: [{ id: generateId(), name: 'a', fullMark: '' }, { id: generateId(), name: 'b', fullMark: '' }, { id: generateId(), name: 'c', fullMark: 8 }] },
+                              { id: generateId(), name: 'Essay', groupName: 'Essay', fullMark: 25, weight: 40, hasSubSections: true, subSections: [{ id: generateId(), name: '1', fullMark: 25 }, { id: generateId(), name: '2', fullMark: 25 }] }
+                            ]);
+                            setPaperFullMark(55);
+                          }} className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs font-bold hover:bg-purple-200 transition-colors">2DBQ + 1Essay</button>
+
+                          <button type="button" onClick={() => {
+                            setSectionsConfig([
+                              { id: generateId(), name: 'DBQ 1', groupName: 'DBQ', fullMark: 15, weight: 15, hasSubSections: true, subSections: [{ id: generateId(), name: 'a', fullMark: '' }, { id: generateId(), name: 'b', fullMark: '' }, { id: generateId(), name: 'c', fullMark: 8 }] },
+                              { id: generateId(), name: 'DBQ 2', groupName: 'DBQ', fullMark: 15, weight: 15, hasSubSections: true, subSections: [{ id: generateId(), name: 'a', fullMark: '' }, { id: generateId(), name: 'b', fullMark: '' }, { id: generateId(), name: 'c', fullMark: 8 }] },
+                              { id: generateId(), name: 'DBQ 3', groupName: 'DBQ', fullMark: 15, weight: 15, hasSubSections: true, subSections: [{ id: generateId(), name: 'a', fullMark: '' }, { id: generateId(), name: 'b', fullMark: '' }, { id: generateId(), name: 'c', fullMark: 8 }] },
+                              { id: generateId(), name: 'DBQ 4', groupName: 'DBQ', fullMark: 15, weight: 15, hasSubSections: true, subSections: [{ id: generateId(), name: 'a', fullMark: '' }, { id: generateId(), name: 'b', fullMark: '' }, { id: generateId(), name: 'c', fullMark: 8 }] },
+                              { id: generateId(), name: 'Essay', groupName: 'Essay', fullMark: 50, weight: 40, hasSubSections: true, subSections: [{ id: generateId(), name: '1', fullMark: 25 }, { id: generateId(), name: '2', fullMark: 25 }, { id: generateId(), name: '3', fullMark: 25 }, { id: generateId(), name: '4', fullMark: 25 }, { id: generateId(), name: '5', fullMark: 25 }] }
+                            ]);
+                            setPaperFullMark(110);
+                          }} className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs font-bold hover:bg-purple-200 transition-colors">4DBQ + 2Essay</button>
+                        </div>
+                      </div>
                       <div className="flex items-center space-x-2">
                         <label className="text-sm font-semibold text-gray-700">Paper Full Mark:</label>
                         <input
@@ -3286,15 +3358,19 @@ export default function Marks() {
                       {sectionsConfig.map((sec, index) => (
                         <div key={sec.id} className="bg-gray-50 border border-gray-200 rounded-lg p-4">
                           <div className="flex flex-wrap gap-3 items-end mb-3">
-                            <div className="flex-1 min-w-[150px]">
+                            <div className="flex-1 min-w-[120px]">
                               <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase">Section Name</label>
                               <input type="text" value={sec.name} onChange={(e) => updateSection(sec.id, 'name', e.target.value)} data-gramm="false" data-gramm_editor="false" className="w-full border border-gray-300 rounded p-2 text-sm" required />
                             </div>
-                            <div className="w-24">
+                            <div className="flex-1 min-w-[120px]">
+                              <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase">Group (Optional)</label>
+                              <input type="text" value={sec.groupName || ''} onChange={(e) => updateSection(sec.id, 'groupName', e.target.value)} placeholder="e.g. DBQ" data-gramm="false" data-gramm_editor="false" className="w-full border border-gray-300 rounded p-2 text-sm" />
+                            </div>
+                            <div className="w-20">
                               <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase">Full Mark</label>
                               <input type="number" step="any" value={sec.fullMark} onChange={(e) => updateSection(sec.id, 'fullMark', e.target.value)} data-gramm="false" data-gramm_editor="false" className="w-full border border-gray-300 rounded p-2 text-sm" required />
                             </div>
-                            <div className="w-24">
+                            <div className="w-20">
                               <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase">Weight (%)</label>
                               <input type="number" step="any" value={sec.weight} onChange={(e) => updateSection(sec.id, 'weight', e.target.value)} data-gramm="false" data-gramm_editor="false" className="w-full border border-gray-300 rounded p-2 text-sm" required />
                             </div>

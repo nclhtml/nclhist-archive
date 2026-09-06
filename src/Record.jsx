@@ -683,14 +683,13 @@ export default function Record() {
     const fetchEmailSettings = async () => {
       if (!user?.email) return;
       try {
-        const docRef = doc(db, "settings", `email_defaults_${user.email}`);
+        const docRef = doc(db, "settings", `email_defaults_${user.email.toLowerCase()}`);
         const docSnap = await getDoc(docRef);
         if (docSnap.exists()) {
           const data = docSnap.data();
           if (data.phone) setEmailPhone(data.phone);
           if (data.teacher) setEmailTeacher(data.teacher);
           if (data.seniorAmounts) {
-            // Store fetched amounts in a temporary object to use when form changes
             window.seniorAmountsCache = data.seniorAmounts;
           }
         }
@@ -715,21 +714,12 @@ export default function Record() {
   const saveEmailSettingToFirebase = async (field, value) => {
     if (!user?.email) return;
     try {
-      const docRef = doc(db, "settings", `email_defaults_${user.email}`);
+      // Use toLowerCase() to ensure consistent document IDs
+      const docRef = doc(db, "settings", `email_defaults_${user.email.toLowerCase()}`);
       await setDoc(docRef, { [field]: value }, { merge: true });
     } catch (error) {
       console.error("Error saving email setting:", error);
     }
-  };
-
-  const handlePhoneChange = (val) => {
-    setEmailPhone(val);
-    saveEmailSettingToFirebase('phone', val);
-  };
-
-  const handleTeacherChange = (val) => {
-    setEmailTeacher(val);
-    saveEmailSettingToFirebase('teacher', val);
   };
 
   const handleSeniorAmountChange = (val) => {
@@ -1546,7 +1536,13 @@ export default function Record() {
               <div className="flex space-x-3">
                 <div className="flex-1">
                   <label className="block text-sm font-medium text-gray-700 mb-1">電話 <span className="text-xs text-gray-500 font-normal ml-1">(輸入後將自動儲存為預設)</span></label>
-                  <input type="text" value={emailPhone} onChange={e => handlePhoneChange(e.target.value)} className="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500" />
+                  <input
+                    type="text"
+                    value={emailPhone}
+                    onChange={e => setEmailPhone(e.target.value)}
+                    onBlur={() => saveEmailSettingToFirebase('phone', emailPhone)}
+                    className="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500"
+                  />
                 </div>
                 <div className="flex-1">
                   <label className="block text-sm font-medium text-gray-700 mb-1">取件日期</label>
@@ -1651,7 +1647,13 @@ export default function Record() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">老師名稱 <span className="text-xs text-gray-500 font-normal ml-1">(輸入後將自動儲存為預設)</span></label>
                 <div className="flex items-center space-x-2">
-                  <input type="text" value={emailTeacher} onChange={e => handleTeacherChange(e.target.value)} className="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500" />
+                  <input
+                    type="text"
+                    value={emailTeacher}
+                    onChange={e => setEmailTeacher(e.target.value)}
+                    onBlur={() => saveEmailSettingToFirebase('teacher', emailTeacher)}
+                    className="w-full border border-gray-300 rounded p-2 outline-none focus:border-blue-500"
+                  />
                   <span className="text-gray-600 font-medium">老師</span>
                 </div>
               </div>

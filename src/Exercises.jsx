@@ -303,19 +303,20 @@ export default function Exercises() {
             )}
 
             <div className="flex gap-2 w-full mt-auto">
-              <Link
-                to={`/exercise/${ex.id}`}
-                className="flex-1 text-center bg-blue-50 text-blue-700 font-bold py-2 rounded-lg hover:bg-blue-600 hover:text-white transition-colors"
-              >
-                Attempt
-              </Link>
-              {user?.isAdmin && (
-                <button
-                  onClick={() => handleOpenProgressModal(ex)}
+              {!user?.isAdmin ? (
+                <Link
+                  to={`/exercise/${ex.id}`}
+                  className="flex-1 text-center bg-blue-50 text-blue-700 font-bold py-2 rounded-lg hover:bg-blue-600 hover:text-white transition-colors"
+                >
+                  Attempt
+                </Link>
+              ) : (
+                <Link
+                  to={`/exercise/${ex.id}`}
                   className="flex-1 text-center bg-amber-50 text-amber-700 font-bold py-2 rounded-lg hover:bg-amber-600 hover:text-white transition-colors"
                 >
-                  View Work
-                </button>
+                  View and Manage
+                </Link>
               )}
             </div>
           </div>

@@ -1,7 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { doc, getDoc, collection, getDocs, setDoc, onSnapshot, deleteField } from 'firebase/firestore';
-import { db } from './firebase';
+import { auth, db } from "./firebase";
+import {
+  HistoryGameAdmin,
+  HistoryGameStudent,
+} from "./features/history-game/HistoryGame.jsx";
+
+import {
+  canOpenExercise,
+  loadStudentClass,
+} from "./exerciseAccess";
 import { useAuth } from './main';
 import { ArrowLeft, Loader2, AlertCircle, Users, Save, CheckSquare, FastForward, Rewind, User, RotateCcw } from 'lucide-react';
 
@@ -9,11 +18,11 @@ import DocumentNotes from './Practice1.jsx';
 import MapExercise from './Practice2.jsx';
 
 const COMPONENT_REGISTRY = {
-  'DocumentNotes': DocumentNotes,
-  'MapExercise': MapExercise,
+  DocumentNotes,
+  MapExercise,
 };
 
-export default function ExerciseRunner() {
+function StandardExerciseRunner() {
   const { exerciseId } = useParams();
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -57,6 +66,8 @@ export default function ExerciseRunner() {
 
 
   useEffect(() => {
+    let unsubscribeProgress = null;
+
     const fetchData = async () => {
       try {
         const docRef = doc(db, 'exercises', exerciseId);
@@ -66,18 +77,10 @@ export default function ExerciseRunner() {
         const exData = docSnap.data();
         setExerciseData(exData);
 
-        const myProgressRef = doc(db, 'user_progress', user.email);
-        const myProgressSnap = await getDoc(myProgressRef);
-        const myProgress = myProgressSnap.exists() ? myProgressSnap.data()[exerciseId] : null;
-
         if (user?.isAdmin) {
-          setAdminOwnWork(myProgress);
-          setStudentWork(myProgress);
-
-          const [studentsSnap, rolesSnap, progressSnap] = await Promise.all([
+          const [studentsSnap, rolesSnap] = await Promise.all([
             getDocs(collection(db, 'students')),
-            getDocs(collection(db, 'user_roles')),
-            getDocs(collection(db, 'user_progress'))
+            getDocs(collection(db, 'user_roles'))
           ]);
 
           const studentsData = studentsSnap.docs.map(d => ({ email: (d.data().email || d.id).toLowerCase(), ...d.data() }));
@@ -112,22 +115,46 @@ export default function ExerciseRunner() {
             return groups.includes(uClass) || groups.includes(uRole);
           });
 
-          const progressMap = {};
-          progressSnap.forEach(doc => {
-            if (doc.data()[exerciseId]) {
-              progressMap[doc.id.toLowerCase()] = doc.data()[exerciseId];
-            }
+          // Real-time listener for user progress
+          unsubscribeProgress = onSnapshot(collection(db, 'user_progress'), (progressSnap) => {
+            const progressMap = {};
+            let myLatestProgress = null;
+
+            progressSnap.forEach(doc => {
+              const data = doc.data();
+              if (data[exerciseId]) {
+                progressMap[doc.id.toLowerCase()] = data[exerciseId];
+              }
+              if (doc.id.toLowerCase() === user.email.toLowerCase()) {
+                myLatestProgress = data[exerciseId] || null;
+              }
+            });
+
+            const finalStudentsList = targetStudents.map(s => ({
+              ...s,
+              progress: progressMap[s.email] || null,
+              status: progressMap[s.email] ? 'Attempted' : 'Not Started'
+            }));
+
+            setStudentsList(finalStudentsList);
+            setAdminOwnWork(myLatestProgress);
+
+            // Update currently selected student's work in real-time if viewing someone
+            setStudentWork(prev => {
+              // We need to use functional state update to access the latest selectedStudent
+              return prev;
+            });
           });
 
-          const finalStudentsList = targetStudents.map(s => ({
-            ...s,
-            progress: progressMap[s.email] || null,
-            status: progressMap[s.email] ? 'Attempted' : 'Not Started'
-          }));
-
-          setStudentsList(finalStudentsList);
         } else {
-          setStudentWork(myProgress);
+          // For normal students, just listen to their own document
+          unsubscribeProgress = onSnapshot(doc(db, 'user_progress', user.email), (docSnap) => {
+            if (docSnap.exists() && docSnap.data()[exerciseId]) {
+              setStudentWork(docSnap.data()[exerciseId]);
+            } else {
+              setStudentWork(null);
+            }
+          });
         }
 
         setLoading(false);
@@ -136,8 +163,25 @@ export default function ExerciseRunner() {
         setLoading(false);
       }
     };
+
     fetchData();
+
+    return () => {
+      if (unsubscribeProgress) unsubscribeProgress();
+    };
   }, [exerciseId, user]);
+
+  // Keep the selected student's work synced when the list updates
+  useEffect(() => {
+    if (selectedStudent) {
+      const updatedStudent = studentsList.find(s => s.email === selectedStudent.email);
+      if (updatedStudent) {
+        setStudentWork(updatedStudent.progress);
+      }
+    } else if (user?.isAdmin) {
+      setStudentWork(adminOwnWork);
+    }
+  }, [studentsList, selectedStudent, adminOwnWork, user]);
 
   const handleSelectStudent = (student) => {
     setSelectedStudent(student);
@@ -170,7 +214,7 @@ export default function ExerciseRunner() {
   const handleAdminAction = async (action) => {
     try {
       const sessionRef = doc(db, 'sessions', exerciseId);
-      
+
       let newPart = currentPart;
       if (action === 'Next Part') newPart = Math.min(currentPart + 1, 3);
       if (action === 'Previous Part') newPart = Math.max(currentPart - 1, 1);
@@ -188,7 +232,7 @@ export default function ExerciseRunner() {
 
   const handleResetSession = async () => {
     if (!window.confirm("Are you sure you want to reset the session and DELETE ALL student records for this exercise? This action cannot be undone.")) return;
-    
+
     try {
       // 1. Reset session document
       const sessionRef = doc(db, 'sessions', exerciseId);
@@ -203,13 +247,13 @@ export default function ExerciseRunner() {
         const progressRef = doc(db, 'user_progress', student.email);
         return setDoc(progressRef, { [exerciseId]: deleteField() }, { merge: true });
       });
-      
+
       // Also delete admin's own work
       const adminProgressRef = doc(db, 'user_progress', user.email);
       promises.push(setDoc(adminProgressRef, { [exerciseId]: deleteField() }, { merge: true }));
 
       await Promise.all(promises);
-      
+
       alert("Session reset and all records deleted.");
       window.location.reload(); // Reload to clear all local states
     } catch (err) {
@@ -270,8 +314,8 @@ export default function ExerciseRunner() {
               <button
                 onClick={handleSelectMyView}
                 className={`w-full text-left p-3 rounded-lg mb-4 border transition-colors ${!selectedStudent
-                    ? 'bg-blue-50 border-blue-200 shadow-sm'
-                    : 'bg-white border-slate-200 hover:bg-slate-50'
+                  ? 'bg-blue-50 border-blue-200 shadow-sm'
+                  : 'bg-white border-slate-200 hover:bg-slate-50'
                   }`}
               >
                 <div className="font-bold text-sm text-slate-800 flex items-center gap-2">
@@ -288,8 +332,8 @@ export default function ExerciseRunner() {
                   key={student.email}
                   onClick={() => handleSelectStudent(student)}
                   className={`w-full text-left p-3 rounded-lg mb-1 border transition-colors ${selectedStudent?.email === student.email
-                      ? 'bg-blue-50 border-blue-200'
-                      : 'bg-white border-transparent hover:bg-slate-50 hover:border-slate-200'
+                    ? 'bg-blue-50 border-blue-200'
+                    : 'bg-white border-transparent hover:bg-slate-50 hover:border-slate-200'
                     }`}
                 >
                   <div className="font-bold text-sm text-slate-800">{student.name}</div>
@@ -353,6 +397,278 @@ export default function ExerciseRunner() {
         </div>
       </div>
 
+    </div>
+  );
+}
+
+function ExerciseAccessNotice({ children }) {
+  const navigate = useNavigate();
+
+  return (
+    <div className="max-w-3xl mx-auto p-8">
+      <div
+        className="bg-amber-50 border border-amber-200 rounded-xl p-6"
+        role="alert"
+      >
+        <AlertCircle className="text-amber-600 mb-3" size={32} />
+        <div className="text-slate-700">{children}</div>
+      </div>
+
+      <button
+        type="button"
+        onClick={() => navigate("/exercises")}
+        className="mt-4 text-blue-600 font-bold hover:underline"
+      >
+        ← Back to Interactive Exercises
+      </button>
+    </div>
+  );
+}
+
+function ExerciseAccessLoading() {
+  return (
+    <div className="min-h-screen flex items-center justify-center">
+      <Loader2
+        className="animate-spin text-blue-600"
+        size={40}
+        aria-label="Loading exercise"
+      />
+    </div>
+  );
+}
+
+export default function ExerciseRunner() {
+  const { exerciseId } = useParams();
+  const { user, authLoading } = useAuth();
+
+  if (authLoading) {
+    return <ExerciseAccessLoading />;
+  }
+
+  if (
+    !user?.email ||
+    (!user.isAdmin && !user.isAuthorized)
+  ) {
+    return (
+      <ExerciseAccessNotice>
+        Sign in with an authorized website account to open this exercise.
+      </ExerciseAccessNotice>
+    );
+  }
+
+  // Reset the gate when the exercise or displayed identity changes.
+  const accessKey = JSON.stringify([
+    exerciseId,
+    user.uid,
+    user.email,
+    user.role,
+    user.isAdmin,
+    user.isAuthorized,
+  ]);
+
+  return (
+    <AssignedExercise
+      key={accessKey}
+      exerciseId={exerciseId}
+      viewer={user}
+    />
+  );
+}
+
+function AssignedExercise({ exerciseId, viewer }) {
+  const navigate = useNavigate();
+
+  const {
+    impersonatedEmail,
+    setImpersonatedEmail,
+  } = useAuth();
+
+  const {
+    email,
+    role,
+    isAdmin,
+    isAuthorized,
+  } = viewer;
+
+  const [result, setResult] = useState({
+    loading: true,
+    exercise: null,
+    error: "",
+  });
+
+  useEffect(() => {
+    let active = true;
+    let stopExercise = null;
+
+    function fail(message) {
+      if (!active) return;
+
+      setResult({
+        loading: false,
+        exercise: null,
+        error: message,
+      });
+    }
+
+    async function connect() {
+      try {
+        const studentClass = isAdmin
+          ? ""
+          : await loadStudentClass(email);
+
+        if (!active) return;
+
+        const identity = {
+          email,
+          role,
+          isAdmin,
+          isAuthorized,
+        };
+
+        stopExercise = onSnapshot(
+          doc(db, "exercises", exerciseId),
+
+          (snapshot) => {
+            if (!active) return;
+
+            if (!snapshot.exists()) {
+              fail("This exercise no longer exists.");
+              return;
+            }
+
+            const exercise = {
+              ...snapshot.data(),
+              id: snapshot.id,
+            };
+
+            if (
+              !canOpenExercise(
+                exercise,
+                identity,
+                studentClass
+              )
+            ) {
+              fail(
+                "This exercise is not assigned to your website group or class."
+              );
+              return;
+            }
+
+            setResult({
+              loading: false,
+              exercise,
+              error: "",
+            });
+          },
+
+          (problem) => {
+            fail(
+              problem?.message ||
+              "Unable to check exercise access."
+            );
+          }
+        );
+      } catch (problem) {
+        fail(
+          problem?.message ||
+          "Unable to check exercise access."
+        );
+      }
+    }
+
+    connect();
+
+    return () => {
+      active = false;
+      stopExercise?.();
+    };
+  }, [
+    exerciseId,
+    email,
+    role,
+    isAdmin,
+    isAuthorized,
+  ]);
+
+  if (result.loading) {
+    return <ExerciseAccessLoading />;
+  }
+
+  if (result.error) {
+    return (
+      <ExerciseAccessNotice>
+        {result.error}
+      </ExerciseAccessNotice>
+    );
+  }
+
+  const exercise = result.exercise;
+
+  if (exercise.componentName !== "HistoryGame") {
+    return (
+      <StandardExerciseRunner
+        key={`${exerciseId}:${exercise.componentName}`}
+      />
+    );
+  }
+
+  // Website Debug Mode changes the displayed user, not Firebase Auth.
+  // Never submit live game actions as the impersonated student.
+  if (impersonatedEmail) {
+    return (
+      <ExerciseAccessNotice>
+        <p className="font-bold mb-2">
+          Live History Game is disabled in Debug Mode.
+        </p>
+
+        <p>
+          Exit Debug Mode to manage the game with your real account.
+          Use the game's company inspection tools to review student work.
+        </p>
+
+        <button
+          type="button"
+          onClick={() => setImpersonatedEmail(null)}
+          className="mt-4 bg-amber-600 text-white px-4 py-2 rounded-lg font-bold"
+        >
+          Exit Debug Mode
+        </button>
+      </ExerciseAccessNotice>
+    );
+  }
+
+  const GameComponent = isAdmin
+    ? HistoryGameAdmin
+    : HistoryGameStudent;
+
+  return (
+    <div className="w-full max-w-7xl mx-auto p-4 md:p-6">
+      <button
+        type="button"
+        onClick={() => navigate("/exercises")}
+        className="flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-slate-800 mb-4"
+      >
+        <ArrowLeft size={16} />
+        Back to Interactive Exercises
+      </button>
+
+      <header className="mb-4">
+        <h1 className="text-2xl font-bold text-slate-800">
+          {exercise.title}
+        </h1>
+
+        {exercise.description && (
+          <p className="text-slate-600 mt-1">
+            {exercise.description}
+          </p>
+        )}
+      </header>
+
+      <GameComponent
+        auth={auth}
+        db={db}
+        exerciseId={exerciseId}
+      />
     </div>
   );
 }

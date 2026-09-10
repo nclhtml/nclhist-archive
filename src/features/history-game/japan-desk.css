@@ -1,0 +1,682 @@
+.ha-game .jd-root {
+  display: grid;
+  gap: 20px;
+}
+
+.ha-game .jd-panel {
+  min-width: 0;
+  padding: 24px;
+  border: 1px solid #d3dbc9;
+  border-radius: 14px;
+  background: #fffef9;
+}
+
+.ha-game .jd-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 24px;
+  padding: 28px;
+  border-radius: 16px;
+  background: linear-gradient(125deg, #183c2b, #3b5035);
+  color: #fff9e9;
+}
+
+.ha-game .jd-header h1 {
+  margin-bottom: 8px;
+  font-family: Georgia, serif;
+  font-size: clamp(1.8rem, 3vw, 2.7rem);
+}
+
+.ha-game .jd-header p {
+  margin-bottom: 7px;
+  color: #e2e7d7;
+}
+
+.ha-game .jd-header .hg-eyebrow {
+  color: #d8ca9e;
+}
+
+.ha-game button.jd-worth {
+  min-width: 260px;
+  padding: 18px 22px;
+  border-color: #c3b17c;
+  background: #f5edd6;
+  color: #29432e;
+  text-align: left;
+}
+
+.ha-game .jd-worth small,
+.ha-game .jd-worth span {
+  display: block;
+}
+
+.ha-game .jd-worth strong {
+  display: block;
+  margin: 6px 0;
+  font-family: Georgia, serif;
+  font-size: 34px;
+}
+
+.ha-game .jd-worth span {
+  font-size: 12px;
+}
+
+.ha-game .jd-document-buttons,
+.ha-game .jd-tabs,
+.ha-game .jd-step-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ha-game .jd-tabs {
+  margin-bottom: 16px;
+}
+
+.ha-game .jd-tabs button[aria-pressed="true"] {
+  color: #fff;
+  background: #31543a;
+  border-color: #31543a;
+}
+
+.ha-game .jd-section-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  margin-bottom: 15px;
+}
+
+.ha-game .jd-section-heading h2 {
+  margin-bottom: 0;
+}
+
+.ha-game .jd-section-heading small {
+  display: block;
+  color: #65725d;
+  font-size: 12px;
+}
+
+.ha-game .jd-large-number {
+  display: block;
+  font-size: 25px;
+  color: #31543a;
+}
+
+.ha-game .jd-clock {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  min-height: 42px;
+  padding: 9px 13px;
+  margin: 12px 0;
+  border: 1px solid #cbd8c3;
+  border-radius: 8px;
+  background: #edf3e7;
+  color: #375130;
+  font-size: 13px;
+}
+
+.ha-game .jd-clock strong {
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ha-game .jd-clock-grace {
+  border-color: #d9bd7b;
+  background: #fff2d2;
+  color: #725415;
+}
+
+.ha-game .jd-clock-closed {
+  border-color: #d7d7cf;
+  background: #f0f0e9;
+  color: #666a60;
+}
+
+.ha-game .jd-share-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 18px 0;
+}
+
+.ha-game button.jd-share-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  padding: 15px;
+  border: 1px solid #d5ddcd;
+  background: #fff;
+  text-align: left;
+  font-weight: 450;
+}
+
+.ha-game button.jd-share-card.jd-selected {
+  border: 2px solid #4d7145;
+  padding: 14px;
+  background: #f4f8ef;
+}
+
+.ha-game .jd-share-name {
+  font-weight: 750;
+  font-size: 14px;
+}
+
+.ha-game .jd-share-card > strong {
+  margin-top: 5px;
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ha-game .jd-share-card small {
+  color: #69745f;
+  font-size: 11px;
+}
+
+.ha-game .jd-company-signal {
+  display: block;
+  min-height: 46px;
+  padding-top: 8px;
+  margin-top: 5px;
+  border-top: 1px dashed #d0d8c6;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.ha-game .jd-line {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.ha-game .jd-line-large {
+  min-height: 140px;
+}
+
+.ha-game .jd-dealing-detail,
+.ha-game .jd-two {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.ha-game .jd-dealing-detail {
+  padding-top: 18px;
+  border-top: 1px solid #dbe1d2;
+}
+
+.ha-game .jd-chart-ends {
+  display: flex;
+  justify-content: space-between;
+  margin: 0 0 15px;
+  font-size: 11px;
+  color: #69765f;
+}
+
+.ha-game .jd-order {
+  padding: 17px;
+  border: 1px solid #d9dfd0;
+  border-radius: 10px;
+  background: #f7f9f1;
+}
+
+.ha-game .jd-step-buttons {
+  margin: 10px 0 16px;
+}
+
+.ha-game .jd-step-buttons button {
+  flex: 1;
+  font-size: 20px;
+}
+
+.ha-game .jd-slider {
+  padding: 15px;
+  margin-bottom: 12px;
+  border: 1px solid #d9e0d0;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.ha-game .jd-slider > label {
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.ha-game .jd-slider-inputs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 86px;
+  align-items: center;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.ha-game .jd-slider input[type="range"] {
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  accent-color: #31543a;
+}
+
+.ha-game .jd-exact {
+  position: relative;
+}
+
+.ha-game .jd-exact input {
+  padding-right: 24px;
+  text-align: right;
+}
+
+.ha-game .jd-exact > span {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.ha-game .jd-slider > small,
+.ha-game .jd-inline-note,
+.ha-game .jd-options > small {
+  display: block;
+  margin-top: 8px;
+  color: #68745f;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.ha-game .jd-portfolio {
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  align-items: center;
+  gap: 25px;
+  margin-bottom: 20px;
+}
+
+.ha-game .jd-ring {
+  width: 100%;
+  max-width: 230px;
+}
+
+.ha-game .jd-ring-caption {
+  font-family: inherit;
+  font-size: 8px;
+  fill: #69745f;
+}
+
+.ha-game .jd-ring-value {
+  font-family: Georgia, serif;
+  font-size: 17px;
+  font-weight: 700;
+  fill: #2b4931;
+}
+
+.ha-game .jd-legend {
+  display: grid;
+  gap: 6px;
+}
+
+.ha-game .jd-legend button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 55px;
+  align-items: center;
+  gap: 12px;
+  min-height: 38px;
+  padding: 7px 10px;
+  border-color: transparent;
+  font-size: 12px;
+  font-weight: 450;
+  text-align: left;
+}
+
+.ha-game .jd-legend button[aria-pressed="true"] {
+  background: #edf3e6;
+  border-color: #becfb2;
+}
+
+.ha-game .jd-legend button > span {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.ha-game .jd-legend i {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+}
+
+.ha-game .jd-legend small {
+  text-align: right;
+}
+
+.ha-game .jd-plan-heading,
+.ha-game .jd-plan-budget,
+.ha-game .jd-report-line,
+.ha-game .jd-balance-total {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.ha-game .jd-plan-heading {
+  padding-top: 20px;
+  border-top: 2px solid #d8e0cd;
+}
+
+.ha-game .jd-plan-heading h3 {
+  margin: 0;
+  font-size: 19px;
+}
+
+.ha-game .jd-plan-heading > strong {
+  color: #736126;
+  font-size: 12px;
+}
+
+.ha-game .jd-plan-budget {
+  padding: 14px 16px;
+  margin: 16px 0;
+  border-radius: 9px;
+  background: #eef4e6;
+  font-size: 13px;
+}
+
+.ha-game .jd-plan-budget strong {
+  font-size: 25px;
+  color: #31543a;
+}
+
+.ha-game .jd-allocation-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 5px 0 20px;
+  padding: 10px 0;
+  font-size: 12px;
+}
+
+.ha-game .jd-options {
+  min-width: 0;
+  padding: 15px;
+  margin-top: 15px;
+  border: 1px solid #d8dfcc;
+  border-radius: 9px;
+  background: #f7f8f1;
+}
+
+.ha-game .jd-submit {
+  margin-top: 22px;
+}
+
+.ha-game .jd-submit > small {
+  display: block;
+  margin-top: 8px;
+  color: #6a745f;
+  font-size: 12px;
+  text-align: center;
+}
+
+.ha-game .jd-report-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 20px 0;
+}
+
+.ha-game .jd-report-grid > div {
+  padding: 16px;
+  border: 1px solid #d6decb;
+  border-radius: 9px;
+  background: #f6f8ef;
+}
+
+.ha-game .jd-report-grid small {
+  display: block;
+  margin-bottom: 7px;
+  color: #66765a;
+  font-size: 12px;
+}
+
+.ha-game .jd-report-grid strong {
+  font-size: 25px;
+  overflow-wrap: anywhere;
+}
+
+.ha-game .jd-company-report h2,
+.ha-game .jd-ending h2 {
+  font-family: Georgia, serif;
+}
+
+.ha-game .jd-report-line,
+.ha-game .jd-balance-total {
+  padding: 15px;
+  margin: 15px 0;
+  border-top: 2px solid #b9ac7c;
+  border-bottom: 2px solid #b9ac7c;
+  background: #f3ecd8;
+}
+
+.ha-game .jd-management-outlook {
+  padding: 18px;
+  margin-top: 20px;
+  border-left: 3px solid #ab9251;
+  background: #f5efdd;
+}
+
+.ha-game .jd-news-story {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid #b8a780;
+}
+
+.ha-game .jd-news-story h3 {
+  font-family: Georgia, serif;
+  font-size: 21px;
+}
+
+.ha-game .jd-letter,
+.ha-game .jd-ending {
+  background: #f8f0dc;
+  border-color: #c9b787;
+}
+
+.ha-game .jd-teacher-market {
+  padding: 16px;
+  margin: 18px 0;
+  border: 1px solid #c8d5bd;
+  border-radius: 10px;
+  background: #f5f8ef;
+}
+
+.ha-game .jd-teacher-quotes {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ha-game .jd-teacher-quotes small,
+.ha-game .jd-teacher-quotes strong {
+  display: block;
+}
+
+.ha-game dialog.jd-modal {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(94vw, 950px);
+  max-width: calc(100vw - 24px);
+  height: fit-content;
+  max-height: 90vh;
+  max-height: 90dvh;
+  padding: 0;
+  border: 0;
+  overflow: visible;
+  background: transparent;
+  color: #292f27;
+  transform: none;
+}
+
+.ha-game dialog.jd-modal:not([open]) {
+  display: none;
+}
+
+.ha-game dialog.jd-modal::backdrop {
+  background: rgb(15 27 20 / 65%);
+}
+
+.ha-game .jd-modal-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 90vh;
+  max-height: 90dvh;
+  overflow: hidden;
+  border: 1px solid #b7aa80;
+  border-radius: 12px;
+  background: #fbf9ef;
+  box-shadow: 0 25px 80px rgb(0 0 0 / 30%);
+}
+
+.ha-game .jd-modal-card > header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  padding: 13px 18px;
+  border-bottom: 1px solid #d5d5c7;
+  background: #f3f2e6;
+}
+
+.ha-game .jd-modal-card > header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.ha-game .jd-modal-content {
+  min-height: 0;
+  padding: 20px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.ha-game .jd-document-tabs {
+  position: sticky;
+  top: -20px;
+  z-index: 2;
+  padding: 10px 0;
+  background: #fbf9ef;
+}
+
+.ha-game dialog.jd-delivery[open] .jd-modal-card {
+  animation: jd-paper-arrives 700ms cubic-bezier(0.2, 0.8, 0.25, 1) both;
+}
+
+@keyframes jd-paper-arrives {
+  from {
+    opacity: 0;
+    transform: translate(40vw, -28vh) rotate(16deg) scale(0.65);
+  }
+  70% {
+    opacity: 1;
+    transform: translate(-7px, 6px) rotate(-2deg) scale(1.01);
+  }
+  to {
+    opacity: 1;
+    transform: translate(0, 0) rotate(0) scale(1);
+  }
+}
+
+@media (max-width: 1050px) {
+  .ha-game .jd-share-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .ha-game .jd-header,
+  .ha-game .jd-dealing-detail,
+  .ha-game .jd-two {
+    grid-template-columns: 1fr;
+  }
+
+  .ha-game .jd-header,
+  .ha-game .jd-panel {
+    padding: 19px;
+  }
+
+  .ha-game .jd-portfolio {
+    grid-template-columns: 170px minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .ha-game .jd-legend button {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .ha-game .jd-legend small {
+    display: none;
+  }
+
+  .ha-game .jd-teacher-quotes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .ha-game .jd-portfolio {
+    grid-template-columns: 1fr;
+  }
+
+  .ha-game .jd-ring {
+    max-width: 190px;
+    margin: auto;
+  }
+
+  .ha-game .jd-report-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ha-game .jd-modal-content {
+    padding: 12px;
+  }
+
+  .ha-game .jd-document-tabs {
+    top: -12px;
+  }
+
+  .ha-game button.jd-share-card {
+    padding: 10px;
+  }
+
+  .ha-game button.jd-share-card.jd-selected {
+    padding: 9px;
+  }
+
+  .ha-game .jd-share-card > strong {
+    font-size: 21px;
+  }
+
+  .ha-game .jd-company-signal {
+    min-height: 62px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ha-game dialog.jd-delivery[open] .jd-modal-card {
+    animation: none !important;
+    transform: none;
+  }
+}

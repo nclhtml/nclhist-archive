@@ -239,7 +239,7 @@ exports.getWatermarkedPdf = functions.https.onRequest(async (req, res) => {
             });
         });
 
-// 4. Send the watermarked PDF back to the client
+        // 4. Send the watermarked PDF back to the client
         const watermarkedBytes = await pdfDoc.save();
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', 'inline; filename="watermarked_document.pdf"');
@@ -289,3 +289,5 @@ exports.sendWelcomeEmailOnRoleAdd = functions.firestore
 
         return null;
     });
+
+exports.historyGame = require("./history-game/api.cjs");

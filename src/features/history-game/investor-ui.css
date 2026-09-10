@@ -1,0 +1,122 @@
+.ha-game .ip-gain {
+  color: #206238;
+  font-variant-numeric: tabular-nums;
+}
+
+.ha-game .ip-loss {
+  color: #a2352b;
+  font-variant-numeric: tabular-nums;
+}
+
+.ha-game .ip-rate {
+  padding: 14px;
+  margin: 10px 0 16px;
+  border: 1px solid #b8c9a8;
+  border-radius: 9px;
+  background: #eaf3de;
+}
+
+.ha-game .ip-rate small,
+.ha-game .ip-rate strong {
+  display: block;
+}
+
+.ha-game .ip-rate small {
+  color: #567047;
+  font-size: 12px;
+}
+
+.ha-game .ip-rate strong {
+  margin: 4px 0;
+  color: #294e32;
+  font-size: 29px;
+  line-height: 1.15;
+}
+
+.ha-game .ip-rate span {
+  font-size: 12px;
+  color: #52664a;
+}
+
+.ha-game .ip-efficiency {
+  padding: 13px;
+  margin: 12px 0;
+  border-left: 4px solid #77934f;
+  border-radius: 5px;
+  background: #eef5e2;
+  font-size: 13px;
+}
+
+.ha-game .ip-efficiency strong,
+.ha-game .ip-efficiency small {
+  display: block;
+}
+
+.ha-game .ip-efficiency strong {
+  margin: 5px 0;
+  color: #2d5837;
+  font-size: 20px;
+}
+
+.ha-game .ip-efficiency small {
+  color: #5e6d54;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.ha-game .ip-leaderboard {
+  min-width: 0;
+  padding: 24px;
+  border: 1px solid #c9b47c;
+  border-top: 5px solid #aa8737;
+  border-radius: 13px;
+  background: #fffaf0;
+}
+
+.ha-game .ip-leaderboard h2 {
+  font-family: Georgia, serif;
+}
+
+.ha-game .ip-leaderboard > p {
+  color: #606b55;
+  font-size: 13px;
+}
+
+.ha-game .ip-leaderboard table {
+  min-width: 650px;
+}
+
+.ha-game .ip-leaderboard td {
+  vertical-align: top;
+}
+
+.ha-game .ip-rank {
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.ha-game .ip-own-company td {
+  background: #edf5df;
+}
+
+.ha-game .ip-award {
+  display: block;
+  margin-top: 5px;
+  color: #7d6020;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.ha-game .ip-ranking-note {
+  display: block;
+  margin-top: 14px;
+  color: #69725f;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+@media (max-width: 600px) {
+  .ha-game .ip-leaderboard {
+    padding: 17px;
+  }
+}

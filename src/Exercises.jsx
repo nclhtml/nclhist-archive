@@ -4,12 +4,25 @@ import { Link } from 'react-router-dom';
 import { BookOpen, Plus, Trash2, Users, Code, Loader2, X, Clock } from 'lucide-react';
 import { db } from './firebase';
 import { useAuth } from './main';
+import {
+  canOpenExercise,
+  loadStudentClass,
+} from "./exerciseAccess";
 
 export default function Exercises() {
-  const { user } = useAuth();
+  const { user, authLoading } = useAuth();
+
+  const {
+    email = "",
+    role = "",
+    isAdmin = false,
+    isAuthorized = false,
+  } = user || {};
+
   const [exercises, setExercises] = useState([]);
-  const [studentClass, setStudentClass] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [refresh, setRefresh] = useState(0);
 
   // Admin Form State
   const [showForm, setShowForm] = useState(false);
@@ -27,50 +40,99 @@ export default function Exercises() {
   const [studentProgressList, setStudentProgressList] = useState([]);
   const [loadingProgress, setLoadingProgress] = useState(false);
 
-  useEffect(() => {
-    fetchData();
-  }, [user?.email, user?.role, user?.isAdmin]); // <-- FIX 1: Track primitive values to stop infinite loop
+// Existing create/delete handlers can continue calling fetchData().
+const fetchData = () => {
+  setRefresh((value) => value + 1);
+};
 
-  const fetchData = async () => {
-    setLoading(true);
+useEffect(() => {
+  if (authLoading) return;
+
+  let cancelled = false;
+
+  setLoading(true);
+  setLoadError("");
+  setExercises([]);
+  setAvailableGroups([]);
+
+  async function load() {
     try {
-      // 1. Fetch the student's class from the 'students' collection (if not admin)
-      let currentStudentClass = '';
-      if (user && !user.isAdmin) {
-        // MOCK: In your real code, use getDocs to find the student's class
-        // const studentSnap = await getDocs(query(collection(db, "students"), where("email", "==", user.email)));
-        // if (!studentSnap.empty) currentStudentClass = studentSnap.docs[0].data().className;
-        currentStudentClass = 'Class 4A'; // Mocked
-        setStudentClass(currentStudentClass);
+      if (!email || (!isAdmin && !isAuthorized)) {
+        return;
       }
 
-      // 2. Fetch all exercises from REAL Firebase
-      const snap = await getDocs(collection(db, 'exercises'));
-      const fetched = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const [exerciseSnapshot, currentStudentClass, configSnapshot] =
+        await Promise.all([
+          getDocs(collection(db, "exercises")),
 
-      // NEW: Fetch available custom roles (access groups) for the checkboxes
-      if (user?.isAdmin) {
-        const configDocSnap = await getDoc(doc(db, "system_settings", "config"));
-        if (configDocSnap.exists()) setAvailableGroups(configDocSnap.data().roles || []);
-      }
+          isAdmin
+            ? Promise.resolve("")
+            : loadStudentClass(email),
 
-      // 3. Filter exercises based on user role/class (Case-Insensitive Fix)
-      const filtered = fetched.filter(ex => {
-        if (user?.isAdmin) return true; // Admins see everything
+          isAdmin
+            ? getDoc(doc(db, "system_settings", "config"))
+            : Promise.resolve(null),
+        ]);
 
-        const groups = (ex.assignedGroups || []).map(g => String(g).toLowerCase().trim());
-        const studentClassLower = String(currentStudentClass).toLowerCase().trim();
-        const userRoleLower = String(user?.role || '').toLowerCase().trim();
+      if (cancelled) return;
 
-        return groups.includes('all') || groups.includes(studentClassLower) || groups.includes(userRoleLower);
-      });
+      const identity = {
+        email,
+        role,
+        isAdmin,
+        isAuthorized,
+      };
 
-      setExercises(filtered);
-    } catch (error) {
-      console.error("Error fetching exercises:", error);
+      const fetched = exerciseSnapshot.docs.map((document) => ({
+        ...document.data(),
+        id: document.id,
+      }));
+
+      setExercises(
+        fetched.filter((exercise) =>
+          canOpenExercise(
+            exercise,
+            identity,
+            currentStudentClass
+          )
+        )
+      );
+
+      const configuredRoles = configSnapshot?.exists()
+        ? configSnapshot.data().roles
+        : [];
+
+      setAvailableGroups(
+        Array.isArray(configuredRoles)
+          ? configuredRoles
+          : []
+      );
+    } catch (problem) {
+      if (cancelled) return;
+
+      console.error("Error fetching exercises:", problem);
+      setExercises([]);
+      setLoadError(
+        problem?.message || "Unable to load exercises."
+      );
+    } finally {
+      if (!cancelled) setLoading(false);
     }
-    setLoading(false);
+  }
+
+  load();
+
+  return () => {
+    cancelled = true;
   };
+}, [
+  authLoading,
+  email,
+  role,
+  isAdmin,
+  isAuthorized,
+  refresh,
+]);
 
   const handleCreate = async (e) => {
     e.preventDefault();
@@ -201,6 +263,27 @@ export default function Exercises() {
   };
 
   if (loading) return <div className="p-8 flex justify-center"><Loader2 className="animate-spin text-blue-600" /></div>;
+
+  if (loadError) {
+  return (
+    <div className="max-w-5xl mx-auto p-6">
+      <div
+        className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-4"
+        role="alert"
+      >
+        <p>{loadError}</p>
+
+        <button
+          type="button"
+          onClick={fetchData}
+          className="mt-3 font-bold underline"
+        >
+          Retry
+        </button>
+      </div>
+    </div>
+  );
+}
 
   return (
     <div className="max-w-5xl mx-auto p-6">

@@ -306,12 +306,25 @@ export default function Marks() {
         let loadedMultiCat = ['Uniform Test', 'Exam'];
         if (catDocSnap.exists()) {
           const data = catDocSnap.data();
-          if (user?.email && data[user.email]) {
+
+          if (user?.email === 'clng@ktls.edu.hk') {
+            // Superadmin: merge all categories from all users so they can see everything
+            let allCats = new Set(loadedCategories);
+            Object.keys(data).forEach(key => {
+              if (key !== 'multiSection' && Array.isArray(data[key])) {
+                data[key].forEach(cat => allCats.add(cat));
+              }
+            });
+            loadedCategories = Array.from(allCats);
+          } else if (user?.email && data[user.email]) {
+            // Normal admin: see their own categories
             loadedCategories = data[user.email];
-          } else if (data.list && user?.email === 'clng@ktls.edu.hk') {
+          } else if (data.list) {
+            // Fallback
             loadedCategories = data.list;
             if (!loadedCategories.includes('RAC')) loadedCategories.push('RAC');
           }
+
           if (data.multiSection) {
             loadedMultiCat = data.multiSection;
           }
@@ -2382,16 +2395,7 @@ export default function Marks() {
           )}
 
           <ul className="divide-y divide-gray-100 max-h-64 overflow-y-auto">
-            {categories.filter(cat => {
-              if (cat === 'Exam') return true; // Always show Exam
-              const presetId = classPresetsMap[selectedClass];
-              if (!presetId) return true;
-              const preset = presets.find(p => p.id === presetId);
-              if (!preset) return true;
-              if (preset.name === 'JS Geography') return ['Assignments', 'Quizzes', 'Uniform Test', 'Exam'].includes(cat);
-              if (preset.name.includes('Learning Attitude')) return ['Assignments'].includes(cat);
-              return preset.weights[cat] > 0;
-            }).map(cat => (
+            {categories.map(cat => (
               <li key={cat}>
                 {editingCategory === cat ? (
                   <div className="flex items-center px-4 py-2 space-x-2 bg-blue-50">

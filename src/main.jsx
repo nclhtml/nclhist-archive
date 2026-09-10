@@ -15,6 +15,7 @@ import StudentDashboard from './StudentDashboard.jsx'; // <-- ADD THIS IMPORT
 import List from './List.jsx'; // <-- ADD THIS IMPORT
 import Exercises from './Exercises.jsx'; // <-- NEW EXERCISES LIST COMPONENT
 import ExerciseRunner from './ExerciseRunner.jsx'; // <-- NEW EXERCISE RUNNER COMPONENT
+import LotteryMachine from './LotteryMachine.jsx'; // <-- ADD THIS IMPORT
 import { LanguageProvider, useLanguage } from './LanguageContext.jsx'; // <-- NEW IMPORT
 import { auth, db, googleProvider } from './firebase.js';
 import './index.css';
@@ -429,259 +430,267 @@ const Layout = ({ children }) => {
   const isPdf = location.pathname === '/pdf';
   const isRecord = location.pathname === '/record';
   const isMarks = location.pathname === '/marks';
-  const isDashboard = location.pathname === '/dashboard'; // <-- ADD THIS
-  const isList = location.pathname === '/list'; // <-- ADD THIS
+  const isDashboard = location.pathname === '/dashboard';
+  const isList = location.pathname === '/list';
+  const isLottery = location.pathname === '/lottery';
+  const isExerciseRunner = location.pathname.startsWith('/exercise/');
+  const hideNavBar = isExerciseRunner || isLottery;
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
-      <div className="bg-white border-b border-slate-200 sticky top-0 z-50 px-4 md:px-8 pt-4 shadow-sm">
-        <div className="max-w-7xl mx-auto">
-          <div className="flex justify-between items-center mb-4">
-            <div className="flex items-center gap-4">
-              <h1 className="font-bold text-xl text-slate-800 tracking-tight">{t("HISTORY ARCHIVE")}</h1>
-              <button
-                onClick={() => setLanguage(language === 'en' ? 'zh' : 'en')}
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-3 py-1.5 rounded-md transition-all shadow-sm border border-blue-700 active:scale-95"
-                title="Change Language"
-              >
-                <Globe size={14} />
-                {language === 'en' ? '繁體中文' : 'English'}
-              </button>
-            </div>
+      {!hideNavBar && (
+        <div className="bg-white border-b border-slate-200 sticky top-0 z-50 px-4 md:px-8 pt-4 shadow-sm">
+          <div className="max-w-7xl mx-auto">
+            <div className="flex justify-between items-center mb-4">
+              <div className="flex items-center gap-4">
+                <h1 className="font-bold text-xl text-slate-800 tracking-tight">{t("HISTORY ARCHIVE")}</h1>
+                <button
+                  onClick={() => setLanguage(language === 'en' ? 'zh' : 'en')}
+                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-3 py-1.5 rounded-md transition-all shadow-sm border border-blue-700 active:scale-95"
+                  title="Change Language"
+                >
+                  <Globe size={14} />
+                  {language === 'en' ? '繁體中文' : 'English'}
+                </button>
+              </div>
 
-            {/* User Profile / Login */}
-            <div>
-              {user ? (
-                <div className="flex items-center gap-3">
-                  {realUser?.email === SUPER_ADMIN && (
-                    <div className="relative flex items-center gap-2">
-                      {/* Debug Mode Button */}
-                      <div className="relative">
-                        <button onClick={() => { setShowDebugModal(!showDebugModal); setShowAdminLogs(false); setShowUsersModal(false); }} className={`p-1.5 rounded-md transition-colors ${impersonatedEmail ? 'text-amber-600 bg-amber-100 animate-pulse' : showDebugModal ? 'text-amber-600 bg-amber-50' : 'text-slate-400 hover:text-amber-600 hover:bg-amber-50'}`} title="Debug Mode (Impersonate Student)">
-                          <Bug size={18} />
-                        </button>
+              {/* User Profile / Login */}
+              <div>
+                {user ? (
+                  <div className="flex items-center gap-3">
+                    {realUser?.email === SUPER_ADMIN && (
+                      <div className="relative flex items-center gap-2">
+                        {/* Debug Mode Button */}
+                        <div className="relative">
+                          <button onClick={() => { setShowDebugModal(!showDebugModal); setShowAdminLogs(false); setShowUsersModal(false); }} className={`p-1.5 rounded-md transition-colors ${impersonatedEmail ? 'text-amber-600 bg-amber-100 animate-pulse' : showDebugModal ? 'text-amber-600 bg-amber-50' : 'text-slate-400 hover:text-amber-600 hover:bg-amber-50'}`} title="Debug Mode (Impersonate Student)">
+                            <Bug size={18} />
+                          </button>
 
-                        {showDebugModal && (
-                          <div className="absolute right-0 mt-2 bg-white rounded-xl shadow-2xl border border-slate-200 w-80 max-h-[60vh] flex flex-col z-[100]">
-                            <div className="flex justify-between items-center p-3 border-b border-slate-200 bg-slate-50 rounded-t-xl">
-                              <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">
-                                <Bug size={16} className="text-amber-600" /> Debug Mode
-                              </h2>
-                              <button onClick={() => setShowDebugModal(false)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
+                          {showDebugModal && (
+                            <div className="absolute right-0 mt-2 bg-white rounded-xl shadow-2xl border border-slate-200 w-80 max-h-[60vh] flex flex-col z-[100]">
+                              <div className="flex justify-between items-center p-3 border-b border-slate-200 bg-slate-50 rounded-t-xl">
+                                <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                                  <Bug size={16} className="text-amber-600" /> Debug Mode
+                                </h2>
+                                <button onClick={() => setShowDebugModal(false)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
+                              </div>
+                              <div className="p-3 flex flex-col gap-3 overflow-hidden flex-1">
+                                {impersonatedEmail ? (
+                                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-center">
+                                    <p className="text-xs text-amber-800 mb-2">Currently impersonating:</p>
+                                    <p className="text-sm font-bold text-amber-900 mb-3 break-all">{impersonatedEmail.email || impersonatedEmail}</p>
+                                    <button onClick={() => { setImpersonatedEmail(null); setShowDebugModal(false); navigate('/'); }} className="w-full py-1.5 bg-amber-600 text-white text-xs font-bold rounded hover:bg-amber-700">
+                                      Stop Debugging
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <input type="text" placeholder="Search student name or class..." value={debugSearch} onChange={e => setDebugSearch(e.target.value)} className="w-full text-xs p-2 border border-slate-300 rounded outline-none focus:border-amber-500" />
+                                    <div className="overflow-y-auto flex-1 border border-slate-100 rounded">
+                                      {Object.entries(debugGroups).map(([groupName, students]) => {
+                                        const filteredStudents = students.filter(s => (s.englishName + s.className + s.email).toLowerCase().includes(debugSearch.toLowerCase()));
+                                        if (filteredStudents.length === 0) return null;
+
+                                        const isExpanded = expandedDebugGroups[groupName] || debugSearch;
+
+                                        return (
+                                          <div key={groupName} className="border-b border-slate-100 last:border-0">
+                                            <button onClick={() => setExpandedDebugGroups(prev => ({ ...prev, [groupName]: !prev[groupName] }))} className="w-full text-left p-2 text-xs font-bold bg-slate-50 hover:bg-slate-100 flex justify-between items-center text-slate-700">
+                                              {groupName} ({filteredStudents.length})
+                                              <ChevronDown size={14} className={`transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                                            </button>
+                                            {isExpanded && (
+                                              <div className="flex flex-col">
+                                                {filteredStudents.map(s => (
+                                                  <button key={s.email} onClick={() => { setImpersonatedEmail(s); setShowDebugModal(false); navigate('/dashboard'); }} className="w-full text-left p-2 pl-4 text-xs hover:bg-amber-50 border-t border-slate-50">
+                                                    <div className="font-bold text-slate-700">{s.englishName}</div>
+                                                    <div className="text-slate-500 text-[10px]">{s.email}</div>
+                                                  </button>
+                                                ))}
+                                              </div>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </>
+                                )}
+                              </div>
                             </div>
-                            <div className="p-3 flex flex-col gap-3 overflow-hidden flex-1">
-                              {impersonatedEmail ? (
-                                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-center">
-                                  <p className="text-xs text-amber-800 mb-2">Currently impersonating:</p>
-                                  <p className="text-sm font-bold text-amber-900 mb-3 break-all">{impersonatedEmail.email || impersonatedEmail}</p>
-                                  <button onClick={() => { setImpersonatedEmail(null); setShowDebugModal(false); navigate('/'); }} className="w-full py-1.5 bg-amber-600 text-white text-xs font-bold rounded hover:bg-amber-700">
-                                    Stop Debugging
-                                  </button>
-                                </div>
-                              ) : (
-                                <>
-                                  <input type="text" placeholder="Search student name or class..." value={debugSearch} onChange={e => setDebugSearch(e.target.value)} className="w-full text-xs p-2 border border-slate-300 rounded outline-none focus:border-amber-500" />
-                                  <div className="overflow-y-auto flex-1 border border-slate-100 rounded">
-                                    {Object.entries(debugGroups).map(([groupName, students]) => {
-                                      const filteredStudents = students.filter(s => (s.englishName + s.className + s.email).toLowerCase().includes(debugSearch.toLowerCase()));
-                                      if (filteredStudents.length === 0) return null;
+                          )}
+                        </div>
+                        {/* Admin Logs Button & Dropdown */}
+                        <div className="relative">
+                          <button onClick={() => { setShowAdminLogs(!showAdminLogs); setShowUsersModal(false); }} className={`relative p-1.5 rounded-md transition-colors ${showAdminLogs ? 'text-red-600 bg-red-50' : 'text-slate-400 hover:text-red-600 hover:bg-red-50'}`} title="Super Admin Logs">
+                            <Bell size={18} />
+                            {unreadAdminLogs > 0 && (
+                              <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white ring-2 ring-white">
+                                {unreadAdminLogs}
+                              </span>
+                            )}
+                          </button>
 
-                                      const isExpanded = expandedDebugGroups[groupName] || debugSearch;
+                          {showAdminLogs && (
+                            <div className="absolute right-0 mt-2 bg-white rounded-xl shadow-2xl border border-slate-200 w-96 max-h-[60vh] flex flex-col z-[100]">
+                              <div className="flex justify-between items-center p-3 border-b border-slate-200 bg-slate-50 rounded-t-xl">
+                                <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                                  <Bell size={16} className="text-red-600" /> Super Admin Logs (Last 3 Days)
+                                </h2>
+                                <button onClick={() => setShowAdminLogs(false)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
+                              </div>
+                              <div className="p-3 overflow-y-auto flex-1">
+                                {loadingAdminLogs ? (
+                                  <div className="flex justify-center py-8"><Loader2 className="animate-spin text-red-600" /></div>
+                                ) : (
+                                  <div className="flex flex-col gap-3">
+                                    {adminLogs.length === 0 && <div className="text-center text-slate-500 py-4 text-xs">No recent logs.</div>}
+                                    {adminLogs.map((log) => {
+                                      const isAlert = log.type === 'SMTP_ERROR' || log.type === 'SUSPICIOUS_DOWNLOAD' || log.type === 'USER_REPORT';
+                                      const isSuccess = log.type === 'SMTP_SUCCESS' || log.type === 'EMAIL_SUCCESS' || log.type === 'SYSTEM_SUCCESS';
+
+                                      let bgClass = 'bg-blue-50 border-blue-100';
+                                      let textClass = 'text-blue-800';
+                                      let titleClass = 'text-blue-700';
+
+                                      if (isAlert) {
+                                        bgClass = 'bg-red-50 border-red-100';
+                                        textClass = 'text-red-800';
+                                        titleClass = 'text-red-700';
+                                      } else if (isSuccess) {
+                                        bgClass = 'bg-green-50 border-green-100';
+                                        textClass = 'text-green-800';
+                                        titleClass = 'text-green-700';
+                                      }
 
                                       return (
-                                        <div key={groupName} className="border-b border-slate-100 last:border-0">
-                                          <button onClick={() => setExpandedDebugGroups(prev => ({ ...prev, [groupName]: !prev[groupName] }))} className="w-full text-left p-2 text-xs font-bold bg-slate-50 hover:bg-slate-100 flex justify-between items-center text-slate-700">
-                                            {groupName} ({filteredStudents.length})
-                                            <ChevronDown size={14} className={`transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
-                                          </button>
-                                          {isExpanded && (
-                                            <div className="flex flex-col">
-                                              {filteredStudents.map(s => (
-                                                <button key={s.email} onClick={() => { setImpersonatedEmail(s); setShowDebugModal(false); navigate('/dashboard'); }} className="w-full text-left p-2 pl-4 text-xs hover:bg-amber-50 border-t border-slate-50">
-                                                  <div className="font-bold text-slate-700">{s.englishName}</div>
-                                                  <div className="text-slate-500 text-[10px]">{s.email}</div>
-                                                </button>
-                                              ))}
-                                            </div>
-                                          )}
+                                        <div
+                                          key={log.id}
+                                          onClick={() => {
+                                            if (log.viewId) {
+                                              setShowAdminLogs(false);
+                                              window.location.href = `/?viewId=${log.viewId}`;
+                                            }
+                                          }}
+                                          className={`border rounded-lg p-3 text-xs ${log.viewId ? 'cursor-pointer hover:shadow-md transition-shadow' : ''} ${bgClass}`}
+                                        >
+                                          <div className="flex justify-between items-start mb-1">
+                                            <span className={`font-bold ${titleClass}`}>{log.type.replace('_', ' ')}</span>
+                                            <span className="text-slate-500">{new Date(log.timestamp).toLocaleString('en-GB')}</span>
+                                          </div>
+                                          <p dangerouslySetInnerHTML={{ __html: log.message }} className={textClass}></p>
+                                          {log.viewId && <div className={`mt-2 font-bold text-[10px] uppercase ${titleClass}`}>Click to view document &rarr;</div>}
                                         </div>
                                       );
                                     })}
                                   </div>
-                                </>
-                              )}
+                                )}
+                              </div>
                             </div>
-                          </div>
-                        )}
-                      </div>
-                      {/* Admin Logs Button & Dropdown */}
-                      <div className="relative">
-                        <button onClick={() => { setShowAdminLogs(!showAdminLogs); setShowUsersModal(false); }} className={`relative p-1.5 rounded-md transition-colors ${showAdminLogs ? 'text-red-600 bg-red-50' : 'text-slate-400 hover:text-red-600 hover:bg-red-50'}`} title="Super Admin Logs">
-                          <Bell size={18} />
-                          {unreadAdminLogs > 0 && (
-                            <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white ring-2 ring-white">
-                              {unreadAdminLogs}
-                            </span>
                           )}
-                        </button>
+                        </div>
 
-                        {showAdminLogs && (
-                          <div className="absolute right-0 mt-2 bg-white rounded-xl shadow-2xl border border-slate-200 w-96 max-h-[60vh] flex flex-col z-[100]">
-                            <div className="flex justify-between items-center p-3 border-b border-slate-200 bg-slate-50 rounded-t-xl">
-                              <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">
-                                <Bell size={16} className="text-red-600" /> Super Admin Logs (Last 3 Days)
-                              </h2>
-                              <button onClick={() => setShowAdminLogs(false)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
+                        {/* User Logs Button & Dropdown */}
+                        <div className="relative">
+                          <button onClick={() => { setShowUsersModal(!showUsersModal); setShowAdminLogs(false); }} className={`p-1.5 rounded-md transition-colors ${showUsersModal ? 'text-blue-600 bg-blue-50' : 'text-slate-400 hover:text-blue-600 hover:bg-blue-50'}`} title="View User Records">
+                            <Users size={18} />
+                          </button>
+
+                          {showUsersModal && (
+                            <div className="absolute right-0 mt-2 bg-white rounded-xl shadow-2xl border border-slate-200 w-96 max-h-[60vh] flex flex-col z-[100]">
+                              <div className="flex justify-between items-center p-3 border-b border-slate-200 bg-slate-50 rounded-t-xl">
+                                <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                                  <Users size={16} className="text-blue-600" /> Login Records (Last 3 Days)
+                                </h2>
+                                <button onClick={() => setShowUsersModal(false)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
+                              </div>
+                              <div className="p-3 overflow-y-auto flex-1">
+                                {loadingUsers ? (
+                                  <div className="flex justify-center py-8"><Loader2 className="animate-spin text-blue-600" /></div>
+                                ) : (
+                                  <table className="w-full text-left text-xs">
+                                    <thead className="text-slate-500">
+                                      <tr><th className="pb-2 font-medium">Time</th><th className="pb-2 font-medium">User</th></tr>
+                                    </thead>
+                                    <tbody>
+                                      {systemUsers.length === 0 && <tr><td colSpan="2" className="py-4 text-center text-slate-500">No recent records.</td></tr>}
+                                      {systemUsers.map((u, i) => (
+                                        <tr key={i} className="border-t border-slate-100">
+                                          <td className="py-2 text-slate-400 whitespace-nowrap pr-2">{u.timestamp}</td>
+                                          <td className="py-2">
+                                            <div className="text-slate-700 font-medium truncate w-40" title={u.email}>
+                                              {u.studentName ? <span className="text-blue-600">{u.studentName}</span> : u.email}
+                                            </div>
+                                            <div className="text-slate-500 text-[10px] mt-0.5 capitalize">
+                                              {u.action} {u.action === 'Login' && !u.studentName ? `(${u.role.replace('_', ' ')})` : ''}
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                )}
+                              </div>
                             </div>
-                            <div className="p-3 overflow-y-auto flex-1">
-                              {loadingAdminLogs ? (
-                                <div className="flex justify-center py-8"><Loader2 className="animate-spin text-red-600" /></div>
-                              ) : (
-                                <div className="flex flex-col gap-3">
-                                  {adminLogs.length === 0 && <div className="text-center text-slate-500 py-4 text-xs">No recent logs.</div>}
-                                  {adminLogs.map((log) => {
-                                    const isAlert = log.type === 'SMTP_ERROR' || log.type === 'SUSPICIOUS_DOWNLOAD' || log.type === 'USER_REPORT';
-                                    const isSuccess = log.type === 'SMTP_SUCCESS' || log.type === 'EMAIL_SUCCESS' || log.type === 'SYSTEM_SUCCESS';
-
-                                    let bgClass = 'bg-blue-50 border-blue-100';
-                                    let textClass = 'text-blue-800';
-                                    let titleClass = 'text-blue-700';
-
-                                    if (isAlert) {
-                                      bgClass = 'bg-red-50 border-red-100';
-                                      textClass = 'text-red-800';
-                                      titleClass = 'text-red-700';
-                                    } else if (isSuccess) {
-                                      bgClass = 'bg-green-50 border-green-100';
-                                      textClass = 'text-green-800';
-                                      titleClass = 'text-green-700';
-                                    }
-
-                                    return (
-                                      <div
-                                        key={log.id}
-                                        onClick={() => {
-                                          if (log.viewId) {
-                                            setShowAdminLogs(false);
-                                            window.location.href = `/?viewId=${log.viewId}`;
-                                          }
-                                        }}
-                                        className={`border rounded-lg p-3 text-xs ${log.viewId ? 'cursor-pointer hover:shadow-md transition-shadow' : ''} ${bgClass}`}
-                                      >
-                                        <div className="flex justify-between items-start mb-1">
-                                          <span className={`font-bold ${titleClass}`}>{log.type.replace('_', ' ')}</span>
-                                          <span className="text-slate-500">{new Date(log.timestamp).toLocaleString('en-GB')}</span>
-                                        </div>
-                                        <p dangerouslySetInnerHTML={{ __html: log.message }} className={textClass}></p>
-                                        {log.viewId && <div className={`mt-2 font-bold text-[10px] uppercase ${titleClass}`}>Click to view document &rarr;</div>}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )}
+                          )}
+                        </div>
                       </div>
-
-                      {/* User Logs Button & Dropdown */}
-                      <div className="relative">
-                        <button onClick={() => { setShowUsersModal(!showUsersModal); setShowAdminLogs(false); }} className={`p-1.5 rounded-md transition-colors ${showUsersModal ? 'text-blue-600 bg-blue-50' : 'text-slate-400 hover:text-blue-600 hover:bg-blue-50'}`} title="View User Records">
-                          <Users size={18} />
-                        </button>
-
-                        {showUsersModal && (
-                          <div className="absolute right-0 mt-2 bg-white rounded-xl shadow-2xl border border-slate-200 w-96 max-h-[60vh] flex flex-col z-[100]">
-                            <div className="flex justify-between items-center p-3 border-b border-slate-200 bg-slate-50 rounded-t-xl">
-                              <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">
-                                <Users size={16} className="text-blue-600" /> Login Records (Last 3 Days)
-                              </h2>
-                              <button onClick={() => setShowUsersModal(false)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
-                            </div>
-                            <div className="p-3 overflow-y-auto flex-1">
-                              {loadingUsers ? (
-                                <div className="flex justify-center py-8"><Loader2 className="animate-spin text-blue-600" /></div>
-                              ) : (
-                                <table className="w-full text-left text-xs">
-                                  <thead className="text-slate-500">
-                                    <tr><th className="pb-2 font-medium">Time</th><th className="pb-2 font-medium">User</th></tr>
-                                  </thead>
-                                  <tbody>
-                                    {systemUsers.length === 0 && <tr><td colSpan="2" className="py-4 text-center text-slate-500">No recent records.</td></tr>}
-                                    {systemUsers.map((u, i) => (
-                                      <tr key={i} className="border-t border-slate-100">
-                                        <td className="py-2 text-slate-400 whitespace-nowrap pr-2">{u.timestamp}</td>
-                                        <td className="py-2">
-                                          <div className="text-slate-700 font-medium truncate w-40" title={u.email}>
-                                            {u.studentName ? <span className="text-blue-600">{u.studentName}</span> : u.email}
-                                          </div>
-                                          <div className="text-slate-500 text-[10px] mt-0.5 capitalize">
-                                            {u.action} {u.action === 'Login' && !u.studentName ? `(${u.role.replace('_', ' ')})` : ''}
-                                          </div>
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </div>
+                    )}
+                    <div className="text-right hidden sm:block">
+                      <div className="text-sm font-bold text-slate-700">{user.displayName || user.email.split('@')[0]}</div>
+                      <div className="text-xs text-slate-500 capitalize">{user.role ? user.role.replace('_', ' ') : 'Unauthorized'}</div>
                     </div>
-                  )}
-                  <div className="text-right hidden sm:block">
-                    <div className="text-sm font-bold text-slate-700">{user.displayName || user.email.split('@')[0]}</div>
-                    <div className="text-xs text-slate-500 capitalize">{user.role ? user.role.replace('_', ' ') : 'Unauthorized'}</div>
+                    <button onClick={logout} className="text-sm text-slate-500 hover:text-red-600 font-medium transition-colors">
+                      {t("Sign Out")}
+                    </button>
                   </div>
-                  <button onClick={logout} className="text-sm text-slate-500 hover:text-red-600 font-medium transition-colors">
-                    {t("Sign Out")}
+                ) : (
+                  <button onClick={loginWithGoogle} className="flex items-center gap-2 bg-white border border-slate-300 text-slate-700 px-4 py-1.5 rounded-lg text-sm font-bold hover:bg-slate-50 transition-colors shadow-sm">
+                    {t("Sign in")}
                   </button>
-                </div>
-              ) : (
-                <button onClick={loginWithGoogle} className="flex items-center gap-2 bg-white border border-slate-300 text-slate-700 px-4 py-1.5 rounded-lg text-sm font-bold hover:bg-slate-50 transition-colors shadow-sm">
-                  {t("Sign in")}
-                </button>
+                )}
+              </div>
+            </div>
+
+            <div className="flex gap-8 overflow-x-auto">
+              <Link to="/" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isSearch ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                {t("Search Engine")}
+              </Link>
+              <Link to="/trend" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isTrend ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                {t("DSE Trend Analysis")}
+              </Link>
+              <Link to="/dashboard" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isDashboard ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                {t("Student Dashboard")}
+              </Link>
+              <Link to="/list" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isList ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                {t("Saved Lists")}
+              </Link>
+              <Link to="/exercises" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${location.pathname.startsWith('/exercise') ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                {t("Interactive Exercises")}
+              </Link>
+
+              {/* ONLY SHOW TABS IF ADMIN */}
+              {user?.isAdmin && (
+                <>
+                  <Link to="/pdf" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isPdf ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                    {t("PDF Tools")}
+                  </Link>
+                  <Link to="/record" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isRecord ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                    {t("Record Management")}
+                  </Link>
+                  <Link to="/marks" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isMarks ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                    {t("Marks Management")}
+                  </Link>
+                  <Link to="/lottery" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isLottery ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                    {t("Lottery Machine")}
+                  </Link>
+                </>
               )}
             </div>
           </div>
-
-          <div className="flex gap-8 overflow-x-auto">
-            <Link to="/" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isSearch ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-              {t("Search Engine")}
-            </Link>
-            <Link to="/trend" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isTrend ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-              {t("DSE Trend Analysis")}
-            </Link>
-            <Link to="/dashboard" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isDashboard ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-              {t("Student Dashboard")}
-            </Link>
-            <Link to="/list" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isList ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-              {t("Saved Lists")}
-            </Link>
-            <Link to="/exercises" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${location.pathname.startsWith('/exercise') ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-              {t("Interactive Exercises")}
-            </Link>
-
-            {/* ONLY SHOW TABS IF ADMIN */}
-            {user?.isAdmin && (
-              <>
-                <Link to="/pdf" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isPdf ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                  {t("PDF Tools")}
-                </Link>
-                <Link to="/record" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isRecord ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                  {t("Record Management")}
-                </Link>
-                <Link to="/marks" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isMarks ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                  {t("Marks Management")}
-                </Link>
-              </>
-            )}
-          </div>
         </div>
-      </div>
+      )}
 
-      <div className="flex-1">
+      <div className="flex-1 flex flex-col">
         {children}
       </div>
     </div>
@@ -714,6 +723,11 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="/marks" element={
                 <ProtectedAdminRoute>
                   <Marks />
+                </ProtectedAdminRoute>
+              } />
+              <Route path="/lottery" element={
+                <ProtectedAdminRoute>
+                  <LotteryMachine />
                 </ProtectedAdminRoute>
               } />
               <Route path="/dashboard" element={<StudentDashboard />} />

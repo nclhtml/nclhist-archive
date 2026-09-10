@@ -1,0 +1,528 @@
+.ha-game .ed-header.ir-investor-header {
+  grid-template-columns: minmax(0, 0.9fr) minmax(320px, 1.1fr);
+  align-items: center;
+  gap: 20px;
+}
+
+.ha-game .ir-account-head {
+  display: grid;
+  gap: 8px;
+}
+
+.ha-game button.ir-spendable {
+  display: block;
+  width: 100%;
+  padding: 15px 20px;
+  border: 1px solid #c8b47b;
+  border-radius: 10px;
+  background: #fbf0cf;
+  color: #22452c;
+  text-align: left;
+}
+
+.ha-game .ir-spendable > small {
+  display: block;
+  font-size: 13px;
+  font-weight: 750;
+  letter-spacing: 0.025em;
+}
+
+.ha-game .ir-spendable > strong {
+  display: block;
+  margin-top: 3px;
+  font-size: clamp(2.2rem, 4.8vw, 3.4rem);
+  line-height: 1.13;
+  letter-spacing: -0.04em;
+}
+
+.ha-game .ir-small-balances {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px 12px;
+  color: #e6eadc;
+  font-size: 12px;
+}
+
+.ha-game .ir-small-balances button {
+  min-height: 44px;
+  padding: 6px 9px;
+  border-color: #829276;
+  color: #f6f2e4;
+  background: transparent;
+  font-size: 12px;
+}
+
+.ha-game .ir-small-balances button:hover:not(:disabled) {
+  color: #fff;
+  background: #3e5940;
+}
+
+.ha-game .ir-board {
+  padding: 13px 17px;
+  border: 1px solid #cbd7bf;
+  border-radius: 10px;
+  background: #f0f5e9;
+}
+
+.ha-game .ir-board-main {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  align-items: center;
+  gap: 14px;
+}
+
+.ha-game .ir-board-main > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ha-game .ir-board-main small {
+  color: #617455;
+  font-size: 11px;
+}
+
+.ha-game .ir-board-main strong {
+  font-size: 19px;
+  line-height: 1.25;
+}
+
+.ha-game .ir-board-main span {
+  font-size: 11px;
+  line-height: 1.4;
+  color: #626d59;
+}
+
+.ha-game .ir-board details {
+  margin-top: 7px;
+  font-size: 12px;
+}
+
+.ha-game .ir-board summary {
+  min-height: 44px;
+  padding: 10px 0;
+  font-size: 12px;
+}
+
+.ha-game .ir-board details p:last-child {
+  margin-bottom: 0;
+}
+
+.ha-game .ir-board-good {
+  border-color: #a9c699;
+}
+
+.ha-game .ir-board-warning {
+  background: #fff0db;
+  border-color: #dab680;
+}
+
+.ha-game .ir-board-warning > strong,
+.ha-game .ir-board-warning > span {
+  display: block;
+}
+
+.ha-game .ir-board-warning > span {
+  margin-top: 5px;
+  font-size: 13px;
+}
+
+.ha-game .ir-practice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 15px;
+  align-items: center;
+  background: #f6eed4;
+  border-color: #d3bf87;
+}
+
+.ha-game .ir-practice > span {
+  font-size: 13px;
+}
+
+.ha-game .ir-warning-dots {
+  display: flex;
+  gap: 5px;
+}
+
+.ha-game .ir-warning-dots i {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border: 1px solid #b0baa3;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.ha-game .ir-warning-dots i.ir-used {
+  border-color: #a34b37;
+  background: #b85b45;
+}
+
+.ha-game .ir-board-summary {
+  padding: 17px;
+  margin: 15px 0;
+  border: 1px solid #cabc91;
+  border-radius: 10px;
+  background: #f7efd9;
+}
+
+.ha-game .ir-board-summary > strong {
+  font-size: 18px;
+}
+
+.ha-game .ir-board-summary p {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.ha-game .ir-report-heading {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.ha-game .ir-report-heading h2 {
+  margin-bottom: 8px;
+  font-family: Georgia, serif;
+  font-size: 29px;
+}
+
+.ha-game .ir-money-intro {
+  margin-top: 17px;
+  font-size: 20px;
+  line-height: 1.4;
+}
+
+.ha-game .ir-money-extra {
+  color: #56684e;
+  font-size: 13px;
+}
+
+.ha-game .ir-money-story {
+  padding: 18px;
+  border: 1px solid #d4dbc7;
+  border-radius: 12px;
+  background: #f6f8ed;
+}
+
+.ha-game .ir-money-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 15px;
+  padding: 11px 0;
+  border-bottom: 1px dashed #ced7c0;
+  font-size: 14px;
+}
+
+.ha-game .ir-money-row strong {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-size: 18px;
+}
+
+.ha-game .ir-money-total,
+.ha-game .ir-funding-total {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px 18px;
+  padding-top: 17px;
+}
+
+.ha-game .ir-money-total > span,
+.ha-game .ir-funding-total > span {
+  font-weight: 750;
+  font-size: 14px;
+}
+
+.ha-game .ir-money-total > strong {
+  font-size: 32px;
+  animation: ir-money-appears 280ms ease both;
+}
+
+.ha-game .ir-positive {
+  color: #216238;
+}
+
+.ha-game .ir-negative {
+  color: #a5362c;
+}
+
+.ha-game .ir-funding {
+  margin: 22px 0;
+  padding: 21px;
+  border: 1px solid #b8c99c;
+  border-radius: 13px;
+  background: #edf5df;
+}
+
+.ha-game .ir-funding h3 {
+  font-size: 18px;
+}
+
+.ha-game .ir-funding-total {
+  color: #214b2b;
+}
+
+.ha-game .ir-funding-total > strong {
+  font-size: clamp(2.2rem, 5vw, 3.2rem);
+  line-height: 1.1;
+}
+
+.ha-game .ir-orders-section {
+  margin: 24px 0 18px;
+}
+
+.ha-game .ir-orders {
+  display: grid;
+  grid-template-columns: 1fr auto 1.3fr auto 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 19px;
+  border-radius: 12px;
+  background: #f3efdf;
+}
+
+.ha-game .ir-orders > div {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.ha-game .ir-orders small {
+  font-size: 12px;
+  color: #647258;
+}
+
+.ha-game .ir-orders strong {
+  font-size: 25px;
+  line-height: 1.15;
+}
+
+.ha-game .ir-factory > span {
+  font-size: 12px;
+}
+
+.ha-game .ir-arrow {
+  font-size: 24px;
+  color: #a08c4e;
+}
+
+.ha-game .ir-japan {
+  display: grid;
+  place-items: center;
+  width: 49px;
+  height: 33px;
+  border: 1px solid #d8d5c6;
+  border-radius: 3px;
+  background: #fff;
+}
+
+.ha-game .ir-japan i {
+  display: block;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: #b93636;
+}
+
+.ha-game .ir-action-hint {
+  padding: 13px 15px;
+  margin-top: 12px;
+  border-left: 4px solid #789254;
+  background: #f1f5e8;
+  font-size: 14px;
+}
+
+.ha-game .ir-simple-warning {
+  padding: 13px 15px;
+  margin: 14px 0;
+  border-left: 4px solid #bc8b37;
+  background: #fff3d7;
+  color: #765521;
+  font-size: 14px;
+}
+
+.ha-game .ir-small {
+  color: #627058;
+  font-size: 12px;
+}
+
+.ha-game .ir-reveal {
+  animation: ir-money-appears 280ms ease both;
+}
+
+@keyframes ir-money-appears {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Read-only spotlight tour */
+
+.ha-game dialog.ir-guide {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  background: transparent;
+  color: #263526;
+}
+
+.ha-game dialog.ir-guide:not([open]) {
+  display: none;
+}
+
+.ha-game dialog.ir-guide::backdrop {
+  background: transparent;
+}
+
+.ha-game .ir-shade {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.ha-game .ir-spotlight {
+  position: absolute;
+  border: 4px solid #efc55c;
+  border-radius: 14px;
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 85%);
+  pointer-events: none;
+}
+
+.ha-game .ir-coach {
+  position: absolute;
+  max-height: calc(100vh - 24px);
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+  padding: 20px;
+  border: 2px solid #d4b66b;
+  border-radius: 14px;
+  background: #fffaf0;
+  box-shadow: 0 15px 55px rgb(0 0 0 / 28%);
+}
+
+.ha-game .ir-coach > small {
+  color: #78633b;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.ha-game .ir-coach h2 {
+  margin: 8px 0 12px;
+  font-size: 23px;
+  line-height: 1.18;
+}
+
+.ha-game .ir-coach p {
+  margin-bottom: 15px;
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.ha-game .ir-coach .ir-guide-note {
+  color: #647058;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.ha-game .ir-guide-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1.35fr;
+  gap: 9px;
+  margin-top: 12px;
+}
+
+.ha-game .ir-guide-buttons button,
+.ha-game .ir-coach button.ir-skip {
+  min-height: 44px;
+}
+
+.ha-game .ir-coach button.ir-skip {
+  width: 100%;
+  margin-top: 8px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 550;
+}
+
+@media (max-width: 850px) {
+  .ha-game .ed-header.ir-investor-header {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .ha-game .ir-board-main {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ha-game .ir-goal-status {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 500px) {
+  .ha-game .ir-orders {
+    gap: 4px;
+    padding: 13px 8px;
+    grid-template-columns: 1fr auto 1.2fr auto 1fr;
+  }
+
+  .ha-game .ir-orders strong {
+    font-size: 20px;
+  }
+
+  .ha-game .ir-orders small,
+  .ha-game .ir-factory > span {
+    font-size: 11px;
+  }
+
+  .ha-game .ir-money-row {
+    align-items: flex-start;
+    font-size: 13px;
+  }
+
+  .ha-game .ir-money-row strong {
+    font-size: 16px;
+  }
+
+  .ha-game .ir-funding {
+    padding: 16px;
+  }
+
+  .ha-game .ir-board-main {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ha-game .ir-reveal,
+  .ha-game .ir-money-total > strong {
+    animation: none !important;
+    transform: none;
+  }
+}

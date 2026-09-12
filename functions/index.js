@@ -291,3 +291,7 @@ exports.sendWelcomeEmailOnRoleAdd = functions.firestore
     });
 
 exports.historyGame = require("./history-game/api.cjs");
+
+const poeImport = require("./poe-import.cjs");
+exports.poeExtract = poeImport.poeExtract;
+exports.cleanupPoeUploads = poeImport.cleanupPoeUploads;

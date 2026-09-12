@@ -1,6 +1,19 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AlertTriangle, Users, BookX, CheckCircle, Save, Upload, Plus, Trash2, Archive, Calendar, Loader2, MinusCircle, History, X, Printer, DollarSign, ChevronDown, ChevronUp } from 'lucide-react';
-import { collection, getDocs, doc, writeBatch, updateDoc, setDoc, getDoc, query, where, deleteDoc, addDoc } from 'firebase/firestore';
+import {
+  collection,
+  getDocs,
+  getDocsFromServer,
+  doc,
+  writeBatch,
+  updateDoc,
+  setDoc,
+  getDoc,
+  query,
+  where,
+  deleteDoc,
+  addDoc
+} from 'firebase/firestore';
 import { db } from './firebase';
 import { useAuth } from './main.jsx';
 
@@ -19,6 +32,8 @@ export default function Record() {
   const [selectedClass, setSelectedClass] = useState('');
   const [newClassName, setNewClassName] = useState('');
   const [bulkInput, setBulkInput] = useState('');
+  const [isImportingStudents, setIsImportingStudents] = useState(false);
+  const studentImportLock = useRef(false);
   const [forgetInput, setForgetInput] = useState('');
   const [recordDate, setRecordDate] = useState(new Date().toISOString().split('T')[0]);
 
@@ -116,7 +131,16 @@ export default function Record() {
           loadedClasses = visibleClasses.filter(c => !c.isArchived);
           loadedClasses.sort((a, b) => a.name.localeCompare(b.name));
           setClasses(loadedClasses);
-          if (loadedClasses.length > 0) setSelectedClass(loadedClasses[0].name);
+
+          const urlParams = new URLSearchParams(window.location.search);
+          const classFromUrl = urlParams.get('class');
+
+          if (classFromUrl && loadedClasses.some(c => c.name.replace(/\u200B/g, '') === classFromUrl)) {
+            const matchedClass = loadedClasses.find(c => c.name.replace(/\u200B/g, '') === classFromUrl);
+            setSelectedClass(matchedClass.name);
+          } else if (loadedClasses.length > 0) {
+            setSelectedClass(loadedClasses[0].name);
+          }
         }
 
         // Fetch all students
@@ -124,10 +148,13 @@ export default function Record() {
         const studentsList = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         setStudents(studentsList);
 
-        // Fetch authorized emails from user_roles for auto-suggestion
-        const rolesSnap = await getDocs(collection(db, "user_roles"));
-        const rolesList = rolesSnap.docs.map(d => d.id);
-        setAvailableEmails(rolesList);
+        // Only the superadmin may load the full website-access list.
+        setAvailableEmails([]);
+
+        if (user?.email === 'clng@ktls.edu.hk') {
+          const rolesSnap = await getDocs(collection(db, "user_roles"));
+          setAvailableEmails(rolesSnap.docs.map(d => d.id));
+        }
 
         // Fetch Printing Settings for EVERYONE (needed for calculating student counts in email draft)
         const printSettingsSnap = await getDoc(doc(db, "settings", "printing"));
@@ -172,107 +199,363 @@ export default function Record() {
   // ============================================================================
   const handleBulkImport = async (e) => {
     e.preventDefault();
-    if (!bulkInput.trim() || !selectedClass) return;
 
-    const lines = bulkInput.split('\n');
-    const newStudents = [];
+    if (
+      studentImportLock.current ||
+      !bulkInput.trim() ||
+      !selectedClass ||
+      !user?.isAdmin
+    ) return;
 
-    for (let line of lines) {
-      line = line.trim();
-      if (!line) continue;
+    const targetClass = selectedClass;
+    const classInfo = classes.find(c => c.name === targetClass);
 
-      // Automatically skip the header row if you copied it from Excel
-      const upperLine = line.toUpperCase();
-      if (upperLine.includes('CLASSNAME') || upperLine.includes('CLASSCODE') || upperLine.includes('ENNAME')) {
-        continue;
-      }
-
-      let classNumber = '';
-      let englishName = '';
-      let chineseName = '';
-      let email = '';
-
-      // Split by tabs (which is how Excel formats copied cells)
-      const parts = line.split('\t').map(p => p.trim()).filter(p => p !== '');
-
-      // Format from your Excel: [Class] [ClassNo] [RegNo] [EnName] [ChName]
-      if (parts.length >= 5) {
-        const rowClass = parts[0];
-        const rowClassNo = parts[1];
-        // parts[2] is RegNo, which we completely ignore
-        englishName = parts[3];
-        chineseName = parts[4];
-        email = parts[5] || '';
-
-        // If the class in Excel matches the selected class, just use the class number (e.g. "1")
-        // If it's different, combine them (e.g. "4B" + "1" = "4B1")
-        if (rowClass === selectedClass) {
-          classNumber = rowClassNo;
-        } else {
-          classNumber = rowClass + rowClassNo;
-        }
-      }
-      // Fallback for simpler 3-column formats: [ClassNo] [EnName] [ChName]
-      else if (parts.length === 3) {
-        classNumber = parts[0];
-        englishName = parts[1];
-        chineseName = parts[2];
-      }
-      else {
-        // Fallback to regex if spaces are used instead of tabs
-        const cleanLine = line.trim();
-        const match4 = cleanLine.match(/^([A-Za-z0-9]+)\s+(\d+)\s+(.+?)\s+([^\x00-\x7F]+)$/);
-        if (match4) {
-          classNumber = match4[1] === selectedClass ? match4[2] : match4[1] + match4[2];
-          englishName = match4[3];
-          chineseName = match4[4];
-        } else {
-          const match3 = cleanLine.match(/^([A-Za-z0-9]+)\s+(.+?)\s+([^\x00-\x7F]+)$/);
-          if (match3) {
-            classNumber = match3[1];
-            englishName = match3[2];
-            chineseName = match3[3];
-          }
-        }
-      }
-
-      if (classNumber && englishName) {
-        newStudents.push({
-          className: selectedClass,
-          classNumber: classNumber,
-          englishName: englishName,
-          chineseName: chineseName || '',
-          email: email.toLowerCase(),
-          recordCount: 0,
-          orangeSheets: 0,
-          history: [],
-          pastTerms: []
-        });
-      }
+    if (
+      !classInfo ||
+      (
+        user.email !== 'clng@ktls.edu.hk' &&
+        classInfo.owner !== user.email
+      )
+    ) {
+      return alert("You cannot import students into this class.");
     }
 
-    if (newStudents.length === 0) {
-      alert("Could not read the format. Please ensure it is: Number [Tab] English Name [Tab] Chinese Name");
-      return;
-    }
+    studentImportLock.current = true;
+    setIsImportingStudents(true);
+
+    const text = value => String(value ?? '').trim();
+
+    const nameKey = value =>
+      text(value).normalize('NFKC').replace(/\s+/g, ' ').toLowerCase();
+
+    const visibleClass = value =>
+      text(value).replace(/\u200B/g, '').toUpperCase();
+
+    const numberKey = value =>
+      text(value)
+        .replace(/\u200B/g, '')
+        .replace(/\s+/g, '')
+        .toUpperCase()
+        .replace(/\d+/g, digits => digits.replace(/^0+(?=\d)/, ''));
+
+    const savedRegNo = student =>
+      text(student.regNo || student.regno || student.REGNO || '');
+
+    const sameName = (a, b) => Boolean(
+      (a.englishName && b.englishName &&
+        nameKey(a.englishName) === nameKey(b.englishName)) ||
+      (a.chineseName && b.chineseName &&
+        nameKey(a.chineseName) === nameKey(b.chineseName))
+    );
 
     try {
-      const batch = writeBatch(db);
-      const addedStudents = [];
+      const rows = [];
 
-      newStudents.forEach((student) => {
-        const docRef = doc(collection(db, "students"));
-        batch.set(docRef, student);
-        addedStudents.push({ id: docRef.id, ...student });
-      });
+      for (const [index, rawLine] of bulkInput.split(/\r?\n/).entries()) {
+        if (!rawLine.trim()) continue;
+
+        // Keep blank cells. Do NOT filter empty columns.
+        const parts = rawLine.split('\t').map(text);
+        const firstCell = parts[0].replace(/^\uFEFF/, '');
+        const header = firstCell.toUpperCase().replace(/[\s_.-]/g, '');
+
+        if (['CLASSNAME', 'CLASSCODE', 'CLASSNO', 'CLASSNUMBER'].includes(header)) {
+          continue;
+        }
+
+        let rowClass = '';
+        let classNumber = '';
+        let regNo = '';
+        let englishName = '';
+        let chineseName = '';
+        let explicitEmail = '';
+
+        if (parts.length >= 5) {
+          rowClass = firstCell;
+          const rowClassNo = parts[1];
+          regNo = parts[2].replace(/^'/, '');
+          englishName = parts[3];
+          chineseName = parts[4];
+          explicitEmail = text(parts[5]).toLowerCase();
+
+          if (!rowClass || !rowClassNo) {
+            throw new Error(`Excel row ${index + 1}: class or class number is missing.`);
+          }
+
+          classNumber =
+            visibleClass(rowClass) === visibleClass(targetClass)
+              ? rowClassNo
+              : `${visibleClass(rowClass)}${rowClassNo}`;
+        } else if (parts.length === 3) {
+          [classNumber, englishName, chineseName] = parts;
+        } else {
+          throw new Error(
+            `Excel row ${index + 1}: unsupported format.\n` +
+            "Copy cells directly from Excel using the five columns shown above."
+          );
+        }
+
+        if (!classNumber || !englishName) {
+          throw new Error(`Excel row ${index + 1}: number or English name is missing.`);
+        }
+
+        if (regNo && !/^\d+$/.test(regNo)) {
+          throw new Error(
+            `Excel row ${index + 1}: invalid registration number "${regNo}".\n` +
+            "Use digits only, not scientific notation."
+          );
+        }
+
+        const generatedEmail = regNo ? `s${regNo}@ktls.edu.hk` : '';
+
+        if (
+          explicitEmail &&
+          !/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(explicitEmail)
+        ) {
+          throw new Error(`Excel row ${index + 1}: invalid email.`);
+        }
+
+        if (generatedEmail && explicitEmail && generatedEmail !== explicitEmail) {
+          throw new Error(
+            `Excel row ${index + 1}: the supplied email does not match REGNO.\n` +
+            `Expected: ${generatedEmail}`
+          );
+        }
+
+        rows.push({
+          line: index + 1,
+          data: {
+            className: targetClass,
+            classNumber: text(classNumber),
+            englishName,
+            chineseName,
+            regNo,
+            email: generatedEmail || explicitEmail,
+            ...(rowClass ? { sourceClassName: rowClass } : {})
+          }
+        });
+      }
+
+      if (!rows.length) {
+        throw new Error("No student rows were found.");
+      }
+
+      // Read the selected group's latest saved students, including deleted ones.
+      const snapshot = await getDocsFromServer(
+        query(collection(db, "students"), where("className", "==", targetClass))
+      );
+
+      const working = snapshot.docs.map(d => ({ ...d.data(), id: d.id }));
+      const operations = new Map();
+      const seenTargets = new Map();
+      let unchanged = 0;
+      let repeated = 0;
+
+      for (const row of rows) {
+        const incoming = row.data;
+
+        const regMatches = incoming.regNo
+          ? working.filter(s => savedRegNo(s) === incoming.regNo)
+          : [];
+
+        const emailMatches = incoming.email
+          ? working.filter(s => text(s.email).toLowerCase() === incoming.email)
+          : [];
+
+        const strongMatches = [
+          ...new Map(
+            [...regMatches, ...emailMatches].map(s => [s.id, s])
+          ).values()
+        ];
+
+        if (strongMatches.length > 1) {
+          throw new Error(
+            `Excel row ${row.line}: registration number/email matches multiple saved students.\n` +
+            "Please resolve the existing duplicate records before importing."
+          );
+        }
+
+        let existing = strongMatches[0];
+
+        if (!existing) {
+          const numberMatches = working.filter(
+            s => numberKey(s.classNumber) === numberKey(incoming.classNumber)
+          );
+
+          if (numberMatches.length > 1) {
+            throw new Error(
+              `Excel row ${row.line}: multiple saved students have number ${incoming.classNumber}.`
+            );
+          }
+
+          if (numberMatches.length === 1) {
+            if (!sameName(numberMatches[0], incoming)) {
+              throw new Error(
+                `Excel row ${row.line}: number ${incoming.classNumber} belongs to a different name.\n` +
+                "Please check this student manually; existing records were not overwritten."
+              );
+            }
+            existing = numberMatches[0];
+          } else {
+            const nameMatches = working.filter(s => sameName(s, incoming));
+
+            if (nameMatches.length > 1) {
+              throw new Error(
+                `Excel row ${row.line}: the name matches multiple saved students.`
+              );
+            }
+
+            existing = nameMatches[0];
+          }
+        }
+
+        if (existing?.isDummy) {
+          throw new Error(`Excel row ${row.line}: this matches a dummy student.`);
+        }
+
+        if (
+          existing &&
+          incoming.regNo &&
+          savedRegNo(existing) &&
+          savedRegNo(existing) !== incoming.regNo
+        ) {
+          throw new Error(
+            `Excel row ${row.line}: the saved REGNO differs from the pasted REGNO.\n` +
+            "Check the student's identity before changing it."
+          );
+        }
+
+        if (
+          existing &&
+          incoming.email &&
+          text(existing.email) &&
+          text(existing.email).toLowerCase() !== incoming.email
+        ) {
+          throw new Error(
+            `Excel row ${row.line}: ${incoming.englishName} already has a different email.\n` +
+            `Saved: ${existing.email}\nExpected: ${incoming.email}\n` +
+            "Check the email in Student Details before importing."
+          );
+        }
+
+        const id = existing?.id || doc(collection(db, "students")).id;
+        const fingerprint = JSON.stringify(incoming);
+
+        if (seenTargets.has(id)) {
+          if (seenTargets.get(id) !== fingerprint) {
+            throw new Error(
+              `Excel row ${row.line}: the same student appears twice with different information.`
+            );
+          }
+          repeated++;
+          continue;
+        }
+
+        seenTargets.set(id, fingerprint);
+
+        if (existing) {
+          const patch = {};
+
+          // Only identity fields are imported. Record/history fields are untouched.
+          for (const [field, value] of Object.entries(incoming)) {
+            if (value !== '' && text(existing[field]) !== value) {
+              patch[field] = value;
+            }
+          }
+
+          if (Object.keys(patch).length) {
+            operations.set(id, { type: 'update', id, data: patch });
+            Object.assign(existing, patch);
+          } else {
+            unchanged++;
+          }
+        } else {
+          const data = {
+            ...incoming,
+            recordCount: 0,
+            orangeSheets: 0,
+            history: [],
+            pastTerms: []
+          };
+
+          operations.set(id, { type: 'create', id, data });
+          working.push({ ...data, id });
+        }
+      }
+
+      const planned = [...operations.values()];
+      const added = planned.filter(op => op.type === 'create').length;
+      const updated = planned.filter(op => op.type === 'update').length;
+
+      // Keep this import as one all-or-nothing batch.
+      if (planned.length > 400) {
+        throw new Error("Please import no more than 400 changed/new students at a time.");
+      }
+
+      if (!planned.length) {
+        setStudents(prev => [
+          ...prev.filter(s => s.className !== targetClass),
+          ...working
+        ]);
+
+        setBulkInput('');
+        alert(
+          `Nothing needed changing.\n` +
+          `${unchanged} unchanged student(s).\n` +
+          `${repeated} repeated Excel row(s) skipped.`
+        );
+        return;
+      }
+
+      if (!window.confirm(
+        `Import into ${visibleClass(targetClass)}?\n\n` +
+        `New students: ${added}\n` +
+        `Existing students to update: ${updated}\n` +
+        `Unchanged students: ${unchanged}\n` +
+        `Repeated Excel rows skipped: ${repeated}\n\n` +
+        "Existing records, orange sheets, past terms and student IDs will be kept.\n" +
+        "Deleted students will remain deleted.\n\n" +
+        "Do not have another administrator import this same class simultaneously."
+      )) return;
+
+      const batch = writeBatch(db);
+
+      for (const operation of planned) {
+        const studentRef = doc(db, "students", operation.id);
+
+        if (operation.type === 'create') {
+          batch.set(studentRef, operation.data);
+        } else {
+          batch.update(studentRef, operation.data);
+        }
+      }
 
       await batch.commit();
-      setStudents([...students, ...addedStudents]);
+
+      setStudents(prev => [
+        ...prev.filter(s => s.className !== targetClass),
+        ...working
+      ]);
+
+      setSelectedStudent(prev =>
+        prev?.className === targetClass
+          ? working.find(s => s.id === prev.id) || prev
+          : prev
+      );
+
       setBulkInput('');
-      alert(`Successfully imported ${newStudents.length} students into ${selectedClass}!`);
+
+      alert(
+        `Import completed.\n\n` +
+        `Added: ${added}\nUpdated: ${updated}\n` +
+        `Unchanged: ${unchanged}\nRepeated Excel rows skipped: ${repeated}`
+      );
     } catch (error) {
-      console.error("Error importing students:", error);
-      alert("Failed to import students.");
+      console.error("Student import stopped:", error);
+      alert("Import stopped.\n\n" + error.message);
+    } finally {
+      studentImportLock.current = false;
+      setIsImportingStudents(false);
     }
   };
 
@@ -992,17 +1275,44 @@ export default function Record() {
                   {selectedStudent.className} - No. {selectedStudent.classNumber}
                 </h3>
                 <p className="text-gray-600">{selectedStudent.englishName} {selectedStudent.chineseName}</p>
-                <div className="mt-2">
+                <div className="mt-3 space-y-2">
+                  <p className="text-sm text-gray-700">
+                    <strong>Registration number:</strong>{' '}
+                    {selectedStudent.regNo || 'Not recorded'}
+                  </p>
+
+                  <p className="text-sm text-gray-700 break-all">
+                    <strong>School email from REGNO:</strong>{' '}
+                    {selectedStudent.regNo
+                      ? `s${selectedStudent.regNo}@ktls.edu.hk`
+                      : 'Re-import the Excel list to add REGNO'}
+                  </p>
+
+                  <label className="block text-xs font-medium text-gray-500">
+                    Linked email
+                  </label>
+
                   <select
                     value={selectedStudent.email || ''}
                     onChange={(e) => handleUpdateEmail(selectedStudent.id, e.target.value)}
-                    className="border border-gray-300 rounded p-1 text-sm outline-none focus:border-blue-500 w-64"
+                    className="border border-gray-300 rounded p-1 text-sm outline-none focus:border-blue-500 w-full"
                   >
-                    <option value="">-- Select Email for Login --</option>
-                    {availableEmails.map(email => (
+                    <option value="">-- No linked email --</option>
+                    {[...new Set([
+                      selectedStudent.email,
+                      selectedStudent.regNo
+                        ? `s${selectedStudent.regNo}@ktls.edu.hk`
+                        : '',
+                      ...availableEmails
+                    ].filter(Boolean))].sort().map(email => (
                       <option key={email} value={email}>{email}</option>
                     ))}
                   </select>
+
+                  <p className="text-xs text-gray-500">
+                    Recording an email here does not grant website access.
+                    The superadmin grants access separately.
+                  </p>
                 </div>
               </div>
               <button onClick={() => setSelectedStudent(null)} className="text-gray-400 hover:text-gray-600">
@@ -1383,21 +1693,37 @@ export default function Record() {
               </p>
 
               <form onSubmit={handleBulkImport} className="space-y-4">
+                <div className="text-xs text-blue-800 bg-blue-50 border border-blue-200 rounded-md p-3">
+                  You can paste the full Excel list again.
+                  Existing students will be updated instead of added twice.
+                  REGNO is retained and generates the school email.
+                  Blank cells will not erase saved information.
+                  Records and past terms are preserved.
+                </div>
+
                 <textarea
                   value={bulkInput}
                   onChange={(e) => setBulkInput(e.target.value)}
                   rows="8"
                   className="w-full border border-gray-300 rounded-md p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-mono whitespace-pre"
-                  placeholder={`CLASSCODE\tCLASSNO\tREGNO\tENNAME\tCHNAME\n4B\t6\t231017\tXXX HINATA\t周XX\n4C\t10\t231016\tYYY SIBI\t陳YY\n...`}
+                  placeholder={`CLASSCODE\tCLASSNO\tREGNO\tENNAME\tCHNAME\n4B\t6\t231017\tXXX HINATA\t周XX\n4C\t10\t231016\tYYY SIBI\t陳YY`}
                   required
-                  disabled={!selectedClass}
+                  disabled={!selectedClass || isImportingStudents}
                 />
+
                 <button
                   type="submit"
-                  disabled={!selectedClass}
+                  disabled={!selectedClass || isImportingStudents}
                   className="w-full flex items-center justify-center bg-blue-600 text-white p-2 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50"
                 >
-                  <Upload className="w-4 h-4 mr-2" /> Import to {selectedClass || 'Class'}
+                  {isImportingStudents ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Upload className="w-4 h-4 mr-2" />
+                  )}
+                  {isImportingStudents
+                    ? 'Checking and importing...'
+                    : `Import / Update ${selectedClass.replace(/\u200B/g, '') || 'Class'}`}
                 </button>
               </form>
             </div>
@@ -1431,6 +1757,7 @@ export default function Record() {
                     <th className="p-3 border-b w-20">No.</th>
                     <th className="p-3 border-b">English Name</th>
                     <th className="p-3 border-b">Chinese Name</th>
+                    <th className="p-3 border-b">REGNO / Email</th>
                     <th className="p-3 border-b text-center w-24">Current Records</th>
                     <th className="p-3 border-b text-center w-24 text-gray-400">Past Terms</th>
                     <th className="p-3 border-b text-center w-16">Actions</th>
@@ -1456,6 +1783,14 @@ export default function Record() {
                             {student.isDeleted && <span className="ml-2 text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded">Deleted</span>}
                           </td>
                           <td className="p-3 text-gray-700">{student.chineseName}</td>
+                          <td className="p-3 text-gray-700">
+                            <div className="font-mono text-sm">
+                              {student.regNo || '—'}
+                            </div>
+                            <div className="text-xs text-gray-500 break-all">
+                              {student.email || 'No linked email'}
+                            </div>
+                          </td>
                           <td className="p-3 text-center">
                             <span className={`px-2 py-1 rounded-full text-xs font-bold ${(student.recordCount || 0) > 0 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
                               {student.recordCount || 0}
@@ -1478,7 +1813,7 @@ export default function Record() {
                     })}
                   {students.filter(s => s.className === selectedClass).length === 0 && (
                     <tr>
-                      <td colSpan="6" className="p-8 text-center text-gray-500">
+                      <td colSpan="7" className="p-8 text-center text-gray-500">
                         No students found in this class. <br /> Use the Bulk Import tool to add them.
                       </td>
                     </tr>

@@ -1,7 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, doc, getDoc, updateDoc, addDoc, deleteDoc, query, where, setDoc } from 'firebase/firestore';
+import {
+    collection,
+    getDocs,
+    getDocsFromServer,
+    doc,
+    getDoc,
+    getDocFromServer,
+    updateDoc,
+    addDoc,
+    deleteDoc,
+    query,
+    where,
+    setDoc
+} from 'firebase/firestore';
 import { db } from './firebase';
 import { useAuth } from './main.jsx';
+import {
+    getUserClassAccess,
+    getClassAssessments
+} from './classAccess.js';
 import { BookOpen, Edit, Trash2, Plus, Save, X, ExternalLink, Loader2, FileText, GripHorizontal, Check, Star, BarChart2, Download } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { useLanguage } from './LanguageContext.jsx';
@@ -48,7 +65,18 @@ const getTermWeight = (term) => {
 };
 
 export default function StudentDashboard() {
-    const { user } = useAuth();
+    const { user, authLoading } = useAuth();
+
+    const dashboardIdentity = JSON.stringify([
+        user?.email || '',
+        user?.role || '',
+        Boolean(user?.isAdmin),
+        Boolean(user?.isAuthorized)
+    ]);
+
+    const [loadedDashboardIdentity, setLoadedDashboardIdentity] = useState('');
+    const [dashboardError, setDashboardError] = useState('');
+    const [studentProfiles, setStudentProfiles] = useState([]);
     const { t, language } = useLanguage();
     const [items, setItems] = useState([]);
     const [archives, setArchives] = useState([]);
@@ -89,175 +117,284 @@ export default function StudentDashboard() {
     const [previewPdfUrl, setPreviewPdfUrl] = useState(null); // NEW: State for the generated PDF
 
     useEffect(() => {
-        fetchData();
-    }, [user]);
+        let cancelled = false;
 
-    const fetchData = async () => {
+        // Clear the previous account's data and editing state immediately.
         setIsLoading(true);
-        try {
-            // 1. Fetch Archives for linking
-            const archSnap = await getDocs(collection(db, "archives"));
-            const fetchedArchives = archSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-            setArchives(fetchedArchives);
+        setDashboardError('');
+        setLoadedDashboardIdentity('');
+        setItems([]);
+        setAllItems([]);
+        setClasses([]);
+        setSelectedClass('');
+        setArchives([]);
+        setLinkableDocs([]);
+        setStudentProfiles([]);
+        setCurrentStudentId(null);
+        setCurrentStudentData(null);
+        setStudentMap({});
+        setDoneItems([]);
+        setStarredItems([]);
+        setMaxUnlockedTier(0);
+        setIsEditing(false);
+        setEditForm(null);
+        setShowAddModal(false);
+        setSelectedCommentId(null);
+        setShowRecommendations(false);
+        setRecommendedQuestions([]);
+        setPreviewPdfUrl(null);
+        setGraphMetric('percentage');
 
-            let lDocs = [];
-            fetchedArchives.forEach(a => {
-                // Add the full paper option
-                lDocs.push({ ...a, linkMode: 'full' });
-                // Add the sub-question options
-                a.subQuestions?.forEach(sq => {
-                    lDocs.push({ ...a, id: `${a.id}_${sq.id}`, title: `${a.title} Q${sq.label}`, linkMode: 'sub' });
-                });
-            });
-            setLinkableDocs(lDocs);
+        if (authLoading) {
+            return () => {
+                cancelled = true;
+            };
+        }
 
-            // 2. Find the Student's Class based on their Email
-            let loadedClasses = [];
+        if (!user?.email || !user?.isAuthorized) {
+            setLoadedDashboardIdentity(dashboardIdentity);
+            setIsLoading(false);
 
-            if (user?.isAdmin) {
-                const classDocRef = doc(db, "settings", "classes");
-                const classDocSnap = await getDoc(classDocRef);
-                if (classDocSnap.exists()) {
-                    const rawList = classDocSnap.data().list || [];
+            return () => {
+                cancelled = true;
+            };
+        }
 
-                    // Check if the user is a super admin (adjust this check based on your actual user object)
-                    const isSuperAdmin = user.isSuperAdmin || user.role === 'superadmin' || user.role === 'super_admin';
+        const loadDashboard = async () => {
+            const email = user.email.toLowerCase().trim();
+            const isAdmin = Boolean(user.isAdmin);
 
-                    if (isSuperAdmin) {
-                        // Super Admins see ALL classes
-                        loadedClasses = rawList.map(c => typeof c === 'string' ? c : c.name);
-                    } else {
-                        // Regular Admins only see classes they own
-                        loadedClasses = rawList
-                            .filter(c => {
-                                // If it's an old string format, we can't check the owner, so we might hide it or show it. 
-                                // Assuming we only show objects where owner matches:
-                                return typeof c === 'object' && c.owner === user.email;
-                            })
-                            .map(c => c.name);
-                    }
-                }
-            } else if (user?.email) {
-                const userEmail = user.email.toLowerCase().trim();
+            // Matches the existing main.jsx superadmin account.
+            // While impersonating someone else, their displayed email is used.
+            const isSuperAdmin =
+                isAdmin && email === 'clng@ktls.edu.hk';
 
-                // 1. Check if they are a teacher/staff with assigned classes
-                const userStudentDoc = await getDoc(doc(db, "user_students", userEmail));
-                if (userStudentDoc.exists() && userStudentDoc.data().assignedClasses?.length > 0) {
-                    loadedClasses = [...userStudentDoc.data().assignedClasses];
-                }
+            try {
+                let loadedClasses = [];
+                let currentRole = user.role || 'viewer';
+                let profiles = [];
+                let namesById = {};
 
-                // 2. Check if they are a student themselves
-                const studentQuery = query(collection(db, "students"), where("email", "==", userEmail));
-                const studentSnap = await getDocs(studentQuery);
+                if (isAdmin) {
+                    const classSnap = await getDocFromServer(
+                        doc(db, 'settings', 'classes')
+                    );
 
-                if (!studentSnap.empty) {
-                    const studentDoc = studentSnap.docs[0];
-                    const studentData = studentDoc.data();
-                    setCurrentStudentId(studentDoc.id); // Save ID to fetch their specific marks
-                    setCurrentStudentData(studentData); // <-- NEW: Save data to check for isDummy flag
+                    const classObjects = (classSnap.data()?.list || []).map(c =>
+                        typeof c === 'string'
+                            ? {
+                                name: c,
+                                owner: 'clng@ktls.edu.hk',
+                                isArchived: false
+                            }
+                            : c
+                    );
 
-                    // If they are a student, ensure their class is in the loadedClasses
-                    if (studentData.className && !loadedClasses.includes(studentData.className)) {
-                        loadedClasses.push(studentData.className);
-                    }
-                }
-            }
+                    loadedClasses = classObjects
+                        .filter(c =>
+                            c &&
+                            typeof c.name === 'string' &&
+                            !c.isArchived &&
+                            (isSuperAdmin || c.owner === email)
+                        )
+                        .map(c => c.name);
 
-            setClasses(loadedClasses);
-            if (loadedClasses.length > 0) {
-                setSelectedClass(loadedClasses[0]);
-            }
+                    const studentsSnap = await getDocsFromServer(
+                        collection(db, 'students')
+                    );
 
-            // NEW: Fetch user role and tier access
-            let currentUserRole = user?.role || 'viewer';
-            if (!user?.role && user?.email && !user?.isAdmin) {
-                const userRoleSnap = await getDoc(doc(db, "user_roles", user.email.toLowerCase().trim()));
-                if (userRoleSnap.exists()) currentUserRole = userRoleSnap.data().role;
-            }
+                    studentsSnap.docs.forEach(d => {
+                        const student = d.data();
 
-            let unlockedTier = 0;
-            const configSnap = await getDoc(doc(db, "system_settings", "config"));
-            if (configSnap.exists()) {
-                const data = configSnap.data();
-                const tierAccess = data.tierAccess || {};
-                const roleAccess = tierAccess[currentUserRole] || {};
-                const today = new Date().toISOString().split('T')[0];
+                        if (loadedClasses.includes(student.className)) {
+                            namesById[d.id] = student.englishName || d.id;
+                        }
+                    });
+                } else {
+                    // The saved access mapping is authoritative.
+                    // Do not add extra classes from student records.
+                    const access = await getUserClassAccess(email);
 
-                for (let i = 1; i <= 10; i++) {
-                    const tierRule = roleAccess[String(i)];
-                    if (tierRule) {
-                        if (tierRule.immediate || (tierRule.date && tierRule.date <= today)) {
-                            unlockedTier = Math.max(unlockedTier, i);
+                    currentRole = access.role || 'viewer';
+                    loadedClasses = access.classes;
+
+                    const profileSnap = await getDocsFromServer(
+                        query(
+                            collection(db, 'students'),
+                            where('email', '==', email)
+                        )
+                    );
+
+                    profiles = profileSnap.docs
+                        .map(d => ({ ...d.data(), id: d.id }))
+                        .filter(s =>
+                            !s.isDeleted &&
+                            loadedClasses.includes(s.className)
+                        );
+
+                    // An email can belong to different teaching groups,
+                    // but two profiles within one group are ambiguous.
+                    for (const className of loadedClasses) {
+                        const matches = profiles.filter(
+                            s => s.className === className
+                        );
+
+                        if (matches.length > 1) {
+                            throw new Error(
+                                `More than one student record uses your email in ` +
+                                `${className.replace(/\u200B/g, '')}. ` +
+                                'Please ask the administrator to resolve the duplicate.'
+                            );
                         }
                     }
                 }
-            }
-            setMaxUnlockedTier(unlockedTier);
 
-            // Fetch User Progress (Mark as Done & Starred)
-            if (user?.email) {
-                const progressSnap = await getDoc(doc(db, "user_progress", user.email.toLowerCase().trim()));
-                if (progressSnap.exists()) {
-                    setDoneItems(progressSnap.data().doneItems || []);
-                    setStarredItems(progressSnap.data().starredItems || []);
-                }
-            }
+                loadedClasses = [...new Set(loadedClasses)];
 
-            // 3. Fetch All Assessments (Assignments/Quizzes)
-            const q = query(collection(db, "assessments"));
-            const snap = await getDocs(q);
+                const [archiveSnap, configSnap, progressSnap, fetchedItems] =
+                    await Promise.all([
+                        getDocsFromServer(collection(db, 'archives')),
+                        getDocFromServer(doc(db, 'system_settings', 'config')),
+                        getDocFromServer(doc(db, 'user_progress', email)),
+                        getClassAssessments(loadedClasses)
+                    ]);
 
-            let fetchedItems = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                const fetchedArchives = archiveSnap.docs.map(d => ({
+                    ...d.data(),
+                    id: d.id
+                }));
 
-            // NEW: Fetch all students to map IDs to Names for Admin
-            if (user?.isAdmin) {
-                const stuSnap = await getDocs(collection(db, "students"));
-                const sMap = {};
-                stuSnap.docs.forEach(d => {
-                    sMap[d.id] = d.data().englishName || d.id;
+                const documents = [];
+
+                fetchedArchives.forEach(archive => {
+                    documents.push({ ...archive, linkMode: 'full' });
+
+                    (archive.subQuestions || []).forEach(sub => {
+                        documents.push({
+                            ...archive,
+                            id: `${archive.id}_${sub.id}`,
+                            title: `${archive.title} Q${sub.label}`,
+                            linkMode: 'sub'
+                        });
+                    });
                 });
-                setStudentMap(sMap);
-            }
 
-            // Disable classes that don't have any documents linked for admin, but fallback if empty
-            if (user?.isAdmin) {
-                const activeClasses = new Set();
-                fetchedItems.forEach(item => {
-                    const hasLink = item.linkedDocId || (item.sectionsConfig && item.sectionsConfig.some(sec => sec.linkedDocId));
-                    if (hasLink) {
-                        if (item.classes) item.classes.forEach(c => activeClasses.add(c));
-                        if (item.className) activeClasses.add(item.className);
+                let unlockedTier = 0;
+                const roleAccess =
+                    configSnap.data()?.tierAccess?.[currentRole] || {};
+
+                // Format Hong Kong local time to match datetime-local values.
+                // This is display logic, not server-side tier enforcement.
+                const dateParts = new Intl.DateTimeFormat('en-GB', {
+                    timeZone: 'Asia/Hong_Kong',
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hourCycle: 'h23'
+                }).formatToParts(new Date());
+
+                const time = Object.fromEntries(
+                    dateParts.map(part => [part.type, part.value])
+                );
+
+                const now =
+                    `${time.year}-${time.month}-${time.day}` +
+                    `T${time.hour}:${time.minute}`;
+
+                for (let tier = 1; tier <= 10; tier++) {
+                    const rawRule = roleAccess[String(tier)];
+
+                    const rule = typeof rawRule === 'string'
+                        ? { date: rawRule, immediate: false }
+                        : rawRule;
+
+                    if (
+                        rule &&
+                        (
+                            rule.immediate ||
+                            (rule.date && rule.date <= now)
+                        )
+                    ) {
+                        unlockedTier = Math.max(unlockedTier, tier);
                     }
+                }
+
+                fetchedItems.sort((a, b) => {
+                    const orderA = a.order !== undefined ? a.order : -1;
+                    const orderB = b.order !== undefined ? b.order : -1;
+
+                    if (orderA !== orderB) return orderA - orderB;
+
+                    const weightA = getTermWeight(a.term);
+                    const weightB = getTermWeight(b.term);
+
+                    if (weightA !== weightB) return weightB - weightA;
+
+                    return new Date(b.date) - new Date(a.date);
                 });
 
-                const filteredClasses = loadedClasses.filter(c => activeClasses.has(c));
-                // Fallback to loadedClasses if filtering removes everything, preventing the UI from breaking
-                const finalClasses = filteredClasses.length > 0 ? filteredClasses : loadedClasses;
+                // Ignore an old request if the account changed during loading.
+                if (cancelled) return;
 
-                setClasses(finalClasses);
-                if (finalClasses.length > 0 && !finalClasses.includes(selectedClass)) {
-                    setSelectedClass(finalClasses[0]);
+                setArchives(fetchedArchives);
+                setLinkableDocs(documents);
+                setClasses(loadedClasses);
+                setSelectedClass(loadedClasses[0] || '');
+                setStudentProfiles(profiles);
+                setStudentMap(namesById);
+                setAllItems(fetchedItems);
+                setMaxUnlockedTier(unlockedTier);
+                setDoneItems(progressSnap.data()?.doneItems || []);
+                setStarredItems(progressSnap.data()?.starredItems || []);
+            } catch (error) {
+                if (cancelled) return;
+
+                console.error('Error loading dashboard:', error);
+
+                setDashboardError(
+                    error.code === 'permission-denied'
+                        ? 'Dashboard access was denied. Ask the superadmin to check ' +
+                        'your role and class assignment, then sign out and sign in again.'
+                        : error.message || 'The dashboard could not be loaded.'
+                );
+
+                setItems([]);
+                setAllItems([]);
+                setClasses([]);
+                setStudentProfiles([]);
+            } finally {
+                if (!cancelled) {
+                    setLoadedDashboardIdentity(dashboardIdentity);
+                    setIsLoading(false);
                 }
             }
+        };
 
-            // Sort items by admin order, then term weight, then date (newest first)
-            fetchedItems.sort((a, b) => {
-                const orderA = a.order !== undefined ? a.order : -1;
-                const orderB = b.order !== undefined ? b.order : -1;
-                if (orderA !== orderB) return orderA - orderB;
+        loadDashboard();
 
-                const weightA = getTermWeight(a.term);
-                const weightB = getTermWeight(b.term);
-                if (weightA !== weightB) return weightB - weightA;
-                return new Date(b.date) - new Date(a.date);
-            });
+        return () => {
+            cancelled = true;
+        };
+    }, [dashboardIdentity, authLoading]);
 
-            setAllItems(fetchedItems);
-        } catch (error) {
-            console.error("Error fetching dashboard data:", error);
+    // Select the correct student ID for the active teaching group.
+    // This avoids using another group's student ID to retrieve marks.
+    useEffect(() => {
+        if (user?.isAdmin || !selectedClass) {
+            setCurrentStudentId(null);
+            setCurrentStudentData(null);
+            return;
         }
-        setIsLoading(false);
-    };
+
+        const profile = studentProfiles.find(
+            student => student.className === selectedClass
+        );
+
+        setCurrentStudentId(profile?.id || null);
+        setCurrentStudentData(profile || null);
+    }, [studentProfiles, selectedClass, user?.isAdmin]);
 
     // Dynamically filter items based on the selected tab (which is now restricted by role)
     useEffect(() => {
@@ -335,6 +472,8 @@ export default function StudentDashboard() {
     };
 
     const handleDelete = async (id) => {
+        if (!user?.isAdmin) return;
+
         if (!window.confirm(t("Delete this item from the list?"))) return;
         try {
             await deleteDoc(doc(db, "assessments", id));
@@ -346,6 +485,9 @@ export default function StudentDashboard() {
 
     const handleSaveEdit = async (e) => {
         e.preventDefault();
+
+        if (!user?.isAdmin || !editForm) return;
+
         try {
             if (editForm.id) {
                 await updateDoc(doc(db, "assessments", editForm.id), editForm);
@@ -380,6 +522,9 @@ export default function StudentDashboard() {
 
     const handleDrop = async () => {
         setDraggedIndex(null);
+
+        if (!user?.isAdmin) return;
+
         try {
             // Save the new order to Firestore
             await Promise.all(items.map((item, idx) =>
@@ -411,6 +556,8 @@ export default function StudentDashboard() {
     };
 
     const openAddModal = (item = null) => {
+        if (!user?.isAdmin || !selectedClass) return;
+
         if (item) {
             setEditForm(item);
         } else {
@@ -1327,8 +1474,72 @@ export default function StudentDashboard() {
         setIsLoading(false);
     };
 
-    if (isLoading) {
-        return <div className="flex justify-center py-20"><Loader2 className="animate-spin text-blue-600 w-10 h-10" /></div>;
+    if (authLoading) {
+        return (
+            <div className="flex justify-center py-20">
+                <Loader2 className="animate-spin text-blue-600 w-10 h-10" />
+            </div>
+        );
+    }
+
+    if (!user?.isAuthorized) {
+        return (
+            <div className="max-w-xl mx-auto my-12 p-6 bg-white border border-slate-200 rounded-xl text-center">
+                <h2 className="text-lg font-bold text-slate-800">
+                    Dashboard access restricted
+                </h2>
+                <p className="text-sm text-slate-600 mt-2">
+                    Sign in with an account that has been granted website access.
+                </p>
+            </div>
+        );
+    }
+
+    if (
+        isLoading ||
+        loadedDashboardIdentity !== dashboardIdentity
+    ) {
+        return (
+            <div className="flex justify-center py-20">
+                <Loader2 className="animate-spin text-blue-600 w-10 h-10" />
+            </div>
+        );
+    }
+
+    if (dashboardError) {
+        return (
+            <div className="max-w-xl mx-auto my-12 p-6 bg-red-50 border border-red-200 rounded-xl">
+                <h2 className="text-lg font-bold text-red-800">
+                    Dashboard could not be loaded
+                </h2>
+                <p className="text-sm text-red-700 mt-2 whitespace-pre-wrap">
+                    {dashboardError}
+                </p>
+                <button
+                    type="button"
+                    onClick={() => window.location.reload()}
+                    className="mt-4 px-4 py-2 bg-red-700 text-white text-sm font-bold rounded-lg"
+                >
+                    Reload
+                </button>
+            </div>
+        );
+    }
+
+    if (classes.length === 0) {
+        return (
+            <div className="max-w-xl mx-auto my-12 p-6 bg-white border border-slate-200 rounded-xl text-center">
+                <h2 className="text-lg font-bold text-slate-800">
+                    No class assigned
+                </h2>
+                <p className="text-sm text-slate-600 mt-2">
+                    {user.isAdmin
+                        ? 'No active classes are available for this administrator.'
+                        : 'Your account has website access, but no valid class assignment. ' +
+                        'Ask the superadmin to use Grant / Update Class Access.'}
+                </p>
+            </div>
+        );
     }
 
     return (
@@ -1697,7 +1908,13 @@ export default function StudentDashboard() {
                                     }
                                 }
                                 // --- END NEW ---
-                                else if (!user?.isAdmin && currentStudentId && item.marks?.[currentStudentId]) {
+                                else if (
+                                    !user?.isAdmin &&
+                                    currentStudentId &&
+                                    item.marks?.[currentStudentId] !== undefined &&
+                                    item.marks?.[currentStudentId] !== null &&
+                                    item.marks?.[currentStudentId] !== ''
+                                ) {
                                     if (!isEffectivelyDisclosed) {
                                         studentMark = <span className="text-xs text-amber-600 italic font-medium">{t("To be disclosed")}</span>;
                                     } else {
@@ -1938,7 +2155,7 @@ export default function StudentDashboard() {
                                                                     <X size={14} className="md:w-4 md:h-4" />
                                                                 </button>
                                                                 <h3 className="text-xs md:text-sm font-bold text-slate-800 mb-1.5 md:mb-2 flex items-center gap-1 md:gap-1.5">
-                                                                    <FileText className="text-amber-500" size={14} className="md:w-4 md:h-4" />
+                                                                    <FileText size={14} className="text-amber-500 md:w-4 md:h-4" />
                                                                     {t("Teacher's Comment")}
                                                                 </h3>
                                                                 <div className="bg-amber-50/50 border border-amber-100 rounded-lg p-2 md:p-3 text-slate-700 text-[10px] md:text-sm whitespace-pre-wrap leading-relaxed">
@@ -1967,7 +2184,7 @@ export default function StudentDashboard() {
             </div>
 
             {/* Admin Add/Edit Modal */}
-            {showAddModal && (
+            {showAddModal && user?.isAdmin && editForm && (
                 <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
                     <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
                         <div className="flex justify-between items-center mb-4">

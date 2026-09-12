@@ -16,7 +16,9 @@ import List from './List.jsx'; // <-- ADD THIS IMPORT
 import Exercises from './Exercises.jsx'; // <-- NEW EXERCISES LIST COMPONENT
 import ExerciseRunner from './ExerciseRunner.jsx'; // <-- NEW EXERCISE RUNNER COMPONENT
 import LotteryMachine from './LotteryMachine.jsx'; // <-- ADD THIS IMPORT
+import Timetable from './Timetable.jsx'; // <-- NEW TIMETABLE COMPONENT
 import { LanguageProvider, useLanguage } from './LanguageContext.jsx'; // <-- NEW IMPORT
+import { BookX } from 'lucide-react'; // Ensure BookX is imported for the dock
 import { auth, db, googleProvider } from './firebase.js';
 import './index.css';
 
@@ -30,6 +32,7 @@ const AuthContext = createContext(null);
 const AuthProvider = ({ children }) => {
   const [realUser, setRealUser] = useState(null);
   const [impersonatedEmail, setImpersonatedEmail] = useState(null);
+  const [debugTime, setDebugTime] = useState(null); // <-- NEW: Debug Time State
   const [authLoading, setAuthLoading] = useState(true);
   const [localSessionId] = useState(() => Math.random().toString(36).substring(2, 15));
 
@@ -215,17 +218,57 @@ const AuthProvider = ({ children }) => {
     signOut(auth);
   };
 
-  // If impersonating, override the user object exposed to the rest of the app
-  const user = impersonatedEmail ? {
-    ...realUser,
-    email: impersonatedEmail.email || impersonatedEmail,
-    isAdmin: false,
-    role: impersonatedEmail.role || 'student',
-    displayName: `[DEBUG] ${impersonatedEmail.englishName || (impersonatedEmail.email || impersonatedEmail).split('@')[0]}`
-  } : realUser;
+  // Debugging changes the displayed account only.
+  // Firebase requests still use the real signed-in account.
+  const canImpersonate = realUser?.email === SUPER_ADMIN;
+
+  const debugTarget =
+    canImpersonate && impersonatedEmail
+      ? (
+        typeof impersonatedEmail === 'string'
+          ? { email: impersonatedEmail }
+          : impersonatedEmail
+      )
+      : null;
+
+  const viewingEmail = String(
+    debugTarget?.email || realUser?.email || ''
+  ).toLowerCase().trim();
+
+  const viewingIsSuperAdmin = viewingEmail === SUPER_ADMIN;
+
+  // Do not inherit the real superadmin's role while impersonating.
+  const viewingRole = viewingIsSuperAdmin
+    ? 'admin'
+    : (
+      debugTarget
+        ? debugTarget.role || null
+        : realUser?.role || null
+    );
+
+  const user = realUser
+    ? {
+      ...realUser,
+      email: viewingEmail,
+      role: viewingRole,
+      isAdmin: viewingRole === 'admin',
+      isSuperAdmin: viewingIsSuperAdmin,
+      isAuthorized: viewingIsSuperAdmin || (
+        debugTarget
+          ? Boolean(debugTarget.role)
+          : Boolean(realUser.isAuthorized)
+      ),
+      isImpersonating: Boolean(debugTarget),
+      displayName: debugTarget
+        ? `[DEBUG] ${debugTarget.englishName ||
+        viewingEmail.split('@')[0]
+        }`
+        : realUser.displayName
+    }
+    : null;
 
   return (
-    <AuthContext.Provider value={{ user, realUser, authLoading, loginWithGoogle, logout, impersonatedEmail, setImpersonatedEmail }}>
+    <AuthContext.Provider value={{ user, realUser, authLoading, loginWithGoogle, logout, impersonatedEmail, setImpersonatedEmail, debugTime, setDebugTime }}>
       {children}
     </AuthContext.Provider>
   );
@@ -266,7 +309,7 @@ const ProtectedAdminRoute = ({ children }) => {
 const Layout = ({ children }) => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, realUser, loginWithGoogle, logout, impersonatedEmail, setImpersonatedEmail } = useAuth();
+  const { user, realUser, loginWithGoogle, logout, impersonatedEmail, setImpersonatedEmail, debugTime, setDebugTime } = useAuth();
   const { language, setLanguage, t } = useLanguage(); // <-- ADDED HOOK
 
   const [showUsersModal, setShowUsersModal] = useState(false);
@@ -284,13 +327,19 @@ const Layout = ({ children }) => {
       ]);
 
       const studentsData = studentsSnap.docs.map(d => d.data());
-      const rolesData = rolesSnap.docs.map(d => ({ email: d.id.toLowerCase(), ...d.data() }));
+
+      // The user_roles document ID identifies the account.
+      // Do not let an email field inside the document override it.
+      const rolesData = rolesSnap.docs.map(d => ({
+        ...d.data(),
+        email: d.id.toLowerCase().trim()
+      }));
 
       // Group by Class/Group or Role
       const groups = {};
 
       rolesData.forEach(roleDoc => {
-        if (roleDoc.role === 'admin') return; // Skip admins
+        // Removed the "skip admins" check so superadmin can impersonate admins
 
         const studentMatch = studentsData.find(s => s.email?.toLowerCase() === roleDoc.email);
 
@@ -312,8 +361,13 @@ const Layout = ({ children }) => {
   };
 
   useEffect(() => {
-    if (showDebugModal && Object.keys(debugGroups).length === 0) fetchDebugStudents();
-  }, [showDebugModal]);
+    if (
+      showDebugModal &&
+      realUser?.email === SUPER_ADMIN
+    ) {
+      fetchDebugStudents();
+    }
+  }, [showDebugModal, realUser?.email]);
   const [systemUsers, setSystemUsers] = useState([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
 
@@ -433,17 +487,98 @@ const Layout = ({ children }) => {
   const isDashboard = location.pathname === '/dashboard';
   const isList = location.pathname === '/list';
   const isLottery = location.pathname === '/lottery';
+  const isTimetable = location.pathname === '/timetable';
   const isExerciseRunner = location.pathname.startsWith('/exercise/');
   const hideNavBar = isExerciseRunner || isLottery;
 
+  const [currentClass, setCurrentClass] = useState(null);
+
+  useEffect(() => {
+    if (!user?.isAdmin) return;
+
+    let interval;
+    const checkTimetable = async () => {
+      try {
+        const docRef = doc(db, "admin_timetables", user.email);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          const mappings = data.mappings || {};
+          const schedule = data.schedule || [];
+
+          const updateCurrentClass = () => {
+            // Use debugTime if it exists, otherwise use real current time
+            const now = debugTime ? new Date(debugTime) : new Date();
+            const day = now.getDay(); // 0 = Sun, 1 = Mon, ..., 5 = Fri
+            const daysMap = { 1: 'Mon', 2: 'Tue', 3: 'Wed', 4: 'Thu', 5: 'Fri' };
+            const todayStr = daysMap[day];
+
+            if (!todayStr) {
+              setCurrentClass(null);
+              return;
+            }
+
+            const currentTimeStr = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
+
+            const activeLesson = schedule.find(lesson => {
+              return lesson.day === todayStr && currentTimeStr >= lesson.start && currentTimeStr <= lesson.end;
+            });
+
+            if (activeLesson && mappings[activeLesson.label]) {
+              setCurrentClass(mappings[activeLesson.label]);
+            } else {
+              setCurrentClass(null);
+            }
+          };
+
+          updateCurrentClass();
+          interval = setInterval(updateCurrentClass, 60000); // Check every minute
+        }
+      } catch (e) {
+        console.error("Error checking timetable", e);
+      }
+    };
+
+    checkTimetable();
+    return () => { if (interval) clearInterval(interval); };
+  }, [user, debugTime]); // <-- Added debugTime to dependency array
+
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans relative">
+      {currentClass && !hideNavBar && (
+        <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-white/95 backdrop-blur-md shadow-2xl border border-blue-200 px-6 py-3 rounded-full z-[100] flex items-center gap-6">
+          <div className="flex flex-col items-end border-r border-gray-200 pr-4">
+            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Ongoing Lesson</span>
+            <span className="text-lg font-extrabold text-blue-700">{currentClass}</span>
+          </div>
+          <Link to={`/record?class=${encodeURIComponent(currentClass)}`} className="flex flex-col items-center text-gray-600 hover:text-blue-600 transition-colors group">
+            <div className="bg-gray-100 p-2 rounded-full group-hover:bg-blue-100 transition-colors"><BookX size={20} /></div>
+            <span className="text-[10px] font-bold mt-1">Record</span>
+          </Link>
+          <Link to={`/marks?class=${encodeURIComponent(currentClass)}&studentView=true`} className="flex flex-col items-center text-gray-600 hover:text-blue-600 transition-colors group">
+            <div className="bg-gray-100 p-2 rounded-full group-hover:bg-blue-100 transition-colors"><Users size={20} /></div>
+            <span className="text-[10px] font-bold mt-1">Marks</span>
+          </Link>
+          <Link to={`/lottery?class=${encodeURIComponent(currentClass)}`} className="flex flex-col items-center text-gray-600 hover:text-blue-600 transition-colors group">
+            <div className="bg-gray-100 p-2 rounded-full group-hover:bg-blue-100 transition-colors"><Globe size={20} /></div>
+            <span className="text-[10px] font-bold mt-1">Lottery</span>
+          </Link>
+        </div>
+      )}
       {!hideNavBar && (
         <div className="bg-white border-b border-slate-200 sticky top-0 z-50 px-4 md:px-8 pt-4 shadow-sm">
           <div className="max-w-7xl mx-auto">
             <div className="flex justify-between items-center mb-4">
               <div className="flex items-center gap-4">
-                <h1 className="font-bold text-xl text-slate-800 tracking-tight">{t("HISTORY ARCHIVE")}</h1>
+                <h1 className="font-bold text-xl text-slate-800 tracking-tight">
+                  <Link
+                    to="/"
+                    aria-label="Return to the History Archive search-engine homepage"
+                    className="hover:text-blue-600 transition-colors rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                  >
+                    {t("HISTORY ARCHIVE")}
+                  </Link>
+                </h1>
                 <button
                   onClick={() => setLanguage(language === 'en' ? 'zh' : 'en')}
                   className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-3 py-1.5 rounded-md transition-all shadow-sm border border-blue-700 active:scale-95"
@@ -485,6 +620,22 @@ const Layout = ({ children }) => {
                                   </div>
                                 ) : (
                                   <>
+                                    <div className="flex flex-col gap-1 mb-1">
+                                      <label className="text-[10px] font-bold text-slate-500 uppercase">Simulate Time (Optional)</label>
+                                      <div className="flex gap-2">
+                                        <input
+                                          type="datetime-local"
+                                          value={debugTime || ''}
+                                          onChange={e => setDebugTime(e.target.value)}
+                                          className="w-full text-xs p-2 border border-slate-300 rounded outline-none focus:border-amber-500"
+                                        />
+                                        {debugTime && (
+                                          <button onClick={() => setDebugTime(null)} className="px-3 bg-slate-200 text-slate-600 rounded hover:bg-slate-300 text-xs font-bold transition-colors">
+                                            Clear
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
                                     <input type="text" placeholder="Search student name or class..." value={debugSearch} onChange={e => setDebugSearch(e.target.value)} className="w-full text-xs p-2 border border-slate-300 rounded outline-none focus:border-amber-500" />
                                     <div className="overflow-y-auto flex-1 border border-slate-100 rounded">
                                       {Object.entries(debugGroups).map(([groupName, students]) => {
@@ -651,38 +802,55 @@ const Layout = ({ children }) => {
               </div>
             </div>
 
-            <div className="flex gap-8 overflow-x-auto">
-              <Link to="/" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isSearch ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                {t("Search Engine")}
-              </Link>
-              <Link to="/trend" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isTrend ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                {t("DSE Trend Analysis")}
-              </Link>
-              <Link to="/dashboard" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isDashboard ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                {t("Student Dashboard")}
-              </Link>
-              <Link to="/list" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isList ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                {t("Saved Lists")}
-              </Link>
-              <Link to="/exercises" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${location.pathname.startsWith('/exercise') ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                {t("Interactive Exercises")}
-              </Link>
+            <div className="flex gap-6 overflow-visible pb-1">
+              {/* DSE-related */}
+              <div className="relative group">
+                <button className={`pb-2 text-sm font-bold border-b-2 transition-colors whitespace-nowrap flex items-center gap-1 ${isSearch || isTrend ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                  {t("DSE-related")} <ChevronDown size={14} className="group-hover:rotate-180 transition-transform" />
+                </button>
+                <div className="absolute left-0 top-full mt-0 w-48 bg-white border border-slate-200 shadow-xl rounded-md opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 flex flex-col py-1">
+                  <Link to="/" className={`px-4 py-2 text-sm hover:bg-slate-50 ${isSearch ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>{t("Search Engine")}</Link>
+                  <Link to="/trend" className={`px-4 py-2 text-sm hover:bg-slate-50 ${isTrend ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>{t("DSE Trend Analysis")}</Link>
+                </div>
+              </div>
+
+              {/* Study Progress */}
+              <div className="relative group">
+                <button className={`pb-2 text-sm font-bold border-b-2 transition-colors whitespace-nowrap flex items-center gap-1 ${isDashboard || isList || location.pathname.startsWith('/exercise') ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                  {t("Study Progress")} <ChevronDown size={14} className="group-hover:rotate-180 transition-transform" />
+                </button>
+                <div className="absolute left-0 top-full mt-0 w-52 bg-white border border-slate-200 shadow-xl rounded-md opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 flex flex-col py-1">
+                  <Link to="/dashboard" className={`px-4 py-2 text-sm hover:bg-slate-50 ${isDashboard ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>{t("Student Dashboard")}</Link>
+                  <Link to="/list" className={`px-4 py-2 text-sm hover:bg-slate-50 ${isList ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>{t("Saved Lists")}</Link>
+                  <Link to="/exercises" className={`px-4 py-2 text-sm hover:bg-slate-50 ${location.pathname.startsWith('/exercise') ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>{t("Interactive Exercises")}</Link>
+                </div>
+              </div>
 
               {/* ONLY SHOW TABS IF ADMIN */}
               {user?.isAdmin && (
                 <>
-                  <Link to="/pdf" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isPdf ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                    {t("PDF Tools")}
-                  </Link>
-                  <Link to="/record" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isRecord ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                    {t("Record Management")}
-                  </Link>
-                  <Link to="/marks" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isMarks ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                    {t("Marks Management")}
-                  </Link>
-                  <Link to="/lottery" className={`pb-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${isLottery ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                    {t("Lottery Machine")}
-                  </Link>
+                  {/* Admin Tools */}
+                  <div className="relative group">
+                    <button className={`pb-2 text-sm font-bold border-b-2 transition-colors whitespace-nowrap flex items-center gap-1 ${isPdf || isLottery ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                      {t("Admin Tools")} <ChevronDown size={14} className="group-hover:rotate-180 transition-transform" />
+                    </button>
+                    <div className="absolute left-0 top-full mt-0 w-48 bg-white border border-slate-200 shadow-xl rounded-md opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 flex flex-col py-1">
+                      <Link to="/pdf" className={`px-4 py-2 text-sm hover:bg-slate-50 ${isPdf ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>{t("PDF Tools")}</Link>
+                      <Link to="/lottery" className={`px-4 py-2 text-sm hover:bg-slate-50 ${isLottery ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>{t("Lottery Machine")}</Link>
+                    </div>
+                  </div>
+
+                  {/* Management Tools */}
+                  <div className="relative group">
+                    <button className={`pb-2 text-sm font-bold border-b-2 transition-colors whitespace-nowrap flex items-center gap-1 ${isRecord || isMarks || isTimetable ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                      {t("Management Tools")} <ChevronDown size={14} className="group-hover:rotate-180 transition-transform" />
+                    </button>
+                    <div className="absolute left-0 top-full mt-0 w-52 bg-white border border-slate-200 shadow-xl rounded-md opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 flex flex-col py-1">
+                      <Link to="/record" className={`px-4 py-2 text-sm hover:bg-slate-50 ${isRecord ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>{t("Record Management")}</Link>
+                      <Link to="/marks" className={`px-4 py-2 text-sm hover:bg-slate-50 ${isMarks ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>{t("Marks Management")}</Link>
+                      <Link to="/timetable" className={`px-4 py-2 text-sm hover:bg-slate-50 ${isTimetable ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>{t("Timetable")}</Link>
+                    </div>
+                  </div>
                 </>
               )}
             </div>
@@ -690,7 +858,15 @@ const Layout = ({ children }) => {
         </div>
       )}
 
-      <div className="flex-1 flex flex-col">
+      <div
+        key={JSON.stringify([
+          realUser?.email || '',
+          user?.email || '',
+          user?.role || '',
+          Boolean(impersonatedEmail)
+        ])}
+        className="flex-1 flex flex-col"
+      >
         {children}
       </div>
     </div>
@@ -728,6 +904,11 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="/lottery" element={
                 <ProtectedAdminRoute>
                   <LotteryMachine />
+                </ProtectedAdminRoute>
+              } />
+              <Route path="/timetable" element={
+                <ProtectedAdminRoute>
+                  <Timetable />
                 </ProtectedAdminRoute>
               } />
               <Route path="/dashboard" element={<StudentDashboard />} />

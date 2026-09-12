@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import { useAuth } from './main.jsx'; // Adjust path if needed
@@ -7,6 +7,7 @@ import { ArrowLeft } from 'lucide-react';
 
 export default function LotteryMachine() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
   const realUser = user;
   const iframeRef = useRef(null);
@@ -781,22 +782,23 @@ let musicURL = "https://www.dropbox.com/scl/fi/veeev5flbx07ihaa8paw5/.m4a?rlkey=
     });
 
 
-    // ---------------- Firebase Data Listener ----------------
+// ---------------- Firebase Data Listener ----------------
     // This replaces the old loadClasses() dummy function
     window.addEventListener('message', async (event) => {
       if (event.data.type === 'LOAD_CLASSES') {
         const classes = event.data.payload;
+        const targetClass = event.data.targetClass;
         if (!classes || classes.length === 0) {
           ui.status.textContent = "No classes found for your account.";
           ui.classSelect.innerHTML = "<option>No classes available</option>";
           return;
         }
-        await startMachine(classes);
+        await startMachine(classes, targetClass);
       }
     });
 
     // ---------------- Three.js application ----------------
-    async function startMachine(classes) {
+    async function startMachine(classes, targetClass) {
       try {
         const THREE = await import(
           "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js"
@@ -1713,7 +1715,16 @@ ui.reset.addEventListener("click", () => {
           renderer.render(scene, camera);
         }
 
-        selectClass(classes[0].id);
+let initialClassId = classes[0].id;
+        if (targetClass) {
+          // Try to match the target class name, ignoring zero-width spaces if necessary
+          const matched = classes.find(c => c.name.replace(/\u200B/g, '') === targetClass.replace(/\u200B/g, ''));
+          if (matched) {
+            initialClassId = matched.id;
+          }
+        }
+        
+        selectClass(initialClassId);
         lastTime = performance.now();
         requestAnimationFrame(animate);
 
@@ -1763,9 +1774,13 @@ ui.reset.addEventListener("click", () => {
           sandbox="allow-scripts"
           onLoad={() => {
             if (classesData.length > 0 && iframeRef.current) {
+              const queryParams = new URLSearchParams(location.search);
+              const targetClass = queryParams.get('class');
+
               iframeRef.current.contentWindow.postMessage({
                 type: 'LOAD_CLASSES',
-                payload: classesData
+                payload: classesData,
+                targetClass: targetClass
               }, '*');
             }
           }}

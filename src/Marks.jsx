@@ -275,14 +275,26 @@ export default function Marks() {
           setClasses(loadedClasses);
           setArchivedClasses(loadedArchivedClasses);
 
-          if (loadedClasses.length > 0) {
-            setSelectedClass(loadedClasses[0].name);
-            setSelectedClassesForNew([loadedClasses[0].name]);
-            setModalClasses([loadedClasses[0].name]);
+const urlParams = new URLSearchParams(window.location.search);
+          const classFromUrl = urlParams.get('class');
+          
+          if (urlParams.get('studentView') === 'true') {
+            setStudentView(true);
+          }
+
+          let defaultClass = null;
+          if (classFromUrl && loadedClasses.some(c => c.name.replace(/\u200B/g, '') === classFromUrl)) {
+            defaultClass = loadedClasses.find(c => c.name.replace(/\u200B/g, '') === classFromUrl).name;
+          } else if (loadedClasses.length > 0) {
+            defaultClass = loadedClasses[0].name;
           } else if (loadedArchivedClasses.length > 0) {
-            setSelectedClass(loadedArchivedClasses[0].name);
-            setSelectedClassesForNew([loadedArchivedClasses[0].name]);
-            setModalClasses([loadedArchivedClasses[0].name]);
+            defaultClass = loadedArchivedClasses[0].name;
+          }
+
+          if (defaultClass) {
+            setSelectedClass(defaultClass);
+            setSelectedClassesForNew([defaultClass]);
+            setModalClasses([defaultClass]);
           }
         }
 

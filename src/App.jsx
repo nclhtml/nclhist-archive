@@ -54,6 +54,7 @@ import { UpdateContent, updateVersion } from './UpdateContent.jsx';
 import { useLanguage } from './LanguageContext.jsx';
 import PoeImportPanel from './PoeImportPanel.jsx';
 import usePhoneLayout from './usePhoneLayout.js';
+import { useSkillBooks } from './SkillBooks.jsx';
 
 import {
   normalizeArchiveName,
@@ -4389,6 +4390,14 @@ export default function AdvancedHistoryArchive() {
     return () => { document.body.style.overflow = 'unset'; };
   }, [isUploadModalOpen, previewItem, isManageFiltersOpen, isUserManagementOpen, showMarksModal, isExportModalOpen]);
 
+  const skills = useSkillBooks({
+    user,
+    realUser,
+    language,
+    previewItem,
+    questionTypes: availableQuestionTypes
+  });
+
   // --- RENDER CONTENT ---
   const showTags = user?.isAdmin || currentUserRole === 'dse_only';
 
@@ -4538,6 +4547,10 @@ export default function AdvancedHistoryArchive() {
             </div>
           )}
         </div>
+
+        {/* --- SKILLS BOOK LIBRARY --- */}
+        {skills.launchBar}
+        {skills.dialogs}
 
         {/* --- CONDITIONAL RENDERING FOR SECURITY --- */}
 
@@ -6015,6 +6028,8 @@ export default function AdvancedHistoryArchive() {
 
                 {/* Buttons - visible on mobile but smaller */}
                 <div className="flex flex-wrap items-center gap-1.5 md:gap-3 w-full md:w-auto">
+                  {skills.recallButton}
+
                   <button
                     onClick={() => setShowReportModal(true)}
                     className="flex px-2 md:px-4 py-1 md:py-2 rounded-lg bg-red-50 text-red-600 border border-red-200 text-[10px] md:text-sm font-bold hover:bg-red-100 transition-all items-center gap-1 md:gap-2"

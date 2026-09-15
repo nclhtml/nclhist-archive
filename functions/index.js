@@ -196,16 +196,74 @@ exports.getWatermarkedPdf = functions.https.onRequest(async (req, res) => {
     }
 
     try {
-        const { fileUrl, email } = req.query;
-        if (!fileUrl) return res.status(400).send('Missing fileUrl');
+const { fileUrl, email } = req.query;
 
-        // 1. Fetch the raw PDF from Firebase Storage URL
-        if (!fileUrl) return res.status(400).send('Missing fileUrl');
+        if (typeof fileUrl !== 'string' || !fileUrl) {
+            return res.status(400).send('Missing fileUrl');
+        }
 
-        // 1. Fetch the raw PDF from Firebase Storage URL
-        const pdfResponse = await fetch(fileUrl);
-        if (!pdfResponse.ok) throw new Error('Failed to fetch PDF');
-        const pdfBuffer = await pdfResponse.arrayBuffer();
+        let parsedUrl;
+
+        try {
+            parsedUrl = new URL(fileUrl);
+        } catch {
+            return res.status(400).send('Invalid fileUrl');
+        }
+
+        if (
+            parsedUrl.protocol !== 'https:' ||
+            parsedUrl.hostname !== 'firebasestorage.googleapis.com' ||
+            parsedUrl.username ||
+            parsedUrl.password ||
+            parsedUrl.port
+        ) {
+            return res.status(403).send('Only archive Firebase PDFs are supported.');
+        }
+
+        const match = parsedUrl.pathname.match(
+            /^\/v0\/b\/([^/]+)\/o\/([^/]+)$/
+        );
+
+        if (!match) {
+            return res.status(403).send('Unsupported archive URL.');
+        }
+
+        let bucketName;
+        let objectName;
+
+        try {
+            bucketName = decodeURIComponent(match[1]);
+            objectName = decodeURIComponent(match[2]);
+        } catch {
+            return res.status(400).send('Invalid archive URL encoding.');
+        }
+
+        const allowedBuckets = [
+            'nclhist.firebasestorage.app',
+            'nclhist.appspot.com'
+        ];
+
+        if (
+            !allowedBuckets.includes(bucketName) ||
+            !objectName.startsWith('pdfs/') ||
+            objectName.split('/').some(part => part === '.' || part === '..') ||
+            objectName.includes('\\')
+        ) {
+            return res.status(403).send('This file is not an ordinary archive PDF.');
+        }
+
+        // No arbitrary network fetch and no access to skillbook private paths.
+        const archiveFile = admin.storage()
+            .bucket(bucketName)
+            .file(objectName);
+
+        const [archiveMetadata] = await archiveFile.getMetadata();
+
+        if (Number(archiveMetadata.size) > 150 * 1024 * 1024) {
+            return res.status(413).send('Archive PDF is too large.');
+        }
+
+        const [pdfBuffer] = await archiveFile.download();
         // 2. Load into pdf-lib
         const pdfDoc = await PDFDocument.load(pdfBuffer);
         const pages = pdfDoc.getPages();
@@ -295,3 +353,7 @@ exports.historyGame = require("./history-game/api.cjs");
 const poeImport = require("./poe-import.cjs");
 exports.poeExtract = poeImport.poeExtract;
 exports.cleanupPoeUploads = poeImport.cleanupPoeUploads;
+
+const skillbooks = require("./skillbooks.cjs");
+exports.skillsApi = skillbooks.skillsApi;
+exports.cleanupSkillSessions = skillbooks.cleanupSkillSessions;

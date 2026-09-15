@@ -1,0 +1,256 @@
+/* Shared phone/desktop visibility */
+.compact-phone-only {
+    display: none;
+}
+
+/* Keep route content and flex/grid children from widening the whole page. */
+.dashboard-page,
+.record-page,
+.trend-page {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.dashboard-page > *,
+.record-page > *,
+.trend-page > * {
+    min-width: 0;
+}
+
+.record-page .grid > *,
+.record-page .flex-1 {
+    min-width: 0;
+}
+
+.dashboard-heading > div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.dashboard-work-table {
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+}
+
+.record-page .overflow-x-auto {
+    max-width: 100%;
+    overscroll-behavior-x: contain;
+}
+
+/* Phone mode selected by your existing usePhoneLayout hook. */
+.site-shell[data-phone-layout="true"] .compact-phone-only {
+    display: block !important;
+}
+
+.site-shell[data-phone-layout="true"] .compact-desktop-only {
+    display: none !important;
+}
+
+/* Override the older header's stacked phone arrangement. */
+.site-shell[data-phone-layout="true"] .site-header {
+    padding-top: 0.5rem !important;
+    padding-left: 0.75rem !important;
+    padding-right: 0.75rem !important;
+}
+
+.site-shell[data-phone-layout="true"] .site-header-row {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    gap: 0.5rem !important;
+    margin-bottom: 0.5rem !important;
+}
+
+.site-shell[data-phone-layout="true"] .site-header-row > .site-brand {
+    display: flex !important;
+    flex: 1 1 0% !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    min-width: 0 !important;
+    width: auto !important;
+    gap: 0.5rem !important;
+}
+
+.site-shell[data-phone-layout="true"] .site-header-row > .site-account {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    margin: 0 !important;
+}
+
+.site-shell[data-phone-layout="true"] .site-account > div {
+    flex-wrap: nowrap !important;
+    gap: 0.5rem !important;
+}
+
+.site-shell[data-phone-layout="true"] .site-title {
+    flex: 1 1 0%;
+    min-width: 0;
+    margin: 0 !important;
+    font-size: 0.875rem !important;
+    line-height: 1.2 !important;
+}
+
+.site-shell[data-phone-layout="true"] .site-title a {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.site-shell[data-phone-layout="true"] .site-language,
+.site-shell[data-phone-layout="true"] .site-signout {
+    width: 44px !important;
+    height: 44px !important;
+    min-width: 44px !important;
+    padding: 0 !important;
+}
+
+.site-shell[data-phone-layout="true"] .site-account-name {
+    display: none !important;
+}
+
+/* Dashboard */
+.site-shell[data-phone-layout="true"] .dashboard-heading h1 {
+    font-size: 1.125rem;
+    line-height: 1.35;
+}
+
+.site-shell[data-phone-layout="true"] .dashboard-heading h1 svg {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+}
+
+.site-shell[data-phone-layout="true"] .dashboard-heading > div {
+    width: 100%;
+}
+
+.site-shell[data-phone-layout="true"] .dashboard-heading button,
+.site-shell[data-phone-layout="true"] .dashboard-heading summary {
+    min-height: 40px;
+    font-size: 0.8125rem;
+}
+
+/* Allow the two dashboard summary tables to scroll rather than clip. */
+.site-shell[data-phone-layout="true"] .dashboard-page > .overflow-hidden {
+    overflow-x: auto;
+}
+
+.site-shell[data-phone-layout="true"] .dashboard-page > .overflow-hidden > table {
+    min-width: 420px;
+}
+
+/* Use readable table text rather than squeezing everything into 8px. */
+.site-shell[data-phone-layout="true"] .dashboard-work-table > table {
+    min-width: 560px;
+}
+
+.site-shell[data-phone-layout="true"] .dashboard-work-table th,
+.site-shell[data-phone-layout="true"] .dashboard-work-table td {
+    padding: 0.625rem;
+    font-size: 0.8125rem !important;
+}
+
+.site-shell[data-phone-layout="true"] .dashboard-work-table td [class*="text-"] {
+    font-size: 0.75rem !important;
+}
+
+.site-shell[data-phone-layout="true"] .dashboard-work-table button,
+.site-shell[data-phone-layout="true"] .dashboard-work-table a {
+    min-width: 40px;
+    min-height: 40px;
+}
+
+.site-shell[data-phone-layout="true"] .dashboard-work-table button svg,
+.site-shell[data-phone-layout="true"] .dashboard-work-table a svg {
+    width: 15px;
+    height: 15px;
+}
+
+/* Record page */
+.site-shell[data-phone-layout="true"] .record-page h1 {
+    font-size: 1.25rem;
+    line-height: 1.35;
+}
+
+.site-shell[data-phone-layout="true"] .record-page h2 {
+    font-size: 1.0625rem;
+    line-height: 1.4;
+}
+
+.site-shell[data-phone-layout="true"] .record-page .p-6 {
+    padding: 1rem;
+}
+
+.site-shell[data-phone-layout="true"] .record-page .mb-8 {
+    margin-bottom: 1rem;
+}
+
+.site-shell[data-phone-layout="true"] .record-page .gap-6 {
+    gap: 1rem;
+}
+
+.site-shell[data-phone-layout="true"] .record-page .space-x-3 {
+    column-gap: 0.5rem;
+    row-gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.site-shell[data-phone-layout="true"] .record-page .space-x-3 > * {
+    margin-left: 0;
+    margin-right: 0;
+}
+
+.site-shell[data-phone-layout="true"] .record-page .flex.justify-between {
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+
+.site-shell[data-phone-layout="true"] .record-page input,
+.site-shell[data-phone-layout="true"] .record-page select,
+.site-shell[data-phone-layout="true"] .record-page textarea,
+.site-shell[data-phone-layout="true"] .dashboard-page input,
+.site-shell[data-phone-layout="true"] .dashboard-page select,
+.site-shell[data-phone-layout="true"] .dashboard-page textarea {
+    max-width: 100%;
+    min-width: 0;
+    font-size: 16px;
+}
+
+.site-shell[data-phone-layout="true"] .record-page button {
+    min-height: 40px;
+}
+
+.site-shell[data-phone-layout="true"] .record-page .overflow-x-auto > table {
+    min-width: 650px;
+}
+
+.site-shell[data-phone-layout="true"] .record-page .fixed.inset-0 {
+    padding: 0.75rem;
+}
+
+.site-shell[data-phone-layout="true"] .record-page .fixed.inset-0 > div {
+    max-height: 90dvh;
+    overflow-y: auto;
+}
+
+/* Fallback when the viewport is narrow but phone detection has not run yet. */
+@media (max-width: 767px) {
+    .compact-phone-only {
+        display: block !important;
+    }
+
+    .compact-desktop-only {
+        display: none !important;
+    }
+
+    .dashboard-page,
+    .record-page,
+    .trend-page {
+        padding: 0.75rem;
+    }
+}

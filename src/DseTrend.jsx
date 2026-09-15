@@ -1,294 +1,444 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Loader2, AlertCircle } from 'lucide-react';
-import { collection, getDocs } from "firebase/firestore";
+import React, { useEffect, useMemo, useState } from 'react';
+import { AlertCircle, Loader2 } from 'lucide-react';
+
+import {
+  collection,
+  getDocs,
+  query,
+  where
+} from 'firebase/firestore';
+
 import { db } from './firebase.js';
 
-const ensureArray = (data) => {
-  if (Array.isArray(data)) return data;
-  if (data && typeof data === 'string') return [data];
-  return [];
-};
+const DBQ_QUESTIONS = ['Q1', 'Q2', 'Q3', 'Q4'];
+const ESSAY_QUESTIONS = ['Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6', 'Q7'];
+
+const CATEGORY_NAMES = [
+  'First World War',
+  'Second World War',
+  'Cold War',
+  'China',
+  'Hong Kong',
+  'Japan',
+  'Intl. Cooperation'
+];
+
+function ensureArray(value) {
+  const values = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? [value]
+      : [];
+
+  return values
+    .filter(item => typeof item === 'string')
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+function getCategory(topic) {
+  const text = String(topic || '').toLowerCase();
+
+  if (text.includes('first world war') || text.includes('ww1')) {
+    return 'First World War';
+  }
+
+  if (text.includes('second world war') || text.includes('ww2')) {
+    return 'Second World War';
+  }
+
+  if (text.includes('cold war')) return 'Cold War';
+
+  if (text.includes('hong kong') || text.includes('hk')) {
+    return 'Hong Kong';
+  }
+
+  if (
+    text.includes('china') ||
+    text.includes('communist revolution')
+  ) {
+    return 'China';
+  }
+
+  if (text.includes('japan')) return 'Japan';
+
+  if (
+    text.includes('international') ||
+    text.includes('cooperation')
+  ) {
+    return 'Intl. Cooperation';
+  }
+
+  return '';
+}
+
+function getTopicColor(topic) {
+  const category = getCategory(topic);
+
+  const colors = {
+    'First World War': 'bg-red-100 text-red-800 border-red-200',
+    'Second World War': 'bg-orange-100 text-orange-800 border-orange-200',
+    'Cold War': 'bg-blue-100 text-blue-800 border-blue-200',
+    China: 'bg-yellow-100 text-yellow-800 border-yellow-200',
+    'Hong Kong': 'bg-purple-100 text-purple-800 border-purple-200',
+    Japan: 'bg-pink-100 text-pink-800 border-pink-200',
+    'Intl. Cooperation': 'bg-teal-100 text-teal-800 border-teal-200'
+  };
+
+  if (colors[category]) return colors[category];
+
+  if (String(topic).toLowerCase().includes('elective')) {
+    return 'bg-white text-slate-700 border-slate-300';
+  }
+
+  return 'bg-slate-100 text-slate-600 border-slate-200';
+}
+
+function sortYears(a, b) {
+  if (a === b) return 0;
+  if (a === 'SP') return -1;
+  if (b === 'SP') return 1;
+  if (a === 'PP') return -1;
+  if (b === 'PP') return 1;
+
+  return a.localeCompare(b, undefined, { numeric: true });
+}
+
+function countTopics(grid) {
+  const counts = Object.fromEntries(
+    CATEGORY_NAMES.map(category => [category, 0])
+  );
+
+  Object.values(grid).forEach(yearData => {
+    Object.values(yearData).forEach(topics => {
+      const categoriesInQuestion = new Set(
+        topics.map(getCategory).filter(Boolean)
+      );
+
+      categoriesInQuestion.forEach(category => {
+        counts[category] += 1;
+      });
+    });
+  });
+
+  return counts;
+}
+
+function TopicBadges({ topics }) {
+  if (!topics.length) {
+    return <span className="text-sm text-slate-400">—</span>;
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {topics.map((topic, index) => (
+        <span
+          key={`${topic}-${index}`}
+          className={`inline-flex rounded-md border px-2 py-1 text-xs font-medium ${getTopicColor(topic)}`}
+        >
+          {topic}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function TrendSection({
+  title,
+  questions,
+  grid,
+  years,
+  selectedYear
+}) {
+  const counts = useMemo(() => countTopics(grid), [grid]);
+
+  return (
+    <section className="mb-6 min-w-0">
+      <h2 className="mb-3 text-lg md:text-xl font-bold text-slate-800">
+        {title}
+      </h2>
+
+      <details className="mb-4 rounded-xl border border-slate-200 bg-white">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-bold text-slate-700">
+          Topic totals — all years
+        </summary>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 p-3 pt-0">
+          {Object.entries(counts).map(([label, count]) => (
+            <div
+              key={label}
+              className={`rounded-lg border p-3 ${getTopicColor(label)}`}
+            >
+              <div className="text-2xl font-bold">{count}</div>
+              <div className="mt-1 text-xs leading-tight">
+                {label}
+              </div>
+            </div>
+          ))}
+        </div>
+      </details>
+
+      {/* Phone: show one year's questions without a very wide table. */}
+      <div className="compact-phone-only space-y-2">
+        {questions.map(question => (
+          <div
+            key={question}
+            className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-3"
+          >
+            <span className="w-8 shrink-0 font-bold text-slate-700">
+              {question}
+            </span>
+
+            <div className="min-w-0 flex-1">
+              <TopicBadges
+                topics={grid[selectedYear]?.[question] || []}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Desktop: retain the complete year-by-year matrix. */}
+      <div className="compact-desktop-only max-w-full overflow-x-auto rounded-xl border border-slate-200 bg-white">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-slate-50 text-slate-600">
+            <tr>
+              <th className="sticky left-0 z-10 border-r border-slate-200 bg-slate-50 p-4">
+                Question
+              </th>
+
+              {years.map(year => (
+                <th
+                  key={year}
+                  className="min-w-[150px] border-r border-slate-100 p-4 text-center"
+                >
+                  {year}
+                </th>
+              ))}
+            </tr>
+          </thead>
+
+          <tbody>
+            {questions.map(question => (
+              <tr
+                key={question}
+                className="border-t border-slate-100"
+              >
+                <th className="sticky left-0 z-10 border-r border-slate-200 bg-slate-50 p-4 text-slate-800">
+                  {question}
+                </th>
+
+                {years.map(year => (
+                  <td
+                    key={`${year}-${question}`}
+                    className="border-r border-slate-100 p-3 align-top"
+                  >
+                    <TopicBadges
+                      topics={grid[year]?.[question] || []}
+                    />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
 
 export default function DseTrend() {
   const [loading, setLoading] = useState(true);
-  const [trendData, setTrendData] = useState({});
-  const [trendDataEssay, setTrendDataEssay] = useState({}); // <-- ADD THIS
+  const [error, setError] = useState('');
+  const [reload, setReload] = useState(0);
+
   const [years, setYears] = useState([]);
-  const questions = ["Q1", "Q2", "Q3", "Q4"];
-  const essayQuestions = ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7"]; // <-- ADD THIS
+  const [selectedYear, setSelectedYear] = useState('');
+  const [trendData, setTrendData] = useState({});
+  const [trendDataEssay, setTrendDataEssay] = useState({});
 
-  // --- COLOR LOGIC ---
-  const getTopicColor = (topic) => {
-    const t = topic.toLowerCase();
-
-    // 1. World Wars & Cold War
-    if (t.includes('first world war') || t.includes('ww1')) return 'bg-red-100 text-red-800 border-red-200';
-    if (t.includes('second world war') || t.includes('ww2')) return 'bg-orange-100 text-orange-800 border-orange-200';
-    if (t.includes('cold war')) return 'bg-blue-100 text-blue-800 border-blue-200';
-
-    // 2. Hong Kong (PRIORITIZED over China)
-    if (t.includes('hong kong') || t.includes('hk')) return 'bg-purple-100 text-purple-800 border-purple-200';
-
-    // 3. China & Communist Revolution (Only triggers if "Hong Kong" wasn't found)
-    if (t.includes('china') || t.includes('communist revolution')) return 'bg-yellow-100 text-yellow-800 border-yellow-200';
-
-    // 4. Elective Topics
-    if (t.includes('elective')) return 'bg-white text-slate-700 border-slate-300';
-
-    // 5. Others
-    if (t.includes('japan')) return 'bg-pink-100 text-pink-800 border-pink-200';
-    if (t.includes('international') || t.includes('cooperation')) return 'bg-teal-100 text-teal-800 border-teal-200';
-
-    // Default
-    return 'bg-slate-100 text-slate-600 border-slate-200';
-  };
-
-  // --- DATA FETCHING ---
   useEffect(() => {
-    const fetchData = async () => {
+    let cancelled = false;
+
+    setLoading(true);
+    setError('');
+
+    const loadTrend = async () => {
       try {
-        const querySnapshot = await getDocs(collection(db, "archives"));
-        const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        // Filter in Firestore, not after downloading all archives.
+        const snapshot = await getDocs(
+          query(
+            collection(db, 'archives'),
+            where('origin', '==', 'DSE Pastpaper')
+          )
+        );
 
-        const filtered = data.filter(item => item.origin === "DSE Pastpaper");
+        const dbqGrid = {};
+        const essayGrid = {};
+        const foundYears = new Set(['SP', 'PP']);
 
-        const gridDBQ = {};
-        const gridEssay = {};
-        const foundYears = new Set(["SP", "PP"]);
+        snapshot.docs.forEach(document => {
+          const item = document.data();
 
-        filtered.forEach(item => {
-          const year = String(item.year);
+          if (
+            item.year === undefined ||
+            item.year === null ||
+            String(item.year).trim() === ''
+          ) return;
+
+          const year = String(item.year).trim();
           foundYears.add(year);
 
-          if (!gridDBQ[year]) gridDBQ[year] = {};
-          if (!gridEssay[year]) gridEssay[year] = {};
+          dbqGrid[year] ||= {};
+          essayGrid[year] ||= {};
 
-          if (item.paperType === "Paper 1 (DBQ)") {
-            let qNum = null;
-            if (item.title.includes("Q1")) qNum = "Q1";
-            else if (item.title.includes("Q2")) qNum = "Q2";
-            else if (item.title.includes("Q3")) qNum = "Q3";
-            else if (item.title.includes("Q4")) qNum = "Q4";
+          if (item.paperType === 'Paper 1 (DBQ)') {
+            const match = String(item.title || '')
+              .match(/\bQ\s*([1-4])\b/i);
 
-            if (qNum) {
-              gridDBQ[year][qNum] = ensureArray(item.topic);
+            if (match) {
+              const question = `Q${match[1]}`;
+
+              dbqGrid[year][question] = [
+                ...new Set([
+                  ...(dbqGrid[year][question] || []),
+                  ...ensureArray(item.topic)
+                ])
+              ];
             }
-          } else if (item.paperType === "Paper 2 (Essay)") {
-            // Essay topics are stored in the subQuestions
-            (item.subQuestions || []).forEach(sq => {
-              const qNum = "Q" + sq.label; // e.g., "Q1", "Q2"
-              if (essayQuestions.includes(qNum)) {
-                gridEssay[year][qNum] = ensureArray(sq.topic);
-              }
+          }
+
+          if (item.paperType === 'Paper 2 (Essay)') {
+            (item.subQuestions || []).forEach(subQuestion => {
+              const number = String(subQuestion.label || '')
+                .trim()
+                .replace(/^Q\s*/i, '');
+
+              const question = `Q${number}`;
+
+              if (!ESSAY_QUESTIONS.includes(question)) return;
+
+              essayGrid[year][question] = [
+                ...new Set([
+                  ...(essayGrid[year][question] || []),
+                  ...ensureArray(subQuestion.topic)
+                ])
+              ];
             });
           }
         });
 
-        const sortedYears = Array.from(foundYears).sort((a, b) => {
-          if (a === "SP") return -1;
-          if (b === "SP") return 1;
-          if (a === "PP") return -1;
-          if (b === "PP") return 1;
-          return parseInt(a) - parseInt(b);
-        });
+        if (cancelled) return;
+
+        const sortedYears = [...foundYears].sort(sortYears);
 
         setYears(sortedYears);
-        setTrendData(gridDBQ);
-        setTrendDataEssay(gridEssay);
-      } catch (error) {
-        console.error("Error fetching trend data:", error);
+        setTrendData(dbqGrid);
+        setTrendDataEssay(essayGrid);
+
+        setSelectedYear(previous =>
+          sortedYears.includes(previous)
+            ? previous
+            : sortedYears[sortedYears.length - 1] || ''
+        );
+      } catch (requestError) {
+        if (!cancelled) {
+          console.error('Error fetching DSE trend:', requestError);
+          setError(
+            requestError.message || 'Could not load DSE trend data.'
+          );
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
-    fetchData();
-  }, []);
+    loadTrend();
 
-  // --- STATS CALCULATION ---
-  const { statsDBQ, statsEssay } = useMemo(() => {
-    const calculateCounts = (dataObj) => {
-      const counts = {
-        "First World War": 0,
-        "Second World War": 0,
-        "Cold War": 0,
-        "China": 0,
-        "Hong Kong": 0,
-        "Japan": 0,
-        "Intl. Cooperation": 0
-      };
-
-      Object.values(dataObj).forEach(yearData => {
-        Object.values(yearData).forEach(topics => {
-          const categoriesFoundInThisBox = new Set();
-
-          topics.forEach(rawTopic => {
-            const t = rawTopic.toLowerCase();
-            if (t.includes('first world war') || t.includes('ww1')) categoriesFoundInThisBox.add("First World War");
-            else if (t.includes('second world war') || t.includes('ww2')) categoriesFoundInThisBox.add("Second World War");
-            else if (t.includes('cold war')) categoriesFoundInThisBox.add("Cold War");
-            else if (t.includes('hong kong') || t.includes('hk')) categoriesFoundInThisBox.add("Hong Kong");
-            else if (t.includes('china') || t.includes('communist revolution')) categoriesFoundInThisBox.add("China");
-            else if (t.includes('japan')) categoriesFoundInThisBox.add("Japan");
-            else if (t.includes('international') || t.includes('cooperation')) categoriesFoundInThisBox.add("Intl. Cooperation");
-          });
-
-          categoriesFoundInThisBox.forEach(category => {
-            if (counts[category] !== undefined) counts[category]++;
-          });
-        });
-      });
-      return counts;
+    return () => {
+      cancelled = true;
     };
-
-    return {
-      statsDBQ: calculateCounts(trendData),
-      statsEssay: calculateCounts(trendDataEssay)
-    };
-  }, [trendData, trendDataEssay]);
+  }, [reload]);
 
   if (loading) {
     return (
-      <div className="min-h-[50vh] flex items-center justify-center">
-        <Loader2 className="animate-spin text-blue-600" size={40} />
+      <div
+        role="status"
+        className="flex min-h-[40vh] items-center justify-center"
+      >
+        <Loader2 size={32} className="animate-spin text-blue-600" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="mx-auto my-8 max-w-xl rounded-xl border border-red-200 bg-red-50 p-5">
+        <h2 className="font-bold text-red-800">
+          DSE trend could not be loaded
+        </h2>
+
+        <p className="mt-2 text-sm text-red-700">{error}</p>
+
+        <button
+          type="button"
+          onClick={() => setReload(previous => previous + 1)}
+          className="mt-4 rounded-lg bg-red-700 px-4 py-2 text-white"
+        >
+          Try again
+        </button>
       </div>
     );
   }
 
   return (
-    <div className="p-6 md:p-10 max-w-[1600px] mx-auto">
-      {/* DBQ Table Container */}
-      <div className="mb-8">
-        <h2 className="text-xl font-bold text-slate-800 mb-4 flex items-center gap-2">
-          Paper 1 (Data-Based Questions)
-        </h2>
+    <div className="trend-page w-full min-w-0 max-w-[1600px] mx-auto p-3 md:p-6">
+      <h1 className="mb-4 text-xl md:text-2xl font-bold text-slate-800">
+        DSE Topic Trends
+      </h1>
 
-        {/* DBQ Stats Panel */}
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-4">
-          {Object.entries(statsDBQ).map(([label, count]) => {
-            const colorClass = getTopicColor(label);
-            return (
-              <div key={`dbq-stat-${label}`} className={`p-4 rounded-xl border ${colorClass}`}>
-                <div className="text-3xl font-bold mb-1">{count}</div>
-                <div className="text-[10px] font-bold uppercase tracking-wider opacity-70 leading-tight">{label}</div>
-              </div>
-            );
-          })}
-        </div>
+      <label className="compact-phone-only mb-5">
+        <span className="mb-1 block text-xs font-bold text-slate-500">
+          Examination year
+        </span>
 
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
-          <table className="w-full text-sm text-left">
-            <thead className="text-xs text-slate-500 uppercase bg-slate-50 border-b border-slate-200">
-              <tr>
-                <th className="px-6 py-4 font-bold sticky left-0 bg-slate-50 z-10 border-r border-slate-200 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.1)]">
-                  Question
-                </th>
-                {years.map(year => (
-                  <th key={`dbq-th-${year}`} className="px-4 py-4 font-bold min-w-[160px] text-center border-r border-slate-100 last:border-0">
-                    {year}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {questions.map((q) => (
-                <tr key={`dbq-${q}`} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/50">
-                  <td className="px-6 py-4 font-bold text-slate-800 bg-slate-50 sticky left-0 border-r border-slate-200 z-10 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.1)]">
-                    {q}
-                  </td>
-                  {years.map(year => {
-                    const topics = trendData[year]?.[q] || [];
-                    return (
-                      <td key={`dbq-${year}-${q}`} className="px-4 py-4 align-top border-r border-slate-50 last:border-0">
-                        {topics.length > 0 ? (
-                          <div className="flex flex-wrap gap-2 justify-center">
-                            {topics.map((t, i) => (
-                              <span key={i} className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-bold border ${getTopicColor(t)}`}>
-                                {t}
-                              </span>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="text-center text-slate-200 text-xs">-</div>
-                        )}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+        <select
+          value={selectedYear}
+          onChange={event => setSelectedYear(event.target.value)}
+          className="w-full rounded-lg border border-slate-300 bg-white p-2.5 text-base text-slate-800"
+        >
+          {years.map(year => (
+            <option key={year} value={year}>
+              {year}
+            </option>
+          ))}
+        </select>
+      </label>
 
-      {/* Essay Table Container */}
-      <div className="mb-8">
-        <h2 className="text-xl font-bold text-slate-800 mb-4 flex items-center gap-2">
-          Paper 2 (Essay)
-        </h2>
+      <TrendSection
+        title="Paper 1 (Data-Based Questions)"
+        questions={DBQ_QUESTIONS}
+        grid={trendData}
+        years={years}
+        selectedYear={selectedYear}
+      />
 
-        {/* Essay Stats Panel */}
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-4">
-          {Object.entries(statsEssay).map(([label, count]) => {
-            const colorClass = getTopicColor(label);
-            return (
-              <div key={`essay-stat-${label}`} className={`p-4 rounded-xl border ${colorClass}`}>
-                <div className="text-3xl font-bold mb-1">{count}</div>
-                <div className="text-[10px] font-bold uppercase tracking-wider opacity-70 leading-tight">{label}</div>
-              </div>
-            );
-          })}
-        </div>
+      <TrendSection
+        title="Paper 2 (Essay)"
+        questions={ESSAY_QUESTIONS}
+        grid={trendDataEssay}
+        years={years}
+        selectedYear={selectedYear}
+      />
 
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
-          <table className="w-full text-sm text-left">
-            <thead className="text-xs text-slate-500 uppercase bg-slate-50 border-b border-slate-200">
-              <tr>
-                <th className="px-6 py-4 font-bold sticky left-0 bg-slate-50 z-10 border-r border-slate-200 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.1)]">
-                  Question
-                </th>
-                {years.map(year => (
-                  <th key={`essay-th-${year}`} className="px-4 py-4 font-bold min-w-[160px] text-center border-r border-slate-100 last:border-0">
-                    {year}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {essayQuestions.map((q) => (
-                <tr key={`essay-${q}`} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/50">
-                  <td className="px-6 py-4 font-bold text-slate-800 bg-slate-50 sticky left-0 border-r border-slate-200 z-10 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.1)]">
-                    {q}
-                  </td>
-                  {years.map(year => {
-                    const topics = trendDataEssay[year]?.[q] || [];
-                    return (
-                      <td key={`essay-${year}-${q}`} className="px-4 py-4 align-top border-r border-slate-50 last:border-0">
-                        {topics.length > 0 ? (
-                          <div className="flex flex-wrap gap-2 justify-center">
-                            {topics.map((t, i) => (
-                              <span key={i} className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-bold border ${getTopicColor(t)}`}>
-                                {t}
-                              </span>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="text-center text-slate-200 text-xs">-</div>
-                        )}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <p className="flex items-start gap-2 text-xs text-slate-500">
+        <AlertCircle size={15} className="shrink-0" />
 
-      <div className="mt-4 text-xs text-slate-400 flex items-center gap-2">
-        <AlertCircle size={14} />
-        <span>Data is automatically generated from "DSE Pastpaper" entries.</span>
-      </div>
+        <span>
+          Generated from DSE Pastpaper entries. Topic totals include
+          all loaded years, including SP and PP—not only the selected year.
+        </span>
+      </p>
     </div>
   );
 }

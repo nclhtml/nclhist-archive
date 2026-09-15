@@ -53,6 +53,28 @@ import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage
 import { UpdateContent, updateVersion } from './UpdateContent.jsx';
 import { useLanguage } from './LanguageContext.jsx';
 import PoeImportPanel from './PoeImportPanel.jsx';
+import usePhoneLayout from './usePhoneLayout.js';
+
+import {
+  normalizeArchiveName,
+  getArchiveBatchTitle,
+  getArchiveQuestionNumber,
+  buildBatchWriteEntries,
+  prepareArchiveWrite,
+  commitArchiveWrite
+} from './archiveWriteSafety.js';
+
+const createEmptyFilters = () => ({
+  origin: [],
+  year: [],
+  paperType: [],
+  questionType: [],
+  sourceType: [],
+  marks: [],
+  topic: [],
+  tier: [],
+  rating: []
+});
 
 // --- APP CONSTANTS ---
 const ORIGINS = ["DSE Pastpaper", "Internal School Exam", "Mock Examination", "Quiz", "Exercise"];
@@ -948,75 +970,120 @@ const CreatableSelect = ({
 };
 
 // --- REUSABLE COMPONENT: PAGINATION CONTROLS ---
-const PaginationControls = ({ currentPage, totalPages, onPageChange, itemsPerPage, setItemsPerPage, className = "" }) => {
+const PaginationControls = ({
+  currentPage,
+  totalPages,
+  onPageChange,
+  itemsPerPage,
+  setItemsPerPage,
+  className = ''
+}) => {
   const { t } = useLanguage();
+  const isPhoneLayout = usePhoneLayout();
+
+  const pageCount = Math.max(1, totalPages);
+  const page = Math.min(Math.max(1, currentPage), pageCount);
+
   const getPageNumbers = () => {
-    const pages = [];
-    if (totalPages <= 7) {
-      for (let i = 1; i <= totalPages; i++) pages.push(i);
-    } else {
-      if (currentPage <= 4) {
-        pages.push(1, 2, 3, 4, 5, '...', totalPages);
-      } else if (currentPage >= totalPages - 3) {
-        pages.push(1, '...', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages);
-      } else {
-        pages.push(1, '...', currentPage - 1, currentPage, currentPage + 1, '...', totalPages);
-      }
+    if (pageCount <= 7) {
+      return Array.from({ length: pageCount }, (_, index) => index + 1);
     }
-    return pages;
+
+    if (page <= 4) return [1, 2, 3, 4, 5, '...', pageCount];
+
+    if (page >= pageCount - 3) {
+      return [
+        1,
+        '...',
+        pageCount - 4,
+        pageCount - 3,
+        pageCount - 2,
+        pageCount - 1,
+        pageCount
+      ];
+    }
+
+    return [1, '...', page - 1, page, page + 1, '...', pageCount];
   };
 
+  const arrowClass =
+    'w-11 h-11 shrink-0 flex items-center justify-center rounded-lg ' +
+    'border border-slate-200 text-slate-600 hover:bg-slate-50 ' +
+    'disabled:opacity-40 disabled:cursor-not-allowed';
+
   return (
-    <div className={`flex flex-row justify-between items-center gap-2 md:gap-4 bg-white p-2 md:p-3 rounded-lg md:rounded-xl border border-slate-200 shadow-sm ${className}`}>
-      <div className="flex items-center gap-1">
+    <div
+      className={`flex flex-wrap items-center justify-between gap-2 bg-white p-2 rounded-xl border border-slate-200 shadow-sm ${className}`}
+    >
+      <div className="flex flex-wrap items-center gap-1">
         <button
-          onClick={() => onPageChange(currentPage - 1)}
-          disabled={currentPage === 1}
-          className="p-1 md:p-1.5 rounded-md md:rounded-lg border border-slate-200 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50 text-slate-600 transition-colors"
+          type="button"
+          aria-label={t('Previous page')}
+          disabled={page <= 1 || totalPages === 0}
+          onClick={() => onPageChange(page - 1)}
+          className={arrowClass}
         >
-          <ChevronLeft size={14} className="md:w-4 md:h-4" />
+          <ChevronLeft size={18} />
         </button>
 
-        {getPageNumbers().map((page, idx) => (
-          <React.Fragment key={idx}>
-            {page === '...' ? (
-              <span className="px-0.5 md:px-1 text-slate-400 text-xs md:text-sm">...</span>
+        {isPhoneLayout ? (
+          <span
+            className="min-w-[64px] px-2 text-center text-sm font-bold text-slate-700"
+            aria-live="polite"
+          >
+            {page} / {pageCount}
+          </span>
+        ) : (
+          getPageNumbers().map((value, index) =>
+            value === '...' ? (
+              <span key={`gap-${index}`} className="px-1 text-slate-400">
+                …
+              </span>
             ) : (
               <button
-                onClick={() => onPageChange(page)}
-                className={`w-6 h-6 md:w-8 md:h-8 flex items-center justify-center rounded-md md:rounded-lg text-[10px] md:text-sm font-medium transition-colors ${currentPage === page
-                  ? 'bg-blue-600 text-white shadow-md shadow-blue-200'
-                  : 'text-slate-600 hover:bg-slate-100 border border-transparent hover:border-slate-200'
+                key={value}
+                type="button"
+                aria-label={`${t('Page')} ${value}`}
+                aria-current={value === page ? 'page' : undefined}
+                onClick={() => onPageChange(value)}
+                className={`w-10 h-11 rounded-lg text-sm font-bold ${value === page
+                  ? 'bg-blue-600 text-white'
+                  : 'text-slate-600 hover:bg-slate-100'
                   }`}
               >
-                {page}
+                {value}
               </button>
-            )}
-          </React.Fragment>
-        ))}
+            )
+          )
+        )}
 
         <button
-          onClick={() => onPageChange(currentPage + 1)}
-          disabled={currentPage === totalPages || totalPages === 0}
-          className="p-1 md:p-1.5 rounded-md md:rounded-lg border border-slate-200 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50 text-slate-600 transition-colors"
+          type="button"
+          aria-label={t('Next page')}
+          disabled={page >= pageCount || totalPages === 0}
+          onClick={() => onPageChange(page + 1)}
+          className={arrowClass}
         >
-          <ChevronRight size={14} className="md:w-4 md:h-4" />
+          <ChevronRight size={18} />
         </button>
       </div>
 
-      <div className="flex items-center gap-1 md:gap-2 text-[10px] md:text-sm text-slate-600">
-        <span className="hidden sm:inline">{t("Show")}</span>
+      <label className="flex items-center gap-2 text-sm text-slate-600">
+        {!isPhoneLayout && <span>{t('Show')}</span>}
+
         <select
+          aria-label={t('results per page')}
           value={itemsPerPage}
-          onChange={(e) => setItemsPerPage(Number(e.target.value))}
-          className="border border-slate-200 rounded p-0.5 md:p-1 outline-none focus:border-blue-500 bg-white text-[10px] md:text-sm"
+          onChange={event => setItemsPerPage(Number(event.target.value))}
+          className="min-h-[44px] rounded-lg border border-slate-200 bg-white px-2 text-base"
         >
           <option value={10}>10</option>
           <option value={20}>20</option>
           <option value={50}>50</option>
         </select>
-        <span className="hidden sm:inline">{t("results per page")}</span>
-      </div>
+
+        {!isPhoneLayout && <span>{t('results per page')}</span>}
+      </label>
     </div>
   );
 };
@@ -1091,7 +1158,10 @@ export default function AdvancedHistoryArchive() {
     logout
   } = useAuth();
 
+  const isPhoneLayout = usePhoneLayout();
+
   const canManageAccess = Boolean(
+    !isPhoneLayout &&
     !authLoading &&
     !impersonatedEmail &&
     realUser?.isAuthorized &&
@@ -1135,6 +1205,12 @@ export default function AdvancedHistoryArchive() {
   const [exportSearchTerm, setExportSearchTerm] = useState('');
   const [exportLanguage, setExportLanguage] = useState('en'); // 'en' or 'zh'
 
+  useEffect(() => {
+    if (!canManageAccess) {
+      setIsExportModalOpen(false);
+    }
+  }, [canManageAccess]);
+
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [uploadSelection, setUploadSelection] = useState(null); // 'question' | 'sample' | null
   const [isManageFiltersOpen, setIsManageFiltersOpen] = useState(false);
@@ -1149,15 +1225,37 @@ export default function AdvancedHistoryArchive() {
   const [poeBusy, setPoeBusy] = useState(false);
   const [batchAIDraft, setBatchAIDraft] = useState(null);
 
-  // Helper to highlight search terms
+  // Immutable copies of the database documents loaded into Edit Parent.
+  const batchOriginalsRef = useRef([]);
+
+  // Immediate lock: prevents double-clicking before React updates the UI.
+  const archiveWriteBusyRef = useRef(false);
+  const [archiveSaving, setArchiveSaving] = useState(false);
+
+  // Prevent an earlier archive fetch from restoring stale deleted records.
+  const archiveReadVersionRef = useRef(0);
+
+  // Highlight literal search text, including punctuation such as ( or [.
   const highlightText = (text, highlight) => {
-    const cleanText = text.replace(/\*\*/g, '');
-    if (!highlight || !highlight.trim()) return cleanText;
-    // Escape special characters to prevent RegExp syntax errors
-    const escapedHighlight = highlight.trim().replace(/[.*+?^${}()|[]\]/g, '\\$&');
-    const parts = cleanText.split(new RegExp(`(${escapedHighlight})`, 'gi'));
-    return parts.map((part, i) =>
-      part.toLowerCase() === highlight.trim().toLowerCase() ? <mark key={i} className="bg-yellow-300 text-slate-900 rounded-sm px-0.5">{part}</mark> : part
+    const cleanText = String(text ?? '').replace(/\*\*/g, '');
+    const term = String(highlight ?? '').trim();
+
+    if (!term) return cleanText;
+
+    const escapedTerm = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const parts = cleanText.split(new RegExp(`(${escapedTerm})`, 'gi'));
+
+    return parts.map((part, index) =>
+      part.toLowerCase() === term.toLowerCase() ? (
+        <mark
+          key={index}
+          className="bg-yellow-300 text-slate-900 rounded-sm px-0.5"
+        >
+          {part}
+        </mark>
+      ) : (
+        part
+      )
     );
   };
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -1229,17 +1327,34 @@ export default function AdvancedHistoryArchive() {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
 
-  const [filters, setFilters] = useState({
-    origin: [],
-    year: [],
-    paperType: [],
-    questionType: [],
-    sourceType: [],
-    marks: [],
-    topic: [],
-    tier: [],
-    rating: []
-  });
+  const [filters, setFilters] = useState(createEmptyFilters);
+
+  const handleResetFilters = () => {
+    setFilters(createEmptyFilters());
+    setSearchTerm('');
+    setCurrentPage(1);
+    setExpandedPapers({});
+
+    // Remove an incoming dashboard search from the address bar too.
+    const params = new URLSearchParams(location.search);
+
+    if (params.has('search')) {
+      params.delete('search');
+      const nextSearch = params.toString();
+
+      navigate(
+        {
+          pathname: location.pathname,
+          search: nextSearch ? `?${nextSearch}` : '',
+          hash: location.hash
+        },
+        {
+          replace: true,
+          state: location.state
+        }
+      );
+    }
+  };
 
   // Upload/Edit Form State
   const [editingId, setEditingId] = useState(null);
@@ -2038,19 +2153,34 @@ export default function AdvancedHistoryArchive() {
 
   // --- FETCH & EXTRACT TAGS ---
   useEffect(() => {
+    let cancelled = false;
+
     const fetchArchives = async () => {
       if (!user || !user.isAuthorized) return;
 
+      const readVersion = archiveReadVersionRef.current;
+
       try {
-        const querySnapshot = await getDocs(collection(db, "archives"));
-        const data = querySnapshot.docs.map(doc => ({
-          id: doc.id,
-          tier: doc.data().tier || '10',
-          ...doc.data()
+        const querySnapshot = await getDocsFromServer(
+          collection(db, 'archives')
+        );
+
+        const data = querySnapshot.docs.map(snapshot => ({
+          ...snapshot.data(),
+          id: snapshot.id,
+          tier: snapshot.data().tier || '10'
         }));
 
-        if (data.length > 0) {
-          setArchives(data);
+        if (
+          cancelled ||
+          archiveWriteBusyRef.current ||
+          readVersion !== archiveReadVersionRef.current
+        ) return;
+
+        // Update even when empty, including after deleting the final record.
+        setArchives(data);
+
+        {
 
           // --- EXTRACT TAGS FROM DATA ---
           const extractedTopics = new Set();
@@ -2100,12 +2230,16 @@ export default function AdvancedHistoryArchive() {
       }
     };
 
-    if (user && !authLoading) {
+    if (user?.isAuthorized && !authLoading) {
       fetchArchives();
-    } else if (!user) {
-      setArchives([]); // Clear archives on logout
+    } else if (!authLoading) {
+      setArchives([]);
     }
-  }, [user, authLoading]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.email, user?.isAuthorized, authLoading]);
 
   // --- FETCH LINKED DOCS FROM EXPLICITLY ASSIGNED CLASSES ---
   useEffect(() => {
@@ -2638,10 +2772,23 @@ export default function AdvancedHistoryArchive() {
           const dateA = a.parent.updatedAt ? new Date(a.parent.updatedAt).getTime() : 0;
           const dateB = b.parent.updatedAt ? new Date(b.parent.updatedAt).getTime() : 0;
           return dateB - dateA;
-        case 'topic_asc':
-          const topicA = ensureArray(a.parent.topic)[0] || (a.child ? ensureArray(a.child.topic)[0] : '');
-          const topicB = ensureArray(b.parent.topic)[0] || (b.child ? ensureArray(b.child.topic)[0] : '');
+        case 'topic_asc': {
+          const topicA = String(
+            ensureArray(a.parent.topic)[0] ||
+            ensureArray(a.child?.topic)[0] ||
+            ensureArray(a.matchedChildren?.[0]?.topic)[0] ||
+            ''
+          );
+
+          const topicB = String(
+            ensureArray(b.parent.topic)[0] ||
+            ensureArray(b.child?.topic)[0] ||
+            ensureArray(b.matchedChildren?.[0]?.topic)[0] ||
+            ''
+          );
+
           return topicA.localeCompare(topicB);
+        }
         case 'qtype_asc':
           const typeA = a.child ? (ensureArray(a.child.questionType)[0] || '') : '';
           const typeB = b.child ? (ensureArray(b.child.questionType)[0] || '') : '';
@@ -2670,15 +2817,37 @@ export default function AdvancedHistoryArchive() {
 
   // --- PAGINATION LOGIC ---
   const totalPages = Math.ceil(filteredResults.length / itemsPerPage);
-  const paginatedResults = filteredResults.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
+
+  const safeCurrentPage = Math.min(
+    Math.max(1, currentPage),
+    Math.max(1, totalPages)
   );
+
+  const paginatedResults = filteredResults.slice(
+    (safeCurrentPage - 1) * itemsPerPage,
+    safeCurrentPage * itemsPerPage
+  );
+
+  useEffect(() => {
+    setCurrentPage(previous =>
+      Math.min(Math.max(1, previous), Math.max(1, totalPages))
+    );
+  }, [totalPages]);
 
   const handlePageChange = (newPage) => {
     if (newPage >= 1 && newPage <= totalPages) {
       setCurrentPage(newPage);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+
+      const resultsPanel = document.querySelector('.archive-results');
+
+      if (resultsPanel) {
+        resultsPanel.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start'
+        });
+      } else {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
     }
   };
 
@@ -2858,74 +3027,110 @@ export default function AdvancedHistoryArchive() {
 
   // --- MODAL HANDLERS ---
 
-  const handleEditClick = (e, parentItem) => {
+  const handleEditClick = async (e, parentItem) => {
     e.stopPropagation();
-    if (!user?.isAdmin) return;
 
-    // Auto-reconstruct batch based on title prefix (e.g., "2024 MidtermD Q1" -> "2024 Midterm")
-    const baseTitleMatch = parentItem.title.match(/^(.*?)(?:D Q\d+|E| - Q\d+)$/);
-    const baseTitle = baseTitleMatch ? baseTitleMatch[1].trim() : parentItem.title;
+    if (!user?.isAdmin || archiveWriteBusyRef.current) return;
 
-    let relatedDocs = archives.filter(a => a.title.startsWith(baseTitle) && a.year === parentItem.year);
+    archiveWriteBusyRef.current = true;
+    setArchiveSaving(true);
 
-    // Sort related docs to strictly enforce D Q1, D Q2... E order
-    relatedDocs.sort((a, b) => {
-      const getOrder = (title) => {
-        if (title.endsWith('E')) return 9999; // Force Paper 2 (Essay) to the very end
-        const match = title.match(/Q(\d+)/);
-        return match ? parseInt(match[1], 10) : 0; // Sort DBQs by their number
-      };
-      return getOrder(a.title) - getOrder(b.title);
-    });
+    try {
+      // Fresh server data, not the potentially outdated search results.
+      const snapshot = await getDocsFromServer(
+        collection(db, 'archives')
+      );
 
-    const reconstructedQuestions = relatedDocs.map(doc => ({
-      id: doc.id, // existing ID to allow updating
-      paperType: doc.paperType,
-      topic: ensureArray(doc.topic),
-      pagesStr: '',
-      ansPagesStr: '',
-      ansSource: 'answer',
-      pagesStrChi: '',
-      ansPagesStrChi: '',
-      ansSourceChi: 'answer',
-      hasFile: doc.hasFile,
-      hasAnswer: doc.hasAnswer,
-      fileUrl: doc.fileUrl,
-      answerFileUrl: doc.answerFileUrl,
-      fileUrlChi: doc.fileUrlChi,
-      answerFileUrlChi: doc.answerFileUrlChi,
-      subQuestions: doc.subQuestions.map(sq => ({
-        ...sq,
-        questionType: ensureArray(sq.questionType),
-        topic: ensureArray(sq.topic),
-        sourceType: ensureArray(sq.sourceType)
-      }))
-    }));
+      const savedArchives = snapshot.docs.map(item => ({
+        ...item.data(),
+        id: item.id
+      }));
 
-    setBatchForm({
-      title: baseTitle,
-      origin: parentItem.origin,
-      year: parentItem.year,
-      tier: parentItem.tier || '10',
-      questions: reconstructedQuestions.length > 0 ? reconstructedQuestions : [{
-        id: parentItem.id,
-        paperType: parentItem.paperType,
-        topic: ensureArray(parentItem.topic),
+      const selected = savedArchives.find(item => item.id === parentItem.id);
+
+      if (!selected) {
+        throw new Error('This document was already removed. Refresh the page.');
+      }
+
+      const familyTitle = getArchiveBatchTitle(selected);
+      const baseTitle = familyTitle || selected.title;
+
+      const relatedDocs = familyTitle
+        ? savedArchives.filter(item =>
+          normalizeArchiveName(getArchiveBatchTitle(item)) ===
+          normalizeArchiveName(familyTitle) &&
+          String(item.year) === String(selected.year) &&
+          item.origin === selected.origin
+        )
+        : [selected];
+
+      relatedDocs.sort((a, b) => {
+        const titleOrder = String(a.title).localeCompare(
+          String(b.title),
+          undefined,
+          { numeric: true }
+        );
+
+        if (titleOrder) return titleOrder;
+
+        // Equal titles remain separate cards, identified by database ID.
+        return a.id.localeCompare(b.id);
+      });
+
+      // Deep copy: editing the form must not mutate the original snapshot.
+      batchOriginalsRef.current = JSON.parse(
+        JSON.stringify(relatedDocs)
+      );
+
+      const reconstructedQuestions = relatedDocs.map(item => ({
+        id: item.id,
+        originalTitle: item.title,
+        originalUpdatedAt: item.updatedAt || '',
+        questionNumber: getArchiveQuestionNumber(item),
+        paperType: item.paperType,
+        rating: item.rating ?? 0,
+        topic: ensureArray(item.topic),
         pagesStr: '',
         ansPagesStr: '',
         ansSource: 'answer',
         pagesStrChi: '',
         ansPagesStrChi: '',
         ansSourceChi: 'answer',
-        hasFile: parentItem.hasFile,
-        hasAnswer: parentItem.hasAnswer,
-        fileUrl: parentItem.fileUrl,
-        answerFileUrl: parentItem.answerFileUrl,
-        fileUrlChi: parentItem.fileUrlChi,
-        answerFileUrlChi: parentItem.answerFileUrlChi,
-        subQuestions: parentItem.subQuestions
-      }]
-    });
+        hasFile: Boolean(item.fileUrl),
+        hasAnswer: Boolean(item.answerFileUrl),
+        fileUrl: item.fileUrl || '',
+        answerFileUrl: item.answerFileUrl || '',
+        fileUrlChi: item.fileUrlChi || '',
+        answerFileUrlChi: item.answerFileUrlChi || '',
+        isExpanded: true,
+        subQuestions: JSON.parse(JSON.stringify(
+          (item.subQuestions || []).map(subQuestion => ({
+            ...subQuestion,
+            questionType: ensureArray(subQuestion.questionType),
+            topic: ensureArray(subQuestion.topic),
+            sourceType: ensureArray(subQuestion.sourceType)
+          }))
+        ))
+      }));
+
+      setBatchAIDraft(null);
+      setBatchLangTab('en');
+
+      setBatchForm({
+        title: baseTitle,
+        origin: selected.origin,
+        year: selected.year,
+        tier: selected.tier || '10',
+        questions: reconstructedQuestions
+      });
+    } catch (error) {
+      console.error('Could not open archive editor:', error);
+      alert(error.message || 'Could not open this exam.');
+      return;
+    } finally {
+      archiveWriteBusyRef.current = false;
+      setArchiveSaving(false);
+    }
 
     // Clear previous batch PDF states
     setBatchPdfFile(null);
@@ -2954,29 +3159,49 @@ export default function AdvancedHistoryArchive() {
   };
 
   const handleDelete = async () => {
-    if (!user?.isAdmin || !editingId) return;
+    if (
+      !user?.isAdmin ||
+      !editingId ||
+      archiveWriteBusyRef.current
+    ) return;
+
+    archiveWriteBusyRef.current = true;
+    archiveReadVersionRef.current += 1;
+    setArchiveSaving(true);
     setIsLoading(true);
+
     try {
-      if (uploadForm.fileUrl) {
-        try {
-          const fileRef = ref(storage, uploadForm.fileUrl);
-          await deleteObject(fileRef);
-        } catch (fileErr) { console.warn(fileErr); }
-      }
-      if (uploadForm.answerFileUrl) {
-        try {
-          const ansRef = ref(storage, uploadForm.answerFileUrl);
-          await deleteObject(ansRef);
-        } catch (ansErr) { console.warn(ansErr); }
+      const original = archives.find(item => item.id === editingId);
+
+      if (!original) {
+        throw new Error('This document is no longer in the archive list.');
       }
 
-      await deleteDoc(doc(db, "archives", editingId));
-      setArchives(prev => prev.filter(item => item.id !== editingId));
+      const plan = await prepareArchiveWrite({
+        originals: [original],
+        entries: []
+      });
+
+      await commitArchiveWrite(plan, [], user.email);
+
+      archiveReadVersionRef.current += 1;
+
+      setArchives(previous =>
+        previous.filter(item => item.id !== original.id)
+      );
+
+      setPreviewItem(null);
+      setSelectedExportItems([]);
+
+      archiveWriteBusyRef.current = false;
       closeModal();
     } catch (error) {
-      console.error("Error deleting:", error);
-      alert("Failed to delete document.");
+      console.error('Error deleting archive:', error);
+      alert('Removal did not complete.\n\n' + error.message);
     } finally {
+      archiveWriteBusyRef.current = false;
+      archiveReadVersionRef.current += 1;
+      setArchiveSaving(false);
       setIsLoading(false);
     }
   };
@@ -3018,11 +3243,47 @@ export default function AdvancedHistoryArchive() {
 
   const handleUploadSubmit = async (e) => {
     e.preventDefault();
-    if (!user?.isAdmin) return;
-    if (!uploadForm.title) return;
+
+    if (
+      !user?.isAdmin ||
+      archiveWriteBusyRef.current ||
+      isLoading ||
+      poeBusy
+    ) return;
+
+    if (!String(uploadForm.title || '').trim()) return;
+
+    archiveWriteBusyRef.current = true;
+    archiveReadVersionRef.current += 1;
+    setArchiveSaving(true);
     setIsLoading(true);
 
     try {
+      const originals = editingId
+        ? archives.filter(item => item.id === editingId)
+        : [];
+
+      if (editingId && originals.length !== 1) {
+        throw new Error('The original document is missing. Reopen its editor.');
+      }
+
+      const writePlan = await prepareArchiveWrite({
+        originals,
+        entries: [{
+          id: editingId || null,
+          data: {
+            title: uploadForm.title.trim(),
+            origin: uploadForm.origin,
+            year: uploadForm.year,
+            paperType: uploadForm.paperType,
+            subQuestions: uploadForm.subQuestions
+          }
+        }]
+      });
+
+      const uploadFolder =
+        `${writePlan.entries[0].id}/${writePlan.token}`;
+
       let fileUrl = uploadForm.fileUrl || '';
       let answerFileUrl = uploadForm.answerFileUrl || '';
 
@@ -3032,7 +3293,7 @@ export default function AdvancedHistoryArchive() {
       if (selectedFile) {
         const fileExtension = selectedFile.name.split('.').pop();
         const newFileName = `${safeTitle}.${fileExtension}`;
-        const storagePath = `pdfs/${safeOrigin}/${newFileName}`;
+        const storagePath = `pdfs/${safeOrigin}/${uploadFolder}/${newFileName}`;
         const storageRef = ref(storage, storagePath);
 
         const metadata = { contentType: 'application/pdf', contentDisposition: `inline; filename="${newFileName}"` };
@@ -3043,7 +3304,7 @@ export default function AdvancedHistoryArchive() {
       if (selectedAnswerFile) {
         const ansExtension = selectedAnswerFile.name.split('.').pop();
         const ansFileName = `${safeTitle} answer.${ansExtension}`;
-        const ansStoragePath = `pdfs/${safeOrigin}/answer/${ansFileName}`;
+        const ansStoragePath = `pdfs/${safeOrigin}/${uploadFolder}/answer/${ansFileName}`;
         const ansRef = ref(storage, ansStoragePath);
 
         const ansMetadata = { contentType: 'application/pdf', contentDisposition: `inline; filename="${ansFileName}"` };
@@ -3057,7 +3318,7 @@ export default function AdvancedHistoryArchive() {
       if (selectedFileChi) {
         const fileExtension = selectedFileChi.name.split('.').pop();
         const newFileName = `${safeTitle}-chi.${fileExtension}`;
-        const storageRef = ref(storage, `pdfs/${safeOrigin}/${newFileName}`);
+        const storageRef = ref(storage, `pdfs/${safeOrigin}/${uploadFolder}/${newFileName}`);
         await uploadBytes(storageRef, selectedFileChi, { contentType: 'application/pdf' });
         fileUrlChi = await getDownloadURL(storageRef);
       }
@@ -3065,7 +3326,7 @@ export default function AdvancedHistoryArchive() {
       if (selectedAnswerFileChi) {
         const ansExtension = selectedAnswerFileChi.name.split('.').pop();
         const ansFileName = `${safeTitle}-chi answer.${ansExtension}`;
-        const ansRef = ref(storage, `pdfs/${safeOrigin}/answer/${ansFileName}`);
+        const ansRef = ref(storage, `pdfs/${safeOrigin}/${uploadFolder}/answer/${ansFileName}`);
         await uploadBytes(ansRef, selectedAnswerFileChi, { contentType: 'application/pdf' });
         answerFileUrlChi = await getDownloadURL(ansRef);
       }
@@ -3073,7 +3334,7 @@ export default function AdvancedHistoryArchive() {
       const payload = JSON.parse(JSON.stringify({
         fileUrlChi,
         answerFileUrlChi,
-        title: uploadForm.title,
+        title: writePlan.entries[0].data.title,
         origin: uploadForm.origin,
         year: uploadForm.year,
         paperType: uploadForm.paperType,
@@ -3087,20 +3348,29 @@ export default function AdvancedHistoryArchive() {
         })),
         fileUrl,
         answerFileUrl,
-        hasFile: !!fileUrl,
-        hasAnswer: !!answerFileUrl,
+        hasFile: Boolean(fileUrl || fileUrlChi),
+        hasAnswer: Boolean(answerFileUrl || answerFileUrlChi),
         updatedAt: new Date().toISOString(),
         updatedBy: user.email
       }));
 
-      if (editingId) {
-        await updateDoc(doc(db, "archives", editingId), payload);
-        setArchives(prev => prev.map(item => item.id === editingId ? { ...payload, id: editingId } : item));
-      } else {
-        const docRef = await addDoc(collection(db, "archives"), payload);
-        const newEntry = { id: docRef.id, ...payload };
-        setArchives([newEntry, ...archives]);
-      }
+      const savedEntries = await commitArchiveWrite(
+        writePlan,
+        [payload],
+        user.email
+      );
+
+      const savedEntry = savedEntries[0];
+
+      archiveReadVersionRef.current += 1;
+
+      setArchives(previous => [
+        savedEntry,
+        ...previous.filter(item => item.id !== savedEntry.id)
+      ]);
+
+      setPreviewItem(null);
+      setSelectedExportItems([]);
 
       ensureArray(payload.topic).forEach(t => handleCreateTopic(t));
       payload.subQuestions.forEach(sq => {
@@ -3109,11 +3379,20 @@ export default function AdvancedHistoryArchive() {
         ensureArray(sq.questionType).forEach(qt => handleCreateQuestionType(qt, payload.paperType));
       });
 
+      archiveWriteBusyRef.current = false;
       closeModal();
     } catch (error) {
-      console.error("Error uploading:", error);
-      alert("Failed to save document.");
+      console.error('Error uploading:', error);
+
+      alert(
+        'Document save did not complete.\n\n' +
+        (error.message || 'Please try again.') +
+        '\n\nIf the network disconnected during saving, refresh and check the archive before uploading again.'
+      );
     } finally {
+      archiveWriteBusyRef.current = false;
+      archiveReadVersionRef.current += 1;
+      setArchiveSaving(false);
       setIsLoading(false);
     }
   };
@@ -3121,7 +3400,12 @@ export default function AdvancedHistoryArchive() {
   // --- HANDLE BATCH EXAM SUBMIT & SPLITTING ---
   const handleBatchSubmit = async (e) => {
     e.preventDefault();
-    if (!user?.isAdmin || isLoading || poeBusy) return;
+    if (
+      !user?.isAdmin ||
+      isLoading ||
+      poeBusy ||
+      archiveWriteBusyRef.current
+    ) return;
 
     if (batchForm.aiSourceFiles) {
       const currentFiles = {
@@ -3154,11 +3438,12 @@ export default function AdvancedHistoryArchive() {
     if (!/^\d{4}$/.test(String(batchForm.year || ''))) {
       return alert('Please provide a four-digit year.');
     }
-    if (!batchForm.questions.length) {
+    if (!batchForm.questions.length && !editingId) {
       return alert('Please add or import at least one question set.');
     }
     const hasDbqNeedingPdf = batchForm.questions.some(q =>
       q.paperType === 'Paper 1 (DBQ)' &&
+      !q.originalTitle &&
       !q.fileUrl &&
       !q.fileUrlChi
     );
@@ -3246,6 +3531,7 @@ export default function AdvancedHistoryArchive() {
 
         if (
           isDbq &&
+          !q.originalTitle &&
           !hasEnglishPages &&
           !hasChinesePages &&
           !q.fileUrl &&
@@ -3261,10 +3547,51 @@ export default function AdvancedHistoryArchive() {
       return;
     }
 
+    archiveWriteBusyRef.current = true;
+    archiveReadVersionRef.current += 1;
+    setArchiveSaving(true);
     setIsLoading(true);
 
     try {
-      const safeTitle = batchForm.title.replace(/[^a-zA-Z0-9\s\-_]/g, '').trim();
+      const originals = editingId
+        ? batchOriginalsRef.current
+        : [];
+
+      if (editingId && originals.length === 0) {
+        throw new Error(
+          'The original exam snapshot is missing. Close and reopen Edit Parent.'
+        );
+      }
+
+      const entries = buildBatchWriteEntries(batchForm, originals);
+
+      const writePlan = await prepareArchiveWrite({
+        originals,
+        entries,
+        newExamTitle: editingId ? '' : batchForm.title
+      });
+
+      if (writePlan.removed.length) {
+        const removalList = writePlan.removed.map(item =>
+          `${item.title}\nID: ${item.id}`
+        ).join('\n\n');
+
+        if (!window.confirm(
+          `Permanently remove ${writePlan.removed.length} archive record(s)?\n\n` +
+          removalList +
+          '\n\nTheir English and Chinese entries will be removed together. ' +
+          'Existing Storage PDFs will be retained for safety.\n\n' +
+          'The retained question IDs and titles will not be renumbered.'
+        )) return;
+      }
+
+      const pendingPayloads = [];
+
+      const safeTitle = (
+        batchForm.title.replace(/[^a-zA-Z0-9\s\-_]/g, '').trim() ||
+        'exam'
+      ) + '_' + writePlan.token;
+
       const safeOrigin = (batchForm.origin || 'Uncategorized').replace(/[^a-zA-Z0-9\s\-_]/g, '_');
       const pdfPageCount = batchLoadedPdf ? batchLoadedPdf.getPageCount() : 0;
       const ansPageCount = batchLoadedAnsPdf ? batchLoadedAnsPdf.getPageCount() : pdfPageCount;
@@ -3344,14 +3671,7 @@ export default function AdvancedHistoryArchive() {
         }
 
         const payload = {
-          title: q.paperType === 'Paper 1 (DBQ)'
-            ? `${batchForm.title}D Q${q.questionNumber || i + 1}`
-            : q.paperType === 'Paper 2 (Essay)'
-              ? `${batchForm.title}E`
-              : `${batchForm.title} - Q${i + 1}`,
-          origin: batchForm.origin,
-          year: batchForm.year,
-          paperType: q.paperType,
+          ...writePlan.entries[i].data,
           topic: q.topic,
           tier: batchForm.tier,
           subQuestions: q.subQuestions.map(sq => ({
@@ -3360,25 +3680,23 @@ export default function AdvancedHistoryArchive() {
               ? ''
               : (sq.marks ?? '')
           })),
-          rating: q.rating || 0,
-          // Only overwrite URLs if new ones were generated during this edit
-          ...(qFileUrl && { fileUrl: qFileUrl, hasFile: true }),
-          ...(qAnsFileUrl && { answerFileUrl: qAnsFileUrl, hasAnswer: true }),
-          ...(qFileUrlChi && { fileUrlChi: qFileUrlChi }),
-          ...(qAnsFileUrlChi && { answerFileUrlChi: qAnsFileUrlChi }),
+          rating: q.rating ?? 0,
+
+          // Empty strings are intentional: they remove saved attachments.
+          fileUrl: qFileUrl,
+          answerFileUrl: qAnsFileUrl,
+          fileUrlChi: qFileUrlChi,
+          answerFileUrlChi: qAnsFileUrlChi,
+
+          hasFile: Boolean(qFileUrl || qFileUrlChi),
+          hasAnswer: Boolean(qAnsFileUrl || qAnsFileUrlChi),
           updatedAt: new Date().toISOString(),
           updatedBy: user.email
         };
 
-        if (typeof q.id === 'string' && q.id.length > 10) {
-          // Existing document update
-          await updateDoc(doc(db, "archives", q.id), payload);
-          setArchives(prev => prev.map(item => item.id === q.id ? { ...item, ...payload } : item));
-        } else {
-          // New document
-          const docRef = await addDoc(collection(db, "archives"), payload);
-          setArchives(prev => [{ id: docRef.id, ...payload }, ...prev]);
-        }
+        pendingPayloads.push(
+          JSON.parse(JSON.stringify(payload))
+        );
 
         ensureArray(payload.topic).forEach(t => handleCreateTopic(t));
         payload.subQuestions.forEach(sq => {
@@ -3387,12 +3705,51 @@ export default function AdvancedHistoryArchive() {
           ensureArray(sq.questionType).forEach(qt => handleCreateQuestionType(qt, payload.paperType));
         });
       }
+      const savedEntries = await commitArchiveWrite(
+        writePlan,
+        pendingPayloads,
+        user.email
+      );
+
+      const affectedIds = new Set([
+        ...writePlan.originals.map(item => item.id),
+        ...savedEntries.map(item => item.id)
+      ]);
+
+      archiveReadVersionRef.current += 1;
+
+      setArchives(previous => [
+        ...savedEntries,
+        ...previous.filter(item => !affectedIds.has(item.id))
+      ]);
+
+      setPreviewItem(null);
+      setSelectedExportItems([]);
+      setBatchPreviewMode('question');
+
+      archiveWriteBusyRef.current = false;
       closeModal();
-      alert("Batch upload successful!");
+
+      alert(
+        `Archive saved.\n\n` +
+        `Question records saved: ${savedEntries.length}\n` +
+        `Question records removed: ${writePlan.removed.length}\n\n` +
+        'Existing question titles and IDs were preserved.'
+      );
     } catch (error) {
-      console.error("Error in batch upload:", error);
-      alert("Failed to process batch upload.");
+      console.error('Error in batch upload:', error);
+
+      alert(
+        'Batch save did not complete.\n\n' +
+        (error.message || 'Please try again.') +
+        '\n\nIf the connection failed during saving, refresh and check the archive ' +
+        'before starting a new upload. Any newly uploaded but unused PDFs are retained ' +
+        'rather than risking deletion of a committed file.'
+      );
     } finally {
+      archiveWriteBusyRef.current = false;
+      archiveReadVersionRef.current += 1;
+      setArchiveSaving(false);
       setIsLoading(false);
     }
   };
@@ -3814,7 +4171,9 @@ export default function AdvancedHistoryArchive() {
     setIsManageSamplesModalOpen(true);
   };
   const closeModal = () => {
-    if (poeBusy) return;
+    if (poeBusy || archiveWriteBusyRef.current) return;
+
+    batchOriginalsRef.current = [];
     setBatchAIDraft(null);
     setIsUploadModalOpen(false);
     setTimeout(() => {
@@ -3933,6 +4292,7 @@ export default function AdvancedHistoryArchive() {
   };
 
   const handleExportDoc = () => {
+    if (!canManageAccess) return;
     if (selectedExportItems.length === 0) return alert("Please select at least one question set.");
 
     let htmlContent = `
@@ -4044,7 +4404,39 @@ export default function AdvancedHistoryArchive() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col relative">
+    <div
+      className="archive-shell min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col relative"
+      data-phone-layout={isPhoneLayout ? 'true' : 'false'}
+    >
+
+      {archiveSaving && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Archive operation in progress"
+          className="fixed inset-0 z-[250] bg-black/70 backdrop-blur-sm flex items-center justify-center p-6"
+        >
+          <div className="w-full max-w-md rounded-xl bg-white p-6 text-center shadow-2xl space-y-4">
+            <Loader2
+              size={36}
+              className="mx-auto animate-spin text-teal-700"
+            />
+
+            <h2 className="text-lg font-bold text-slate-800">
+              Checking or saving archive records
+            </h2>
+
+            <p className="text-sm text-slate-600">
+              Please keep this page open. Duplicate checks, PDF processing,
+              and database changes are being handled.
+            </p>
+
+            <p className="text-xs text-amber-800">
+              Do not refresh or submit the same exam from another tab.
+            </p>
+          </div>
+        </div>
+      )}
 
       {poeBusy && (
         <div
@@ -4075,12 +4467,12 @@ export default function AdvancedHistoryArchive() {
       )}
 
       {/* DEBUG BAR */}
-      <div className="fixed bottom-0 right-0 bg-black text-white text-xs p-2 z-50 opacity-80 pointer-events-none font-mono">
+      <div className="archive-debug-status fixed bottom-0 right-0 bg-black text-white text-xs p-2 z-50 opacity-80 pointer-events-none font-mono">
         STATUS: {user ? (user.isAdmin ? "ADMIN" : (user.isAuthorized ? "VIEWER" : "UNAUTHORIZED")) : "LOGGED OUT"}
       </div>
 
       {/* --- MAIN CONTENT --- */}
-      <main className="flex-1 p-6 md:p-10 max-w-[1600px] mx-auto w-full">
+      <main className="archive-main flex-1 min-w-0 p-3 sm:p-6 md:p-10 max-w-[1600px] mx-auto w-full">
 
         {/* Header */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2 md:gap-4 mb-3 md:mb-6">
@@ -4117,9 +4509,10 @@ export default function AdvancedHistoryArchive() {
           </div>
 
           {user && user.isAdmin && (
-            <div className="flex gap-1.5 md:gap-2 w-full md:w-auto mt-2 md:mt-0 flex-nowrap md:flex-wrap">
-              {user.email === 'clng@ktls.edu.hk' && (
+            <div className="flex flex-wrap gap-2 w-full min-w-0 md:w-auto mt-2 md:mt-0">
+              {canManageAccess && (
                 <button
+                  type="button"
                   onClick={() => setIsExportModalOpen(true)}
                   className="btn-secondary flex-1 md:flex-none hover:bg-amber-50 hover:text-amber-700 hover:border-amber-200 text-[10px] md:text-sm px-2 py-1.5 md:px-4 md:py-2"
                 >
@@ -4174,9 +4567,12 @@ export default function AdvancedHistoryArchive() {
 
         {/* --- ARCHIVE CONTENT RENDERER --- */}
         {user && user.isAuthorized && (
-          <div className="animate-in fade-in duration-300 flex flex-col md:flex-row gap-6 items-start">
+          <div className="archive-layout animate-in fade-in duration-300 flex flex-col md:flex-row gap-6 items-start">
             {/* --- LEFT FILTER PANEL --- */}
-            <div className={`w-full md:w-72 lg:w-80 shrink-0 mb-3 md:mb-0 md:sticky md:top-6 ${showFilters ? 'sticky top-0 z-40 max-h-[80vh] overflow-y-auto custom-scrollbar' : ''} md:max-h-[calc(100vh-3rem)] md:overflow-y-auto md:custom-scrollbar`}>
+            <div
+              data-expanded={showFilters ? 'true' : 'false'}
+              className="archive-filters w-full md:w-72 lg:w-80 shrink-0 mb-3 md:mb-0 md:sticky md:top-6 md:max-h-[calc(100vh-3rem)] md:overflow-y-auto md:custom-scrollbar"
+            >
               <div className="bg-slate-50 border border-slate-200 rounded-lg md:rounded-xl p-2.5 md:p-4 shadow-inner w-full md:w-72 lg:w-80">
                 <div className="flex justify-between items-center mb-0 md:mb-4">
                   <h3 className="text-xs md:text-sm font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 md:gap-2">
@@ -4185,8 +4581,11 @@ export default function AdvancedHistoryArchive() {
                   <div className="flex gap-2 items-center">
                     {/* Mobile Toggle Button */}
                     <button
-                      onClick={() => setShowFilters(!showFilters)}
-                      className="md:hidden text-[10px] flex items-center gap-1 bg-blue-100 text-blue-700 px-2 py-1 rounded font-bold"
+                      type="button"
+                      aria-expanded={showFilters}
+                      aria-controls="archive-filter-sections"
+                      onClick={() => setShowFilters(value => !value)}
+                      className="archive-filter-toggle md:hidden text-xs flex items-center gap-1 bg-blue-100 text-blue-700 px-2 py-1 rounded font-bold"
                     >
                       {showFilters ? t('Hide Filters') : t('Show Filters')}
                     </button>
@@ -4199,8 +4598,9 @@ export default function AdvancedHistoryArchive() {
                       </button>
                     )}
                     <button
-                      onClick={() => setFilters({ origin: [], year: [], paperType: [], questionType: [], sourceType: [], marks: [], topic: [], tier: [] })}
-                      className="hidden md:block text-xs text-red-500 hover:text-red-700 font-medium px-2 py-1 rounded hover:bg-red-50 transition-colors"
+                      type="button"
+                      onClick={handleResetFilters}
+                      className="shrink-0 min-h-[40px] text-xs text-red-600 hover:text-red-700 font-bold px-2 py-1 rounded hover:bg-red-50 transition-colors"
                     >
                       {t("Reset All")}
                     </button>
@@ -4208,7 +4608,10 @@ export default function AdvancedHistoryArchive() {
                 </div>
 
                 {/* VERTICAL STACK OF ACCORDIONS */}
-                <div className={`flex-col gap-2 mt-2 md:mt-0 ${showFilters ? 'flex' : 'hidden md:flex'}`}>
+                <div
+                  id="archive-filter-sections"
+                  className={`archive-filter-sections flex-col gap-2 mt-2 md:mt-0 ${showFilters ? 'flex' : 'hidden md:flex'}`}
+                >
                   {/* Tier (Admin Only) */}
                   {user.isAdmin && (
                     <FilterAccordion title="Tier Level (Admin Only)" isOpen={expandedSections['tier']} onToggle={() => toggleAccordion('tier')} count={filters.tier.length}>
@@ -4275,9 +4678,9 @@ export default function AdvancedHistoryArchive() {
             </div>
 
             {/* --- MAIN CONTENT AREA (Search & Results) --- */}
-            <div className="flex-1 min-w-0 w-full">
+            <div className="archive-results flex-1 min-w-0 w-full">
               {/* Search Bar, Display Mode & Sort */}
-              <div className="flex flex-row gap-2 md:gap-3 mb-4 md:mb-6">
+              <div className="archive-search-controls flex flex-row gap-2 md:gap-3 mb-4 md:mb-6">
                 <div className="relative flex-1">
                   <Search className="absolute left-3 md:left-4 top-2 md:top-3.5 text-slate-400 w-4 h-4 md:w-5 md:h-5" />
                   <input
@@ -5553,16 +5956,16 @@ export default function AdvancedHistoryArchive() {
       {/* --- PREVIEW MODAL --- */}
       < AnimatePresence >
         {previewItem && (
-          <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4">
+          <div className="archive-preview-overlay fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-white rounded-xl w-full max-w-full h-full shadow-2xl flex flex-col overflow-hidden"
+              className="archive-preview-dialog bg-white rounded-xl w-full max-w-full h-full shadow-2xl flex flex-col overflow-hidden"
             >
               {/* Preview Header */}
-              <div className="px-2 md:px-6 py-2 md:py-3 border-b border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center bg-white shrink-0 z-10 gap-2 md:gap-4 overflow-x-auto">
+              <div className="archive-preview-header px-2 md:px-6 py-2 md:py-3 border-b border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center bg-white shrink-0 z-10 gap-2 md:gap-4 overflow-x-auto">
                 <div className="flex items-center gap-4 w-full md:w-auto">
                   <div className="flex flex-col w-full">
                     {/* Tags row above title */}
@@ -5648,7 +6051,33 @@ export default function AdvancedHistoryArchive() {
 
                   {((!viewingAnswer && !activeSample && previewItem.parent.hasFile) || (viewingAnswer && previewItem.parent.hasAnswer) || activeSample) && (
                     <a
-                      href={getSecurePdfUrl(activeSample ? activeSample.currentFileUrl : (viewingAnswer ? previewItem.parent.answerFileUrl : previewItem.parent.fileUrl))}
+                      href={getSecurePdfUrl(
+                        activeSample
+                          ? activeSample.currentFileUrl
+                          : viewingAnswer
+                            ? (
+                              language === 'zh'
+                                ? (
+                                  previewItem.parent.answerFileUrlChi ||
+                                  previewItem.parent.answerFileUrl
+                                )
+                                : (
+                                  previewItem.parent.answerFileUrl ||
+                                  previewItem.parent.answerFileUrlChi
+                                )
+                            )
+                            : (
+                              language === 'zh'
+                                ? (
+                                  previewItem.parent.fileUrlChi ||
+                                  previewItem.parent.fileUrl
+                                )
+                                : (
+                                  previewItem.parent.fileUrl ||
+                                  previewItem.parent.fileUrlChi
+                                )
+                            )
+                      )}
                       target="_blank"
                       rel="noreferrer"
                       onClick={() => handleDownloadTracking(activeSample ? "Student Sample" : (viewingAnswer ? previewItem.parent.title + " Answer" : previewItem.parent.title))}
@@ -5670,7 +6099,7 @@ export default function AdvancedHistoryArchive() {
               </div>
 
               {/* Preview Body */}
-              <div className="flex-1 overflow-y-auto md:overflow-hidden flex flex-col md:flex-row">
+              <div className="archive-preview-body flex-1 min-h-0 min-w-0 overflow-y-auto md:overflow-hidden flex flex-col md:flex-row">
 
                 {(!viewingAnswer || (viewingAnswer && (previewItem.isFullPaper ? previewItem.parent.subQuestions.some(sq => sq.candidatePerformance || sq.candidatePerformanceChi) : (previewItem.child.candidatePerformance || previewItem.child.candidatePerformanceChi)))) && (
                   <div className={`${(activeSample || previewItem.parent.hasFile || (viewingAnswer && previewItem.parent.hasAnswer)) ? 'md:w-1/3 lg:w-1/4 md:border-r border-slate-200' : 'w-full'} flex flex-col bg-slate-50 overflow-visible md:overflow-hidden`}>
@@ -6078,15 +6507,45 @@ export default function AdvancedHistoryArchive() {
                         <CustomPDFViewer fileUrl={getSecurePdfUrl(activeSample.currentFileUrl)} />
                       )
                     ) : viewingAnswer ? (
-                      (language === 'zh' && previewItem.parent.answerFileUrlChi) ? (
-                        <CustomPDFViewer fileUrl={getSecurePdfUrl(previewItem.parent.answerFileUrlChi)} />
-                      ) : previewItem.parent.hasAnswer ? (
-                        <CustomPDFViewer fileUrl={getSecurePdfUrl(previewItem.parent.answerFileUrl)} />
-                      ) : (
-                        <div className="flex items-center justify-center h-full text-slate-500">{t("No answer file available.")}</div>
-                      )
+                      (() => {
+                        const url = language === 'zh'
+                          ? (
+                            previewItem.parent.answerFileUrlChi ||
+                            previewItem.parent.answerFileUrl
+                          )
+                          : (
+                            previewItem.parent.answerFileUrl ||
+                            previewItem.parent.answerFileUrlChi
+                          );
+
+                        return url ? (
+                          <CustomPDFViewer fileUrl={getSecurePdfUrl(url)} />
+                        ) : (
+                          <div className="flex items-center justify-center h-full text-slate-500">
+                            {t("No answer file available.")}
+                          </div>
+                        );
+                      })()
                     ) : (
-                      <CustomPDFViewer fileUrl={getSecurePdfUrl((language === 'zh' && previewItem.parent.fileUrlChi) ? previewItem.parent.fileUrlChi : previewItem.parent.fileUrl)} />
+                      (() => {
+                        const url = language === 'zh'
+                          ? (
+                            previewItem.parent.fileUrlChi ||
+                            previewItem.parent.fileUrl
+                          )
+                          : (
+                            previewItem.parent.fileUrl ||
+                            previewItem.parent.fileUrlChi
+                          );
+
+                        return url ? (
+                          <CustomPDFViewer fileUrl={getSecurePdfUrl(url)} />
+                        ) : (
+                          <div className="flex items-center justify-center h-full text-slate-500">
+                            {t("No PDF attached")}
+                          </div>
+                        );
+                      })()
                     )}
                   </div>
                 )}
@@ -6480,6 +6939,59 @@ export default function AdvancedHistoryArchive() {
                       </div>
 
                       <form id="batch-form" onSubmit={handleBatchSubmit} className="space-y-6 px-6 pb-6">
+                        {editingId && (
+                          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 space-y-3">
+                            <p>
+                              Each card is one database record containing both
+                              languages. Remove a duplicate card once, then click
+                              <strong> Update Archive</strong>.
+                            </p>
+
+                            <p>
+                              Pending record removals:{' '}
+                              <strong>
+                                {batchOriginalsRef.current.filter(original =>
+                                  !batchForm.questions.some(
+                                    question => question.id === original.id
+                                  )
+                                ).length}
+                              </strong>
+                            </p>
+
+                            <p className="text-xs">
+                              Keep the original exam title, origin and year.
+                              Existing question titles and numbers will be preserved.
+                            </p>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const blob = new Blob([
+                                  JSON.stringify(
+                                    batchOriginalsRef.current,
+                                    null,
+                                    2
+                                  )
+                                ], { type: 'application/json' });
+
+                                const url = URL.createObjectURL(blob);
+                                const link = document.createElement('a');
+
+                                link.href = url;
+                                link.download = 'archive-before-edit-backup.json';
+                                document.body.appendChild(link);
+                                link.click();
+                                link.remove();
+
+                                setTimeout(() => URL.revokeObjectURL(url), 1000);
+                              }}
+                              className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-bold"
+                            >
+                              Download original record backup
+                            </button>
+                          </div>
+                        )}
+
                         <PoeImportPanel
                           mode="batch"
                           entries={[
@@ -7381,34 +7893,9 @@ The supplied documents follow.`;
                                       ? 'Fill Form from Poe Draft'
                                       : t("Paste All")}
                                   </button>
-                                  <div className="w-48">
-                                    <CreatableSelect
-                                      options={archives.map(a => a.title)}
-                                      value=""
-                                      onChange={(val) => {
-                                        if (!val) return;
-                                        const existingDoc = archives.find(a => a.title === val);
-                                        if (existingDoc && !batchForm.questions.some(q => q.id === existingDoc.id)) {
-                                          setBatchForm(prev => ({
-                                            ...prev,
-                                            questions: [...prev.questions, {
-                                              id: existingDoc.id,
-                                              paperType: existingDoc.paperType,
-                                              topic: ensureArray(existingDoc.topic),
-                                              pagesStr: '', ansPagesStr: '', ansSource: 'answer',
-                                              pagesStrChi: '', ansPagesStrChi: '', ansSourceChi: 'answer',
-                                              hasFile: existingDoc.hasFile, hasAnswer: existingDoc.hasAnswer,
-                                              fileUrl: existingDoc.fileUrl, answerFileUrl: existingDoc.answerFileUrl,
-                                              fileUrlChi: existingDoc.fileUrlChi, answerFileUrlChi: existingDoc.answerFileUrlChi,
-                                              subQuestions: existingDoc.subQuestions
-                                            }]
-                                          }));
-                                        }
-                                      }}
-                                      placeholder={t("+ Import Existing...")}
-                                      isMulti={false}
-                                    />
-                                  </div>
+                                  <span className="max-w-48 text-xs text-slate-500">
+                                    To modify an existing exam, use its Edit Parent button.
+                                  </span>
                                   <button type="button" onClick={() => setBatchForm(prev => ({ ...prev, questions: [...prev.questions, { id: Date.now(), paperType: 'Paper 1 (DBQ)', topic: [], pagesStr: '', ansPagesStr: '', ansSource: 'answer', pagesStrChi: '', ansPagesStrChi: '', ansSourceChi: 'answer', hasFile: false, hasAnswer: false, subQuestions: [{ id: Date.now() + 1, label: 'a', questionType: [], content: '', topic: [], sourceType: [], marks: '' }] }] }))} className="text-sm font-bold text-teal-600 flex items-center gap-1"><Plus size={16} /> {t("Add Question")}</button>
                                 </div>
                               </div>
@@ -7418,10 +7905,10 @@ The supplied documents follow.`;
                               </div>
 
                               {batchForm.questions.map((q, qIdx) => {
-                                const isEnDisabled = q.hasFile || !batchPdfFile;
-                                const isZhDisabled = q.fileUrlChi || !batchPdfFileChi;
-                                const isAnsEnDisabled = q.hasAnswer || (!batchAnsPdfFile && !batchPdfFile);
-                                const isAnsZhDisabled = q.answerFileUrlChi || (!batchAnsPdfFileChi && !batchPdfFileChi);
+                                const isEnDisabled = Boolean(q.fileUrl) || !batchPdfFile;
+                                const isZhDisabled = Boolean(q.fileUrlChi) || !batchPdfFileChi;
+                                const isAnsEnDisabled = Boolean(q.answerFileUrl) || (!batchAnsPdfFile && !batchPdfFile);
+                                const isAnsZhDisabled = Boolean(q.answerFileUrlChi) || (!batchAnsPdfFileChi && !batchPdfFileChi);
                                 const isExpanded = q.isExpanded !== false; // Default to true if undefined
 
                                 return (
@@ -7433,11 +7920,59 @@ The supplied documents follow.`;
                                     }}>
                                       <div className="flex items-center gap-2">
                                         <ChevronDown size={18} className={`text-slate-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
-                                        <h4 className="font-bold text-slate-700">{t("Question")} {qIdx + 1}</h4>
+                                        <div className="min-w-0">
+                                          <h4 className="font-bold text-slate-700">
+                                            {q.originalTitle || `${t("New Question Set")} ${qIdx + 1}`}
+                                          </h4>
+
+                                          {q.originalTitle && (
+                                            <div className="mt-1 text-xs text-slate-500 break-all">
+                                              <div>ID: {q.id}</div>
+                                              {q.originalUpdatedAt && (
+                                                <div>
+                                                  Last saved: {q.originalUpdatedAt}
+                                                </div>
+                                              )}
+                                            </div>
+                                          )}
+                                        </div>
                                         {q.hasFile && <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-bold">{t("File Attached")}</span>}
                                         {!isExpanded && <span className="text-xs text-slate-400 ml-2">{q.paperType} • {q.subQuestions.length} Sub-Q(s)</span>}
                                       </div>
-                                      {batchForm.questions.length > 1 && <button type="button" onClick={(e) => { e.stopPropagation(); setBatchForm(prev => ({ ...prev, questions: prev.questions.filter((_, i) => i !== qIdx) })) }} className="text-slate-400 hover:text-red-500 p-1"><Trash2 size={16} /></button>}
+                                      <button
+                                        type="button"
+                                        disabled={archiveSaving}
+                                        title="Remove this whole question record"
+                                        onClick={event => {
+                                          event.stopPropagation();
+
+                                          const label = q.originalTitle ||
+                                            `new question set ${qIdx + 1}`;
+
+                                          if (!window.confirm(
+                                            `Remove "${label}" from this exam?\n\n` +
+                                            (q.originalTitle
+                                              ? `Database ID: ${q.id}\n\n`
+                                              : '') +
+                                            'English and Chinese belong to the SAME record. ' +
+                                            'You only need to remove this card once.\n\n' +
+                                            'The database removal happens only when you click Update Archive.'
+                                          )) return;
+
+                                          setBatchForm(previous => ({
+                                            ...previous,
+                                            questions: previous.questions.filter(
+                                              (_, index) => index !== qIdx
+                                            )
+                                          }));
+
+                                          setBatchPreviewMode('question');
+                                        }}
+                                        className="shrink-0 flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100 disabled:opacity-50"
+                                      >
+                                        <Trash2 size={16} />
+                                        Remove record
+                                      </button>
                                     </div>
 
                                     {isExpanded && (
@@ -7509,6 +8044,85 @@ The supplied documents follow.`;
                                               </div>
                                             </>
                                           )}
+                                        </div>
+
+                                        {/* Explicit attachment controls */}
+                                        <div className="rounded-lg border border-slate-200 bg-white p-3 space-y-2">
+                                          <p className="text-xs font-bold text-slate-700">
+                                            Saved PDF attachments
+                                          </p>
+
+                                          <p className="text-xs text-slate-500">
+                                            Removing an attachment clears its saved link after
+                                            Update Archive. It does not remove the whole question record.
+                                          </p>
+
+                                          {[
+                                            ['fileUrl', 'English question PDF', 'pagesStr'],
+                                            ['answerFileUrl', 'English answer PDF', 'ansPagesStr'],
+                                            ['fileUrlChi', 'Chinese question PDF', 'pagesStrChi'],
+                                            ['answerFileUrlChi', 'Chinese answer PDF', 'ansPagesStrChi']
+                                          ].map(([field, label, pageField]) => (
+                                            <div
+                                              key={field}
+                                              className="flex flex-wrap items-center justify-between gap-2 text-xs"
+                                            >
+                                              <span>{label}</span>
+
+                                              {q[field] ? (
+                                                <div className="flex items-center gap-2">
+                                                  <a
+                                                    href={q[field]}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    className="rounded bg-blue-50 px-2 py-1.5 font-bold text-blue-700"
+                                                  >
+                                                    View
+                                                  </a>
+
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                      if (!window.confirm(
+                                                        `Detach ${label} from "${q.originalTitle || 'this question'}"?\n\n` +
+                                                        'This is saved only after Update Archive.'
+                                                      )) return;
+
+                                                      setBatchForm(previous => ({
+                                                        ...previous,
+                                                        questions: previous.questions.map(
+                                                          (question, index) => {
+                                                            if (index !== qIdx) return question;
+
+                                                            const next = {
+                                                              ...question,
+                                                              [field]: '',
+                                                              [pageField]: ''
+                                                            };
+
+                                                            // These flags are used by the English editor.
+                                                            next.hasFile = Boolean(next.fileUrl);
+                                                            next.hasAnswer = Boolean(next.answerFileUrl);
+
+                                                            return next;
+                                                          }
+                                                        )
+                                                      }));
+
+                                                      setBatchPreviewMode('question');
+                                                    }}
+                                                    className="rounded bg-red-50 px-2 py-1.5 font-bold text-red-700"
+                                                  >
+                                                    Remove attachment
+                                                  </button>
+                                                </div>
+                                              ) : (
+                                                <span className="text-slate-400">
+                                                  No saved attachment
+                                                </span>
+                                              )}
+                                            </div>
+                                          ))}
                                         </div>
 
                                         {/* SUBQUESTIONS */}
@@ -8524,7 +9138,7 @@ The supplied documents follow.`;
 
       {/* --- EXPORT TO AI MODAL --- */}
       <AnimatePresence>
-        {isExportModalOpen && user?.isAdmin && (
+        {isExportModalOpen && canManageAccess && (
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[90] flex items-center justify-center p-4">
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-white rounded-xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
               <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">

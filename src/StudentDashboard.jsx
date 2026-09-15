@@ -15,10 +15,15 @@ import {
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { useAuth } from './main.jsx';
+import { getUserClassAccess } from './classAccess.js';
+
 import {
-    getUserClassAccess,
-    getClassAssessments
-} from './classAccess.js';
+    loadClassAssessments,
+    loadClassStudents,
+    loadLinkedArchives,
+    expandArchiveDocuments,
+    loadArchiveCatalogue
+} from './dashboardData.js';
 import { BookOpen, Edit, Trash2, Plus, Save, X, ExternalLink, Loader2, FileText, GripHorizontal, Check, Star, BarChart2, Download } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { useLanguage } from './LanguageContext.jsx';
@@ -114,7 +119,37 @@ export default function StudentDashboard() {
     const [graphMetric, setGraphMetric] = useState('percentage');
     const [graphCategories, setGraphCategories] = useState(['Assignments', 'Quizzes', 'Uniform Test', 'Exam']);
     const [excludeNoMarks, setExcludeNoMarks] = useState(true);
-    const [previewPdfUrl, setPreviewPdfUrl] = useState(null); // NEW: State for the generated PDF
+    const [previewPdfUrl, setPreviewPdfUrl] = useState(null);
+
+    const [loadedClass, setLoadedClass] = useState('');
+    const [classReload, setClassReload] = useState(0);
+    const [catalogueLoading, setCatalogueLoading] = useState(false);
+
+    const cataloguePromiseRef = React.useRef(null);
+    const activeDashboardRef = React.useRef('');
+
+    activeDashboardRef.current = JSON.stringify([
+        dashboardIdentity,
+        selectedClass
+    ]);
+
+    // Reuse the catalogue request within this dashboard visit.
+    // Failed requests can be retried.
+    const getCatalogue = () => {
+        if (!cataloguePromiseRef.current) {
+            const request = loadArchiveCatalogue().catch(error => {
+                if (cataloguePromiseRef.current === request) {
+                    cataloguePromiseRef.current = null;
+                }
+
+                throw error;
+            });
+
+            cataloguePromiseRef.current = request;
+        }
+
+        return cataloguePromiseRef.current;
+    };
 
     useEffect(() => {
         let cancelled = false;
@@ -123,6 +158,9 @@ export default function StudentDashboard() {
         setIsLoading(true);
         setDashboardError('');
         setLoadedDashboardIdentity('');
+        setLoadedClass('');
+        setCatalogueLoading(false);
+        cataloguePromiseRef.current = null;
         setItems([]);
         setAllItems([]);
         setClasses([]);
@@ -199,17 +237,7 @@ export default function StudentDashboard() {
                         )
                         .map(c => c.name);
 
-                    const studentsSnap = await getDocsFromServer(
-                        collection(db, 'students')
-                    );
-
-                    studentsSnap.docs.forEach(d => {
-                        const student = d.data();
-
-                        if (loadedClasses.includes(student.className)) {
-                            namesById[d.id] = student.englishName || d.id;
-                        }
-                    });
+                    // Student names are loaded later, for the selected class only.
                 } else {
                     // The saved access mapping is authoritative.
                     // Do not add extra classes from student records.
@@ -251,33 +279,16 @@ export default function StudentDashboard() {
 
                 loadedClasses = [...new Set(loadedClasses)];
 
-                const [archiveSnap, configSnap, progressSnap, fetchedItems] =
-                    await Promise.all([
-                        getDocsFromServer(collection(db, 'archives')),
-                        getDocFromServer(doc(db, 'system_settings', 'config')),
-                        getDocFromServer(doc(db, 'user_progress', email)),
-                        getClassAssessments(loadedClasses)
-                    ]);
+                const [configSnap, progressSnap] = await Promise.all([
+                    getDocFromServer(doc(db, 'system_settings', 'config')),
+                    getDocFromServer(doc(db, 'user_progress', email))
+                ]);
 
-                const fetchedArchives = archiveSnap.docs.map(d => ({
-                    ...d.data(),
-                    id: d.id
-                }));
-
+                // Class-specific data is loaded by the selected-class effect.
+                // Keep these initial arrays empty.
+                const fetchedItems = [];
+                const fetchedArchives = [];
                 const documents = [];
-
-                fetchedArchives.forEach(archive => {
-                    documents.push({ ...archive, linkMode: 'full' });
-
-                    (archive.subQuestions || []).forEach(sub => {
-                        documents.push({
-                            ...archive,
-                            id: `${archive.id}_${sub.id}`,
-                            title: `${archive.title} Q${sub.label}`,
-                            linkMode: 'sub'
-                        });
-                    });
-                });
 
                 let unlockedTier = 0;
                 const roleAccess =
@@ -379,6 +390,111 @@ export default function StudentDashboard() {
         };
     }, [dashboardIdentity, authLoading]);
 
+    // Load ONE class at a time.
+    useEffect(() => {
+        let cancelled = false;
+
+        if (
+            authLoading ||
+            !user?.isAuthorized ||
+            loadedDashboardIdentity !== dashboardIdentity ||
+            !selectedClass ||
+            !classes.includes(selectedClass)
+        ) {
+            return () => {
+                cancelled = true;
+            };
+        }
+
+        setLoadedClass('');
+        setDashboardError('');
+        setItems([]);
+        setAllItems([]);
+        setArchives([]);
+        setLinkableDocs([]);
+        setStudentMap({});
+        setIsEditing(false);
+        setEditForm(null);
+        setShowAddModal(false);
+        setSelectedCommentId(null);
+        setShowRecommendations(false);
+        setRecommendedQuestions([]);
+
+        const loadSelectedClass = async () => {
+            try {
+                const [assessments, classStudents] = await Promise.all([
+                    loadClassAssessments(selectedClass),
+                    user?.isAdmin
+                        ? loadClassStudents(selectedClass)
+                        : Promise.resolve([])
+                ]);
+
+                if (cancelled) return;
+
+                const linkedArchives = await loadLinkedArchives(assessments);
+
+                if (cancelled) return;
+
+                assessments.sort((a, b) => {
+                    const orderA = a.order !== undefined ? a.order : -1;
+                    const orderB = b.order !== undefined ? b.order : -1;
+
+                    if (orderA !== orderB) return orderA - orderB;
+
+                    const weightA = getTermWeight(a.term);
+                    const weightB = getTermWeight(b.term);
+
+                    if (weightA !== weightB) return weightB - weightA;
+
+                    return new Date(b.date) - new Date(a.date);
+                });
+
+                const names = {};
+
+                classStudents
+                    .filter(student => !student.isDeleted)
+                    .forEach(student => {
+                        names[student.id] =
+                            student.englishName || student.id;
+                    });
+
+                setStudentMap(names);
+                setArchives(linkedArchives);
+                setLinkableDocs(expandArchiveDocuments(linkedArchives));
+                setAllItems(assessments);
+            } catch (error) {
+                if (cancelled) return;
+
+                console.error('Error loading selected class:', error);
+
+                setDashboardError(
+                    error.code === 'permission-denied'
+                        ? 'Access to this class was denied. Please check its class access and Firestore rules.'
+                        : error.message || 'This class could not be loaded.'
+                );
+            } finally {
+                if (!cancelled) {
+                    setLoadedClass(selectedClass);
+                }
+            }
+        };
+
+        loadSelectedClass();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        dashboardIdentity,
+        loadedDashboardIdentity,
+        authLoading,
+        user?.isAuthorized,
+        user?.isAdmin,
+        selectedClass,
+        classes,
+        classReload
+    ]);
+
     // Select the correct student ID for the active teaching group.
     // This avoids using another group's student ID to retrieve marks.
     useEffect(() => {
@@ -477,7 +593,9 @@ export default function StudentDashboard() {
         if (!window.confirm(t("Delete this item from the list?"))) return;
         try {
             await deleteDoc(doc(db, "assessments", id));
-            setItems(items.filter(i => i.id !== id));
+            setAllItems(previous =>
+                previous.filter(item => item.id !== id)
+            );
         } catch (error) {
             console.error("Error deleting:", error);
         }
@@ -490,14 +608,37 @@ export default function StudentDashboard() {
 
         try {
             if (editForm.id) {
-                await updateDoc(doc(db, "assessments", editForm.id), editForm);
-                setItems(items.map(i => i.id === editForm.id ? editForm : i));
+                const { id, ...changes } = editForm;
+
+                await updateDoc(
+                    doc(db, 'assessments', id),
+                    changes
+                );
+
+                setAllItems(previous =>
+                    previous.map(item =>
+                        item.id === id
+                            ? { ...item, ...changes, id }
+                            : item
+                    )
+                );
             } else {
-                const docRef = await addDoc(collection(db, "assessments"), editForm);
-                setItems([{ ...editForm, id: docRef.id }, ...items]);
+                const docRef = await addDoc(
+                    collection(db, 'assessments'),
+                    editForm
+                );
+
+                setAllItems(previous => [
+                    { ...editForm, id: docRef.id },
+                    ...previous
+                ]);
             }
+
             setShowAddModal(false);
             setEditForm(null);
+
+            // Reload this class so newly attached archive metadata is included.
+            setClassReload(previous => previous + 1);
         } catch (error) {
             console.error("Error saving:", error);
         }
@@ -555,24 +696,49 @@ export default function StudentDashboard() {
         }
     };
 
-    const openAddModal = (item = null) => {
-        if (!user?.isAdmin || !selectedClass) return;
+    const openAddModal = async (item = null) => {
+        if (
+            !user?.isAdmin ||
+            !selectedClass ||
+            catalogueLoading
+        ) return;
 
-        if (item) {
-            setEditForm(item);
-        } else {
-            setEditForm({
-                name: '',
-                category: 'Assignments', // Origin
-                date: new Date().toISOString().split('T')[0],
-                fullMark: 100,
-                term: 'S4 Term 1', // Default term
-                linkedDocId: '',
-                classes: [selectedClass], // Automatically assign to the selected class tab
-                marks: {}
-            });
+        const requestIdentity = activeDashboardRef.current;
+
+        setCatalogueLoading(true);
+
+        try {
+            const catalogue = await getCatalogue();
+
+            if (activeDashboardRef.current !== requestIdentity) return;
+
+            setLinkableDocs(expandArchiveDocuments(catalogue));
+            setSearchTerm('');
+
+            if (item) {
+                setEditForm({ ...item });
+            } else {
+                setEditForm({
+                    name: '',
+                    category: 'Assignments',
+                    date: new Date().toISOString().split('T')[0],
+                    fullMark: 100,
+                    term: 'S4 Term 1',
+                    linkedDocId: '',
+                    classes: [selectedClass],
+                    marks: {}
+                });
+            }
+
+            setShowAddModal(true);
+        } catch (error) {
+            if (activeDashboardRef.current === requestIdentity) {
+                console.error('Error loading attachment catalogue:', error);
+                alert('Could not load question sets. Please try again.');
+            }
+        } finally {
+            setCatalogueLoading(false);
         }
-        setShowAddModal(true);
     };
 
     // --- GRAPH LOGIC ---
@@ -626,7 +792,13 @@ export default function StudentDashboard() {
         if (!item.marks) return { percentage, percentile };
 
         const allTotals = Object.keys(item.marks)
-            .filter(k => !k.includes('_'))
+            .filter(k =>
+                !k.includes('_') &&
+                (
+                    !user?.isAdmin ||
+                    Object.prototype.hasOwnProperty.call(studentMap, k)
+                )
+            )
             .map(k => getStudentTotal(item, k))
             .filter(v => v !== null);
 
@@ -687,7 +859,7 @@ export default function StudentDashboard() {
                 percentile: stats.percentile !== null ? parseFloat(stats.percentile.toFixed(1)) : null,
             };
         }).filter(d => excludeNoMarks ? (d.percentage !== null && d.percentage > 0) : true);
-    }, [items, graphCategories, excludeNoMarks, currentStudentId, currentStudentData]);
+    }, [items, graphCategories, excludeNoMarks, currentStudentId, currentStudentData, user?.isAdmin, studentMap]);
 
     const topicStats = React.useMemo(() => {
         if (!user?.isAdmin && !currentStudentId && !currentStudentData?.isDummy) return [];
@@ -773,7 +945,10 @@ export default function StudentDashboard() {
 
                 const getPercent = (secId, isSub, fullMark) => {
                     if (user?.isAdmin) {
-                        const allTotals = Object.keys(item.marks).filter(k => !k.includes('_')).map(k => {
+                        const allTotals = Object.keys(item.marks).filter(k =>
+                            !k.includes('_') &&
+                            Object.prototype.hasOwnProperty.call(studentMap, k)
+                        ).map(k => {
                             const m = parseFloat(isSub ? item.marks[k]?.[secId] : (secId ? item.marks[k]?.[secId] : item.marks[k]));
                             return isNaN(m) ? null : m;
                         }).filter(v => v !== null);
@@ -836,7 +1011,7 @@ export default function StudentDashboard() {
                 // Otherwise sort by highest average score
                 return b.average - a.average;
             });
-    }, [items, archives, currentStudentId, currentStudentData, excludeNoMarks, user]);
+    }, [items, archives, currentStudentId, currentStudentData, excludeNoMarks, user?.isAdmin, studentMap]);
 
     // NEW: Calculate Student Percentiles for Admin
     const studentPercentileStats = React.useMemo(() => {
@@ -877,7 +1052,10 @@ export default function StudentDashboard() {
                     }
                 }
                 const allTotals = Object.keys(item.marks)
-                    .filter(k => !k.includes('_'))
+                    .filter(k =>
+                        !k.includes('_') &&
+                        Object.prototype.hasOwnProperty.call(studentMap, k)
+                    )
                     .map(k => ({ id: k, total: getStudentTotal(item, k) }))
                     .filter(v => v.total !== null);
 
@@ -904,11 +1082,11 @@ export default function StudentDashboard() {
                 assessmentsCount: data.count
             }))
             .sort((a, b) => b.averagePercentile - a.averagePercentile); // Highest percentile first
-    }, [items, user, percentileTopic, archives]);
+    }, [items, user?.isAdmin, percentileTopic, archives, studentMap]);
     // --- END GRAPH LOGIC ---
 
     // --- RECOMMENDATION LOGIC ---
-    const generateRecommendations = () => {
+    const generateRecommendations = (recommendationArchives = archives) => {
         const percentiles = graphData.filter(d => d.percentile !== null).map(d => d.percentile);
         const avgPercentile = percentiles.length > 0 ? percentiles.reduce((a, b) => a + b, 0) / percentiles.length : 50;
 
@@ -1001,7 +1179,7 @@ export default function StudentDashboard() {
         });
 
         const allQuestions = [];
-        archives.forEach(a => {
+        recommendationArchives.forEach(a => {
             const docTier = parseInt(a.tier, 10) || 10;
             const parentRating = a.rating || 0;
 
@@ -1497,7 +1675,8 @@ export default function StudentDashboard() {
 
     if (
         isLoading ||
-        loadedDashboardIdentity !== dashboardIdentity
+        loadedDashboardIdentity !== dashboardIdentity ||
+        (selectedClass && loadedClass !== selectedClass)
     ) {
         return (
             <div className="flex justify-center py-20">
@@ -1543,26 +1722,53 @@ export default function StudentDashboard() {
     }
 
     return (
-        <div className="max-w-6xl mx-auto p-6">
-            <div className="flex justify-between items-center mb-6">
+        <div className="dashboard-page w-full min-w-0 max-w-6xl mx-auto p-3 md:p-6">
+            {catalogueLoading && (
+                <div
+                    role="status"
+                    className="mb-3 flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700"
+                >
+                    <Loader2 size={16} className="animate-spin shrink-0" />
+                    {t("Loading question sets...")}
+                </div>
+            )}
+
+            <div className="dashboard-heading flex flex-wrap justify-between items-center gap-3 mb-4">
                 <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
                     <BookOpen className="text-blue-600" />
                     {t("Student Work & Quizzes")}
                 </h1>
                 {user?.isAdmin && (
                     <div className="flex gap-2">
-                        <div className="relative group inline-block">
-                            <button className="px-4 py-2 bg-indigo-100 text-indigo-700 rounded-lg text-sm font-bold hover:bg-indigo-200 transition-colors flex items-center gap-1">
-                                <FileText size={16} /> Export BIS
-                            </button>
-                            <div className="absolute right-0 top-full pt-1 w-40 hidden group-hover:block z-50">
-                                <div className="bg-white rounded-md shadow-lg border border-slate-200 overflow-hidden">
-                                    <button onClick={() => handleGeneratePDF('S4')} className="block w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">S4 Terms 1-2</button>
-                                    <button onClick={() => handleGeneratePDF('S5')} className="block w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">S5 Terms 1-2</button>
-                                    <button onClick={() => handleGeneratePDF('S6')} className="block w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">S6</button>
-                                </div>
+                        <details className="relative">
+                            <summary className="cursor-pointer list-none px-3 py-2 bg-indigo-100 text-indigo-700 rounded-lg text-sm font-bold flex items-center gap-1">
+                                <FileText size={16} />
+                                Export BIS
+                            </summary>
+
+                            <div className="absolute left-0 top-full mt-1 w-40 rounded-lg border border-slate-200 bg-white shadow-lg z-50 overflow-hidden">
+                                {[
+                                    ['S4', 'S4 Terms 1-2'],
+                                    ['S5', 'S5 Terms 1-2'],
+                                    ['S6', 'S6']
+                                ].map(([level, label]) => (
+                                    <button
+                                        key={level}
+                                        type="button"
+                                        onClick={event => {
+                                            event.currentTarget
+                                                .closest('details')
+                                                ?.removeAttribute('open');
+
+                                            handleGeneratePDF(level);
+                                        }}
+                                        className="block w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50"
+                                    >
+                                        {label}
+                                    </button>
+                                ))}
                             </div>
-                        </div>
+                        </details>
                         <button
                             onClick={() => setIsEditing(!isEditing)}
                             className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors ${isEditing ? 'bg-amber-100 text-amber-700' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}
@@ -1581,16 +1787,42 @@ export default function StudentDashboard() {
             {/* Class/Group Tabs (Filtered by Role) */}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4 pb-2">
                 {classes.length > 0 && (
-                    <div className="flex gap-2 overflow-x-auto">
-                        {classes.map(c => (
-                            <button
-                                key={c}
-                                onClick={() => setSelectedClass(c)}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${selectedClass === c ? 'bg-blue-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+                    <div className="w-full min-w-0 sm:flex-1">
+                        <label className="compact-phone-only">
+                            <span className="mb-1 block text-xs font-bold text-slate-500">
+                                {t("Class / Group")}
+                            </span>
+
+                            <select
+                                value={selectedClass}
+                                onChange={event =>
+                                    setSelectedClass(event.target.value)
+                                }
+                                className="w-full min-w-0 rounded-lg border border-slate-300 bg-white p-2.5 text-base text-slate-800"
                             >
-                                {c}
-                            </button>
-                        ))}
+                                {classes.map(className => (
+                                    <option key={className} value={className}>
+                                        {className.replace(/\u200B/g, '')}
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+
+                        <div className="compact-desktop-only flex max-w-full gap-2 overflow-x-auto pb-1">
+                            {classes.map(className => (
+                                <button
+                                    key={className}
+                                    type="button"
+                                    onClick={() => setSelectedClass(className)}
+                                    className={`shrink-0 px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap ${selectedClass === className
+                                            ? 'bg-blue-600 text-white'
+                                            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                                        }`}
+                                >
+                                    {className.replace(/\u200B/g, '')}
+                                </button>
+                            ))}
+                        </div>
                     </div>
                 )}
 
@@ -1712,10 +1944,52 @@ export default function StudentDashboard() {
                         </h2>
                         {!user?.isAdmin && (
                             <button
-                                onClick={() => { generateRecommendations(); setShowRecommendations(true); }}
-                                className="px-3 md:px-4 py-1.5 md:py-2 bg-gradient-to-r from-amber-400 to-orange-500 text-white text-xs md:text-sm font-bold rounded-lg shadow-md hover:from-amber-500 hover:to-orange-600 transition-all flex items-center gap-1.5 md:gap-2 animate-pulse"
+                                type="button"
+                                disabled={catalogueLoading}
+                                onClick={async () => {
+                                    const requestIdentity =
+                                        activeDashboardRef.current;
+
+                                    setCatalogueLoading(true);
+
+                                    try {
+                                        const catalogue = await getCatalogue();
+
+                                        if (
+                                            activeDashboardRef.current !==
+                                            requestIdentity
+                                        ) return;
+
+                                        generateRecommendations(catalogue);
+                                        setShowRecommendations(true);
+                                    } catch (error) {
+                                        console.error(
+                                            'Error generating recommendations:',
+                                            error
+                                        );
+
+                                        if (
+                                            activeDashboardRef.current ===
+                                            requestIdentity
+                                        ) {
+                                            alert(
+                                                'Could not load recommendations. Please try again.'
+                                            );
+                                        }
+                                    } finally {
+                                        setCatalogueLoading(false);
+                                    }
+                                }}
+                                className="px-3 py-2 bg-amber-500 text-white text-sm font-bold rounded-lg hover:bg-amber-600 flex items-center justify-center gap-2 disabled:opacity-50"
                             >
-                                <Star size={16} className="fill-current md:w-[18px] md:h-[18px]" /> {t("Get Recommendations")}
+                                {catalogueLoading ? (
+                                    <Loader2 size={16} className="animate-spin" />
+                                ) : (
+                                    <Star size={16} className="fill-current" />
+                                )}
+                                {catalogueLoading
+                                    ? t("Loading...")
+                                    : t("Get Recommendations")}
                             </button>
                         )}
                     </div>
@@ -1842,7 +2116,11 @@ export default function StudentDashboard() {
             )}
             {/* --- END ADMIN STUDENT PERCENTILE TABLE --- */}
 
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 w-full overflow-hidden">
+            <p className="compact-phone-only mb-2 text-xs text-slate-500">
+                {t("Swipe the work table sideways to see all columns.")}
+            </p>
+
+            <div className="dashboard-work-table bg-white rounded-xl shadow-sm border border-slate-200 w-full overflow-x-auto">
                 <table className="w-full text-left">
                     <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 text-[9px] md:text-sm uppercase">
                         <tr>
@@ -2186,7 +2464,7 @@ export default function StudentDashboard() {
             {/* Admin Add/Edit Modal */}
             {showAddModal && user?.isAdmin && editForm && (
                 <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+                    <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90dvh] overflow-y-auto p-4 md:p-6">
                         <div className="flex justify-between items-center mb-4">
                             <h2 className="text-lg font-bold text-slate-800">{editForm.id ? t('Edit Item') : t('Add New Item')}</h2>
                             <button onClick={() => setShowAddModal(false)} className="text-slate-400 hover:text-slate-600"><X size={20} /></button>

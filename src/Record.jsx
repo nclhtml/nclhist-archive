@@ -16,9 +16,10 @@ import {
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { useAuth } from './main.jsx';
+import { loadClassStudents } from './dashboardData.js';
 
 export default function Record() {
-  const { user } = useAuth();
+  const { user, authLoading } = useAuth();
   // Navigation
   const [activeTab, setActiveTab] = useState('records');
   const [isLoading, setIsLoading] = useState(true);
@@ -84,115 +85,341 @@ export default function Record() {
   const [emailTeacher, setEmailTeacher] = useState('');
 
   // ============================================================================
-  // 1. FETCH DATA FROM FIREBASE
+  // 1. LOAD ONLY THE DATA NEEDED BY THE SELECTED TAB / CLASS
   // ============================================================================
+
+  const recordEmail = String(user?.email || '').toLowerCase().trim();
+
+  const recordIdentity = JSON.stringify([
+    recordEmail,
+    Boolean(user?.isAdmin),
+    Boolean(user?.isAuthorized)
+  ]);
+
+  const [loadedRecordIdentity, setLoadedRecordIdentity] = useState('');
+  const [loadedStudentKey, setLoadedStudentKey] = useState('');
+  const [loadedExtraKey, setLoadedExtraKey] = useState('');
+  const [loadError, setLoadError] = useState('');
+
+  const emailsLoadedRef = useRef(false);
+
+  const needsStudents = ['records', 'cancel', 'manage'].includes(activeTab);
+  const needsPrintingData = ['draft', 'printing'].includes(activeTab);
+
+  const studentRequestKey = JSON.stringify([
+    recordIdentity,
+    selectedClass
+  ]);
+
+  const extraRequestKey = needsPrintingData
+    ? JSON.stringify([
+      recordIdentity,
+      activeTab,
+      activeTab === 'printing' ? selectedForm : ''
+    ])
+    : '';
+
+  // First load only the class-list metadata.
   useEffect(() => {
-    const fetchData = async () => {
-      setIsLoading(true);
+    let cancelled = false;
+
+    setIsLoading(true);
+    setLoadError('');
+    setLoadedRecordIdentity('');
+    setLoadedStudentKey('');
+    setLoadedExtraKey('');
+    setClasses([]);
+    setSelectedClass('');
+    setStudents([]);
+    setNotifications([]);
+    setPrintingOrders([]);
+    setAvailableEmails([]);
+    setSelectedStudent(null);
+    emailsLoadedRef.current = false;
+
+    if (authLoading || !user?.isAdmin || !recordEmail) {
+      if (!authLoading) setIsLoading(false);
+
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const loadClassList = async () => {
       try {
-        // Fetch classes list from a settings document
-        const classDocRef = doc(db, "settings", "classes");
-        const classDocSnap = await getDoc(classDocRef);
+        const snapshot = await getDoc(
+          doc(db, 'settings', 'classes')
+        );
 
-        let loadedClasses = [];
-        if (classDocSnap.exists()) {
-          const rawList = classDocSnap.data().list || [];
-          let classObjects = rawList.map(c => typeof c === 'string' ? { name: c, owner: 'clng@ktls.edu.hk', isArchived: false } : c);
+        const rawList = snapshot.data()?.list || [];
 
-          // --- AUTO-FIX DUPLICATES WITH INVISIBLE CHARACTERS ---
-          const seenNames = new Set();
-          let needsUpdate = false;
-          classObjects = classObjects.map(c => {
-            let finalName = c.name.replace(/\(\d+\)/g, '').trim(); // Remove old (1) if any
-            while (seenNames.has(finalName)) {
-              finalName = finalName + '\u200B'; // Append zero-width space
-              needsUpdate = true;
-            }
-            seenNames.add(finalName);
-            return { ...c, name: finalName };
-          });
+        const loadedClasses = rawList
+          .map(classInfo =>
+            typeof classInfo === 'string'
+              ? {
+                name: classInfo,
+                owner: 'clng@ktls.edu.hk',
+                isArchived: false
+              }
+              : classInfo
+          )
+          .filter(classInfo =>
+            classInfo &&
+            typeof classInfo.name === 'string' &&
+            !classInfo.isArchived &&
+            (
+              recordEmail === 'clng@ktls.edu.hk' ||
+              String(classInfo.owner || '').toLowerCase().trim() === recordEmail
+            )
+          )
+          .sort((a, b) => a.name.localeCompare(b.name));
 
-          if (needsUpdate) {
-            await setDoc(classDocRef, { list: classObjects }, { merge: true });
-          }
-          // ---------------------------
+        if (cancelled) return;
 
-          let visibleClasses = classObjects;
-          if (user?.email !== 'clng@ktls.edu.hk') {
-            if (user?.isAdmin || user?.role === 'admin') {
-              visibleClasses = classObjects.filter(c => c.owner === user?.email);
-            } else {
-              // Fallback for non-admins if they somehow access this page
-              visibleClasses = classObjects.filter(c => c.owner === user?.email);
-            }
-          }
+        // Preserve saved class names exactly.
+        // Opening the page must NOT rename database classes.
+        setClasses(loadedClasses);
 
-          // Keep as objects so we can group them by owner in the dropdown
-          loadedClasses = visibleClasses.filter(c => !c.isArchived);
-          loadedClasses.sort((a, b) => a.name.localeCompare(b.name));
-          setClasses(loadedClasses);
+        const requestedClass =
+          new URLSearchParams(window.location.search).get('class');
 
-          const urlParams = new URLSearchParams(window.location.search);
-          const classFromUrl = urlParams.get('class');
+        const exactMatch = loadedClasses.find(
+          classInfo => classInfo.name === requestedClass
+        );
 
-          if (classFromUrl && loadedClasses.some(c => c.name.replace(/\u200B/g, '') === classFromUrl)) {
-            const matchedClass = loadedClasses.find(c => c.name.replace(/\u200B/g, '') === classFromUrl);
-            setSelectedClass(matchedClass.name);
-          } else if (loadedClasses.length > 0) {
-            setSelectedClass(loadedClasses[0].name);
-          }
-        }
+        const visibleMatch = loadedClasses.find(
+          classInfo =>
+            classInfo.name.replace(/\u200B/g, '') === requestedClass
+        );
 
-        // Fetch all students
-        const querySnapshot = await getDocs(collection(db, "students"));
-        const studentsList = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setStudents(studentsList);
-
-        // Only the superadmin may load the full website-access list.
-        setAvailableEmails([]);
-
-        if (user?.email === 'clng@ktls.edu.hk') {
-          const rolesSnap = await getDocs(collection(db, "user_roles"));
-          setAvailableEmails(rolesSnap.docs.map(d => d.id));
-        }
-
-        // Fetch Printing Settings for EVERYONE (needed for calculating student counts in email draft)
-        const printSettingsSnap = await getDoc(doc(db, "settings", "printing"));
-        if (printSettingsSnap.exists()) {
-          setPrintingSettings(prev => ({ ...prev, ...printSettingsSnap.data() }));
-        }
-
-        // Fetch Printing Orders (Only for superadmin)
-        if (user?.email === 'clng@ktls.edu.hk') {
-          const printOrdersSnap = await getDocs(collection(db, "printing_orders"));
-          setPrintingOrders(printOrdersSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-        }
-
-        // Check for pending orange sheets on load
-        const pendingNotifications = [];
-        studentsList.forEach(student => {
-          const requiredOrangeSheets = Math.floor((student.recordCount || 0) / 2);
-          if (requiredOrangeSheets > (student.orangeSheets || 0)) {
-            pendingNotifications.push({
-              studentId: student.id,
-              name: student.englishName,
-              className: student.className,
-              classNumber: student.classNumber,
-              recordCount: student.recordCount
-            });
-          }
-        });
-        setNotifications(pendingNotifications);
-
+        setSelectedClass(
+          exactMatch?.name ||
+          visibleMatch?.name ||
+          loadedClasses[0]?.name ||
+          ''
+        );
       } catch (error) {
-        console.error("Error fetching data:", error);
-        alert("Failed to load data from database.");
+        if (!cancelled) {
+          console.error('Error loading class list:', error);
+          setLoadError(error.message || 'Could not load classes.');
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadedRecordIdentity(recordIdentity);
+          setIsLoading(false);
+        }
       }
-      setIsLoading(false);
     };
 
-    fetchData();
-  }, []);
+    loadClassList();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [recordIdentity, authLoading]);
+
+  // Load students for ONE selected class, only on student-related tabs.
+  useEffect(() => {
+    let cancelled = false;
+
+    if (
+      loadedRecordIdentity !== recordIdentity ||
+      !user?.isAdmin ||
+      !needsStudents
+    ) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setLoadedStudentKey('');
+    setStudents([]);
+    setNotifications([]);
+    setSelectedStudent(null);
+
+    if (!selectedClass) {
+      setLoadedStudentKey(studentRequestKey);
+
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!classes.some(classInfo => classInfo.name === selectedClass)) {
+      setLoadError('The selected class is not available to this account.');
+
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const loadStudents = async () => {
+      try {
+        const classStudents = await loadClassStudents(selectedClass);
+
+        if (cancelled) return;
+
+        setStudents(classStudents);
+        setLoadedStudentKey(studentRequestKey);
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Error loading class students:', error);
+          setLoadError(
+            error.message || 'Could not load students for this class.'
+          );
+        }
+      }
+    };
+
+    loadStudents();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    recordIdentity,
+    loadedRecordIdentity,
+    needsStudents,
+    selectedClass,
+    studentRequestKey,
+    classes,
+    user?.isAdmin
+  ]);
+
+  // Printing settings are needed only by Draft / Printing.
+  // Printing orders are loaded for ONE form, not all six forms.
+  useEffect(() => {
+    let cancelled = false;
+
+    if (
+      loadedRecordIdentity !== recordIdentity ||
+      !user?.isAdmin ||
+      !needsPrintingData
+    ) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setLoadedExtraKey('');
+
+    const loadPrintingData = async () => {
+      try {
+        const settingsRequest = getDoc(
+          doc(db, 'settings', 'printing')
+        );
+
+        const ordersRequest =
+          activeTab === 'printing' &&
+            recordEmail === 'clng@ktls.edu.hk'
+            ? getDocs(
+              query(
+                collection(db, 'printing_orders'),
+                where('form', '==', selectedForm)
+              )
+            )
+            : Promise.resolve(null);
+
+        const [settingsSnapshot, ordersSnapshot] = await Promise.all([
+          settingsRequest,
+          ordersRequest
+        ]);
+
+        if (cancelled) return;
+
+        if (settingsSnapshot.exists()) {
+          setPrintingSettings(previous => ({
+            ...previous,
+            ...settingsSnapshot.data()
+          }));
+        }
+
+        setPrintingOrders(
+          ordersSnapshot
+            ? ordersSnapshot.docs.map(order => ({
+              ...order.data(),
+              id: order.id
+            }))
+            : []
+        );
+
+        setLoadedExtraKey(extraRequestKey);
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Error loading printing data:', error);
+          setLoadError(
+            error.message || 'Could not load printing information.'
+          );
+        }
+      }
+    };
+
+    loadPrintingData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    recordIdentity,
+    loadedRecordIdentity,
+    needsPrintingData,
+    extraRequestKey,
+    activeTab,
+    selectedForm,
+    recordEmail,
+    user?.isAdmin
+  ]);
+
+  // Load the superadmin's email picker only when Student Details is opened.
+  useEffect(() => {
+    let cancelled = false;
+
+    if (
+      !selectedStudent ||
+      recordEmail !== 'clng@ktls.edu.hk' ||
+      emailsLoadedRef.current
+    ) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    getDocs(collection(db, 'user_roles'))
+      .then(snapshot => {
+        if (cancelled) return;
+
+        setAvailableEmails(snapshot.docs.map(account => account.id));
+        emailsLoadedRef.current = true;
+      })
+      .catch(error => {
+        console.error('Could not load optional email choices:', error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [Boolean(selectedStudent), recordEmail]);
+
+  // Notifications now describe the SELECTED class.
+  // Recalculate after recording, cancelling, deleting or issuing a sheet.
+  useEffect(() => {
+    setNotifications(
+      students
+        .filter(student =>
+          student.className === selectedClass &&
+          !student.isDeleted &&
+          Math.floor((student.recordCount || 0) / 2) >
+          (student.orangeSheets || 0)
+        )
+        .map(student => ({
+          studentId: student.id,
+          name: student.englishName,
+          className: student.className,
+          classNumber: student.classNumber,
+          recordCount: student.recordCount
+        }))
+    );
+  }, [students, selectedClass]);
 
   // ============================================================================
   // 2. BULK IMPORT STUDENTS
@@ -882,51 +1109,133 @@ export default function Record() {
   // 7. SPLIT TERM (Archive Records)
   // ============================================================================
   const handleSplitTerm = () => {
+    if (!user?.isAdmin) return;
+
+    const isSuperAdmin = recordEmail === 'clng@ktls.edu.hk';
+    let operationStarted = false;
+
     setConfirmDialog({
       isOpen: true,
       title: 'Split Term & Archive Records',
-      message: 'Are you sure you want to split the term? All current records and orange sheets for ALL classes will be saved to past terms, and current counters will be reset to 0.',
+      message: isSuperAdmin
+        ? 'Archive and reset current records for ALL students, including archived classes? This is not limited to the selected class.'
+        : 'Archive and reset current records for all classes owned by you, including archived classes? Other administrators’ classes will not be changed.',
       onConfirm: async () => {
-        try {
-          const batch = writeBatch(db);
+        if (operationStarted) return;
+        operationStarted = true;
 
-          const updatedStudents = students.map(student => {
-            const updatedStudent = {
-              ...student,
-              pastTerms: [
-                ...(student.pastTerms || []),
-                {
-                  termDate: new Date().toISOString().split('T')[0],
-                  recordCount: student.recordCount || 0,
-                  orangeSheets: student.orangeSheets || 0,
-                  history: student.history || []
-                }
-              ],
+        try {
+          let targetStudents = [];
+
+          if (isSuperAdmin) {
+            const snapshot = await getDocsFromServer(
+              collection(db, 'students')
+            );
+
+            targetStudents = snapshot.docs.map(student => ({
+              ...student.data(),
+              id: student.id
+            }));
+          } else {
+            const classSnapshot = await getDoc(
+              doc(db, 'settings', 'classes')
+            );
+
+            const ownedClassNames = [
+              ...new Set(
+                (classSnapshot.data()?.list || [])
+                  .map(classInfo =>
+                    typeof classInfo === 'string'
+                      ? {
+                        name: classInfo,
+                        owner: 'clng@ktls.edu.hk'
+                      }
+                      : classInfo
+                  )
+                  .filter(classInfo =>
+                    classInfo &&
+                    typeof classInfo.name === 'string' &&
+                    String(classInfo.owner || '').toLowerCase().trim() ===
+                    recordEmail
+                  )
+                  .map(classInfo => classInfo.name)
+              )
+            ];
+
+            // Broader reads happen only for this explicitly confirmed action.
+            for (const className of ownedClassNames) {
+              const classStudents = await loadClassStudents(className);
+              targetStudents.push(...classStudents);
+            }
+          }
+
+          if (targetStudents.length > 400) {
+            throw new Error(
+              'This operation contains more than 400 students. ' +
+              'Nothing was changed. A server-side bulk archive operation ' +
+              'is needed for this many students.'
+            );
+          }
+
+          if (targetStudents.length === 0) {
+            setConfirmDialog({ isOpen: false });
+            alert('No students were found. Nothing was changed.');
+            return;
+          }
+
+          const batch = writeBatch(db);
+          const termDate = new Date().toISOString().split('T')[0];
+
+          const updatedStudents = targetStudents.map(student => {
+            const pastTerms = [
+              ...(student.pastTerms || []),
+              {
+                termDate,
+                recordCount: student.recordCount || 0,
+                orangeSheets: student.orangeSheets || 0,
+                history: student.history || []
+              }
+            ];
+
+            const changes = {
+              pastTerms,
               recordCount: 0,
               orangeSheets: 0,
               history: []
             };
 
-            const ref = doc(db, "students", student.id);
-            batch.update(ref, {
-              pastTerms: updatedStudent.pastTerms,
-              recordCount: 0,
-              orangeSheets: 0,
-              history: []
-            });
+            batch.update(
+              doc(db, 'students', student.id),
+              changes
+            );
 
-            return updatedStudent;
+            return { ...student, ...changes };
           });
 
           await batch.commit();
-          setStudents(updatedStudents);
+
+          // Keep only the currently selected class in ordinary page state.
+          setStudents(
+            updatedStudents.filter(
+              student => student.className === selectedClass
+            )
+          );
+
+          setSelectedStudent(null);
           setNotifications([]);
           setConfirmDialog({ isOpen: false });
-          alert("Term split successfully. All records have been archived and reset.");
+
+          alert(
+            `Term split completed for ${updatedStudents.length} student(s).`
+          );
         } catch (error) {
-          console.error("Error splitting term:", error);
-          alert("Failed to split term.");
+          console.error('Error splitting term:', error);
           setConfirmDialog({ isOpen: false });
+
+          alert(
+            'Term split stopped.\n\n' +
+            (error.message || 'Please try again.')
+          );
         }
       }
     });
@@ -1192,16 +1501,63 @@ export default function Record() {
   // ============================================================================
   // UI RENDERING
   // ============================================================================
-  if (isLoading) {
+  if (loadError) {
     return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <Loader2 className="w-10 h-10 animate-spin text-blue-600" />
+      <div className="max-w-xl mx-auto my-8 p-5 bg-red-50 border border-red-200 rounded-xl">
+        <h2 className="font-bold text-red-800">
+          Record data could not be loaded
+        </h2>
+
+        <p className="mt-2 text-sm text-red-700 whitespace-pre-wrap">
+          {loadError}
+        </p>
+
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="mt-4 rounded-lg bg-red-700 px-4 py-2 text-white"
+        >
+          Reload
+        </button>
+      </div>
+    );
+  }
+
+  const waitingForStudents =
+    needsStudents &&
+    loadedStudentKey !== studentRequestKey;
+
+  const waitingForPrinting =
+    needsPrintingData &&
+    loadedExtraKey !== extraRequestKey;
+
+  if (
+    authLoading ||
+    isLoading ||
+    loadedRecordIdentity !== recordIdentity ||
+    waitingForStudents ||
+    waitingForPrinting
+  ) {
+    return (
+      <div
+        role="status"
+        className="flex flex-col gap-3 items-center justify-center min-h-[40vh]"
+      >
+        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+
+        <p className="text-sm text-slate-500">
+          {isLoading
+            ? 'Loading class list...'
+            : needsPrintingData
+              ? 'Loading selected printing information...'
+              : 'Loading selected class...'}
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="max-w-6xl mx-auto p-6 bg-gray-50 min-h-screen font-sans relative">
+    <div className="record-page w-full min-w-0 max-w-6xl mx-auto p-3 md:p-6 bg-gray-50 min-h-screen font-sans relative">
 
       {/* Custom Confirmation Modal */}
       {confirmDialog.isOpen && (
@@ -1375,8 +1731,30 @@ export default function Record() {
         <h1 className="text-3xl font-bold text-gray-800">Class & Record Management</h1>
       </div>
 
-      {/* Navigation Tabs */}
-      <div className="flex space-x-4 mb-6 border-b border-gray-200 pb-2 overflow-x-auto">
+      {/* Phone navigation */}
+      <label className="compact-phone-only mb-4">
+        <span className="mb-1 block text-xs font-bold text-gray-500">
+          Go to
+        </span>
+
+        <select
+          value={activeTab}
+          onChange={event => setActiveTab(event.target.value)}
+          className="w-full min-w-0 rounded-lg border border-gray-300 bg-white p-2.5 text-base text-gray-800"
+        >
+          <option value="records">Record Forgets</option>
+          <option value="cancel">Cancel Records</option>
+          <option value="manage">Manage Classes & Students</option>
+          <option value="draft">Draft Printing Email</option>
+
+          {user?.email === 'clng@ktls.edu.hk' && (
+            <option value="printing">Printing Record</option>
+          )}
+        </select>
+      </label>
+
+      {/* Desktop navigation */}
+      <div className="compact-desktop-only flex space-x-4 mb-6 border-b border-gray-200 pb-2 overflow-x-auto">
         <button
           onClick={() => setActiveTab('records')}
           className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors whitespace-nowrap ${activeTab === 'records' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-200'}`}
@@ -1421,7 +1799,9 @@ export default function Record() {
         <div className="mb-8 p-4 bg-orange-100 border-l-4 border-orange-500 rounded-r-md shadow-sm">
           <div className="flex items-center mb-3">
             <AlertTriangle className="w-6 h-6 text-orange-600 mr-2" />
-            <h2 className="text-lg font-bold text-orange-800">Action Required: Orange Sheets</h2>
+            <h2 className="text-base md:text-lg font-bold text-orange-800">
+              Orange Sheets — {selectedClass.replace(/\u200B/g, '')}
+            </h2>
           </div>
           <div className="space-y-3">
             {notifications.map((notif, idx) => (

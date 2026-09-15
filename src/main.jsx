@@ -3,24 +3,28 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
 import { doc, getDoc, collection, getDocs, addDoc, query, orderBy, limit, updateDoc, setDoc, onSnapshot } from "firebase/firestore";
-import { Loader2, ShieldAlert, Users, X, Bell, Bug, ChevronDown, Globe } from 'lucide-react';
+import { Loader2, ShieldAlert, Users, X, Bell, Bug, ChevronDown, Globe, LogOut } from 'lucide-react';
 
 // Import your components and firebase
-import App from './App.jsx';
-import DseTrend from './DseTrend.jsx';
-import PdfTool from './PdfTool.jsx';
-import Record from './Record.jsx';
-import Marks from './Marks.jsx'; // <-- IMPORT THE NEW MARKS COMPONENT
-import StudentDashboard from './StudentDashboard.jsx'; // <-- ADD THIS IMPORT
-import List from './List.jsx'; // <-- ADD THIS IMPORT
-import Exercises from './Exercises.jsx'; // <-- NEW EXERCISES LIST COMPONENT
-import ExerciseRunner from './ExerciseRunner.jsx'; // <-- NEW EXERCISE RUNNER COMPONENT
-import LotteryMachine from './LotteryMachine.jsx'; // <-- ADD THIS IMPORT
-import Timetable from './Timetable.jsx'; // <-- NEW TIMETABLE COMPONENT
+const App = React.lazy(() => import('./App.jsx'));
+const DseTrend = React.lazy(() => import('./DseTrend.jsx'));
+const PdfTool = React.lazy(() => import('./PdfTool.jsx'));
+const Record = React.lazy(() => import('./Record.jsx'));
+const Marks = React.lazy(() => import('./Marks.jsx'));
+const StudentDashboard = React.lazy(() => import('./StudentDashboard.jsx'));
+const List = React.lazy(() => import('./List.jsx'));
+const Exercises = React.lazy(() => import('./Exercises.jsx'));
+const ExerciseRunner = React.lazy(() => import('./ExerciseRunner.jsx'));
+const LotteryMachine = React.lazy(() => import('./LotteryMachine.jsx'));
+const Timetable = React.lazy(() => import('./Timetable.jsx'));
 import { LanguageProvider, useLanguage } from './LanguageContext.jsx'; // <-- NEW IMPORT
 import { BookX } from 'lucide-react'; // Ensure BookX is imported for the dock
 import { auth, db, googleProvider } from './firebase.js';
 import './index.css';
+import './archive-responsive.css';
+import './dashboard-record-responsive.css';
+import usePhoneLayout from './usePhoneLayout.js';
+import SiteNavigation from './SiteNavigation.jsx';
 
 const SUPER_ADMIN = "clng@ktls.edu.hk";
 
@@ -30,6 +34,7 @@ const SUPER_ADMIN = "clng@ktls.edu.hk";
 const AuthContext = createContext(null);
 
 const AuthProvider = ({ children }) => {
+  const isPhoneLayout = usePhoneLayout();
   const [realUser, setRealUser] = useState(null);
   const [impersonatedEmail, setImpersonatedEmail] = useState(null);
   const [debugTime, setDebugTime] = useState(null); // <-- NEW: Debug Time State
@@ -220,7 +225,15 @@ const AuthProvider = ({ children }) => {
 
   // Debugging changes the displayed account only.
   // Firebase requests still use the real signed-in account.
-  const canImpersonate = realUser?.email === SUPER_ADMIN;
+  const canImpersonate =
+    realUser?.email === SUPER_ADMIN && !isPhoneLayout;
+
+  useEffect(() => {
+    if (isPhoneLayout) {
+      setImpersonatedEmail(null);
+      setDebugTime(null);
+    }
+  }, [isPhoneLayout]);
 
   const debugTarget =
     canImpersonate && impersonatedEmail
@@ -310,7 +323,16 @@ const Layout = ({ children }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, realUser, loginWithGoogle, logout, impersonatedEmail, setImpersonatedEmail, debugTime, setDebugTime } = useAuth();
-  const { language, setLanguage, t } = useLanguage(); // <-- ADDED HOOK
+  const { language, setLanguage, t } = useLanguage();
+
+  const isPhoneLayout = usePhoneLayout();
+
+  const canUseSuperAdminTools = Boolean(
+    realUser?.email === SUPER_ADMIN &&
+    realUser?.isAuthorized &&
+    realUser?.isAdmin &&
+    !isPhoneLayout
+  );
 
   const [showUsersModal, setShowUsersModal] = useState(false);
   const [showDebugModal, setShowDebugModal] = useState(false);
@@ -361,13 +383,10 @@ const Layout = ({ children }) => {
   };
 
   useEffect(() => {
-    if (
-      showDebugModal &&
-      realUser?.email === SUPER_ADMIN
-    ) {
+    if (showDebugModal && canUseSuperAdminTools) {
       fetchDebugStudents();
     }
-  }, [showDebugModal, realUser?.email]);
+  }, [showDebugModal, canUseSuperAdminTools]);
   const [systemUsers, setSystemUsers] = useState([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
 
@@ -421,8 +440,22 @@ const Layout = ({ children }) => {
   }, [showAdminLogs]);
 
   useEffect(() => {
-    if (user?.email === SUPER_ADMIN) fetchAdminLogs();
-  }, [user]);
+    if (canUseSuperAdminTools && user?.email === SUPER_ADMIN) {
+      fetchAdminLogs();
+    }
+  }, [canUseSuperAdminTools, user?.email]);
+
+  useEffect(() => {
+    if (!canUseSuperAdminTools) {
+      setShowDebugModal(false);
+      setShowAdminLogs(false);
+      setShowUsersModal(false);
+      setDebugGroups({});
+      setSystemUsers([]);
+      setAdminLogs([]);
+      setUnreadAdminLogs(0);
+    }
+  }, [canUseSuperAdminTools]);
   // --- END NEW ---
 
   const fetchSystemUsers = async () => {
@@ -476,8 +509,10 @@ const Layout = ({ children }) => {
   };
 
   useEffect(() => {
-    if (showUsersModal) fetchSystemUsers();
-  }, [showUsersModal]);
+    if (showUsersModal && canUseSuperAdminTools) {
+      fetchSystemUsers();
+    }
+  }, [showUsersModal, canUseSuperAdminTools]);
 
   const isSearch = location.pathname === '/';
   const isTrend = location.pathname === '/trend';
@@ -541,11 +576,14 @@ const Layout = ({ children }) => {
 
     checkTimetable();
     return () => { if (interval) clearInterval(interval); };
-  }, [user, debugTime]); // <-- Added debugTime to dependency array
+  }, [user?.email, user?.isAdmin, debugTime]);
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-sans relative">
-      {currentClass && !hideNavBar && (
+    <div
+      className="site-shell min-h-screen bg-slate-50 flex flex-col font-sans relative"
+      data-phone-layout={isPhoneLayout ? 'true' : 'false'}
+    >
+      {currentClass && !hideNavBar && !isPhoneLayout && (
         <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-white/95 backdrop-blur-md shadow-2xl border border-blue-200 px-6 py-3 rounded-full z-[100] flex items-center gap-6">
           <div className="flex flex-col items-end border-r border-gray-200 pr-4">
             <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Ongoing Lesson</span>
@@ -566,34 +604,44 @@ const Layout = ({ children }) => {
         </div>
       )}
       {!hideNavBar && (
-        <div className="bg-white border-b border-slate-200 sticky top-0 z-50 px-4 md:px-8 pt-4 shadow-sm">
+        <div className="site-header bg-white border-b border-slate-200 sticky top-0 z-50 px-4 md:px-8 pt-4 shadow-sm">
           <div className="max-w-7xl mx-auto">
-            <div className="flex justify-between items-center mb-4">
-              <div className="flex items-center gap-4">
-                <h1 className="font-bold text-xl text-slate-800 tracking-tight">
+            <div className="site-header-row flex justify-between items-center mb-4">
+              <div className="site-brand flex min-w-0 items-center gap-2 md:gap-4">
+                <h1 className="site-title min-w-0 font-bold text-xl text-slate-800 tracking-tight">
                   <Link
                     to="/"
                     aria-label="Return to the History Archive search-engine homepage"
-                    className="hover:text-blue-600 transition-colors rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                    className="block truncate hover:text-blue-600 transition-colors rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                   >
                     {t("HISTORY ARCHIVE")}
                   </Link>
                 </h1>
+
                 <button
+                  type="button"
                   onClick={() => setLanguage(language === 'en' ? 'zh' : 'en')}
-                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-3 py-1.5 rounded-md transition-all shadow-sm border border-blue-700 active:scale-95"
+                  className="site-language shrink-0 flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-3 py-2 rounded-md border border-blue-700"
                   title="Change Language"
+                  aria-label={
+                    language === 'en'
+                      ? 'Switch to Traditional Chinese'
+                      : 'Switch to English'
+                  }
                 >
-                  <Globe size={14} />
-                  {language === 'en' ? '繁體中文' : 'English'}
+                  {!isPhoneLayout && <Globe size={14} />}
+
+                  {isPhoneLayout
+                    ? language === 'en' ? '中' : 'EN'
+                    : language === 'en' ? '繁體中文' : 'English'}
                 </button>
               </div>
 
               {/* User Profile / Login */}
-              <div>
+              <div className="site-account shrink-0">
                 {user ? (
                   <div className="flex items-center gap-3">
-                    {realUser?.email === SUPER_ADMIN && (
+                    {canUseSuperAdminTools && (
                       <div className="relative flex items-center gap-2">
                         {/* Debug Mode Button */}
                         <div className="relative">
@@ -786,12 +834,22 @@ const Layout = ({ children }) => {
                         </div>
                       </div>
                     )}
-                    <div className="text-right hidden sm:block">
+                    <div className="site-account-name text-right hidden sm:block">
                       <div className="text-sm font-bold text-slate-700">{user.displayName || user.email.split('@')[0]}</div>
                       <div className="text-xs text-slate-500 capitalize">{user.role ? user.role.replace('_', ' ') : 'Unauthorized'}</div>
                     </div>
-                    <button onClick={logout} className="text-sm text-slate-500 hover:text-red-600 font-medium transition-colors">
-                      {t("Sign Out")}
+                    <button
+                      type="button"
+                      onClick={logout}
+                      title={t("Sign Out")}
+                      aria-label={t("Sign Out")}
+                      className="site-signout shrink-0 inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white p-2 text-sm font-medium text-slate-500 hover:bg-red-50 hover:text-red-600 transition-colors"
+                    >
+                      <LogOut size={18} aria-hidden="true" />
+
+                      {!isPhoneLayout && (
+                        <span>{t("Sign Out")}</span>
+                      )}
                     </button>
                   </div>
                 ) : (
@@ -802,58 +860,10 @@ const Layout = ({ children }) => {
               </div>
             </div>
 
-            <div className="flex gap-6 overflow-visible pb-1">
-              {/* DSE-related */}
-              <div className="relative group">
-                <button className={`pb-2 text-sm font-bold border-b-2 transition-colors whitespace-nowrap flex items-center gap-1 ${isSearch || isTrend ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                  {t("DSE-related")} <ChevronDown size={14} className="group-hover:rotate-180 transition-transform" />
-                </button>
-                <div className="absolute left-0 top-full mt-0 w-48 bg-white border border-slate-200 shadow-xl rounded-md opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 flex flex-col py-1">
-                  <Link to="/" className={`px-4 py-2 text-sm hover:bg-slate-50 ${isSearch ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>{t("Search Engine")}</Link>
-                  <Link to="/trend" className={`px-4 py-2 text-sm hover:bg-slate-50 ${isTrend ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>{t("DSE Trend Analysis")}</Link>
-                </div>
-              </div>
-
-              {/* Study Progress */}
-              <div className="relative group">
-                <button className={`pb-2 text-sm font-bold border-b-2 transition-colors whitespace-nowrap flex items-center gap-1 ${isDashboard || isList || location.pathname.startsWith('/exercise') ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                  {t("Study Progress")} <ChevronDown size={14} className="group-hover:rotate-180 transition-transform" />
-                </button>
-                <div className="absolute left-0 top-full mt-0 w-52 bg-white border border-slate-200 shadow-xl rounded-md opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 flex flex-col py-1">
-                  <Link to="/dashboard" className={`px-4 py-2 text-sm hover:bg-slate-50 ${isDashboard ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>{t("Student Dashboard")}</Link>
-                  <Link to="/list" className={`px-4 py-2 text-sm hover:bg-slate-50 ${isList ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>{t("Saved Lists")}</Link>
-                  <Link to="/exercises" className={`px-4 py-2 text-sm hover:bg-slate-50 ${location.pathname.startsWith('/exercise') ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>{t("Interactive Exercises")}</Link>
-                </div>
-              </div>
-
-              {/* ONLY SHOW TABS IF ADMIN */}
-              {user?.isAdmin && (
-                <>
-                  {/* Admin Tools */}
-                  <div className="relative group">
-                    <button className={`pb-2 text-sm font-bold border-b-2 transition-colors whitespace-nowrap flex items-center gap-1 ${isPdf || isLottery ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                      {t("Admin Tools")} <ChevronDown size={14} className="group-hover:rotate-180 transition-transform" />
-                    </button>
-                    <div className="absolute left-0 top-full mt-0 w-48 bg-white border border-slate-200 shadow-xl rounded-md opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 flex flex-col py-1">
-                      <Link to="/pdf" className={`px-4 py-2 text-sm hover:bg-slate-50 ${isPdf ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>{t("PDF Tools")}</Link>
-                      <Link to="/lottery" className={`px-4 py-2 text-sm hover:bg-slate-50 ${isLottery ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>{t("Lottery Machine")}</Link>
-                    </div>
-                  </div>
-
-                  {/* Management Tools */}
-                  <div className="relative group">
-                    <button className={`pb-2 text-sm font-bold border-b-2 transition-colors whitespace-nowrap flex items-center gap-1 ${isRecord || isMarks || isTimetable ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                      {t("Management Tools")} <ChevronDown size={14} className="group-hover:rotate-180 transition-transform" />
-                    </button>
-                    <div className="absolute left-0 top-full mt-0 w-52 bg-white border border-slate-200 shadow-xl rounded-md opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 flex flex-col py-1">
-                      <Link to="/record" className={`px-4 py-2 text-sm hover:bg-slate-50 ${isRecord ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>{t("Record Management")}</Link>
-                      <Link to="/marks" className={`px-4 py-2 text-sm hover:bg-slate-50 ${isMarks ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>{t("Marks Management")}</Link>
-                      <Link to="/timetable" className={`px-4 py-2 text-sm hover:bg-slate-50 ${isTimetable ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>{t("Timetable")}</Link>
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
+            <SiteNavigation
+              isAdmin={Boolean(user?.isAdmin)}
+              isPhoneLayout={isPhoneLayout}
+            />
           </div>
         </div>
       )}
@@ -865,9 +875,23 @@ const Layout = ({ children }) => {
           user?.role || '',
           Boolean(impersonatedEmail)
         ])}
-        className="flex-1 flex flex-col"
+        className="flex-1 flex flex-col min-w-0"
       >
-        {children}
+        <React.Suspense
+          fallback={
+            <div
+              role="status"
+              className="flex min-h-[40vh] items-center justify-center"
+            >
+              <Loader2
+                size={32}
+                className="animate-spin text-blue-600"
+              />
+            </div>
+          }
+        >
+          {children}
+        </React.Suspense>
       </div>
     </div>
   );

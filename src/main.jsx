@@ -17,6 +17,7 @@ const Exercises = React.lazy(() => import('./Exercises.jsx'));
 const ExerciseRunner = React.lazy(() => import('./ExerciseRunner.jsx'));
 const LotteryMachine = React.lazy(() => import('./LotteryMachine.jsx'));
 const Timetable = React.lazy(() => import('./Timetable.jsx'));
+const KnowledgeTest = React.lazy(() => import('./features/knowledge-test/KnowledgeTest.jsx'));
 import { LanguageProvider, useLanguage } from './LanguageContext.jsx'; // <-- NEW IMPORT
 import { BookX } from 'lucide-react'; // Ensure BookX is imported for the dock
 import { auth, db, googleProvider } from './firebase.js';
@@ -935,8 +936,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                   <Timetable />
                 </ProtectedAdminRoute>
               } />
-              <Route path="/dashboard" element={<StudentDashboard />} />
+<Route path="/dashboard" element={<StudentDashboard />} />
               <Route path="/list" element={<List />} />
+              <Route path="/knowledge-test" element={<KnowledgeTest />} />
               <Route path="/exercises" element={<Exercises />} />
               <Route path="/exercise/:exerciseId/:studentEmail?" element={<ExerciseRunner />} />
             </Routes>

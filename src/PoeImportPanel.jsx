@@ -3,6 +3,7 @@ import { getFunctions, httpsCallable } from 'firebase/functions';
 import { ref, uploadBytes, deleteObject } from 'firebase/storage';
 import { PDFDocument } from 'pdf-lib';
 import { auth, storage } from './firebase.js';
+import { useAuth } from './main.jsx';
 
 const OWNER_EMAIL = 'clng@ktls.edu.hk';
 
@@ -181,6 +182,8 @@ export default function PoeImportPanel({
     onInvalidate,
     onBusyChange,
 }) {
+const { realUser, impersonatedEmail, authLoading } = useAuth();
+
     const [extraFiles, setExtraFiles] = useState({});
     const [consent, setConsent] = useState(false);
     const [busy, setBusy] = useState(false);
@@ -224,8 +227,21 @@ export default function PoeImportPanel({
         }
     });
 
-    const allowed =
-        auth.currentUser?.email?.trim().toLowerCase() === OWNER_EMAIL;
+const signedInEmail =
+        auth.currentUser?.email?.trim().toLowerCase() || '';
+
+    const allowed = Boolean(
+        !authLoading &&
+        !impersonatedEmail &&
+        auth.currentUser?.emailVerified &&
+        realUser?.isAuthorized &&
+        signedInEmail &&
+        signedInEmail === realUser?.email?.trim().toLowerCase() &&
+        (
+            signedInEmail === OWNER_EMAIL ||
+            realUser?.isAdmin
+        )
+    );
 
     const totalBytes = files.reduce((sum, entry) => sum + entry.file.size, 0);
 
@@ -238,12 +254,17 @@ export default function PoeImportPanel({
 
         const actualUser = auth.currentUser;
 
-        if (
+if (
+            !allowed ||
             !actualUser ||
-            actualUser.email?.trim().toLowerCase() !== OWNER_EMAIL ||
-            !actualUser.emailVerified
+            !actualUser.emailVerified ||
+            actualUser.email?.trim().toLowerCase() !==
+                realUser?.email?.trim().toLowerCase()
         ) {
-            setMessage('Sign in with the real verified super-admin account.');
+            setMessage(
+                'Sign in with your real verified administrator account. ' +
+                'Poe is unavailable while impersonating another user.'
+            );
             return;
         }
 
@@ -455,10 +476,11 @@ export default function PoeImportPanel({
                 Generate with Poe — through your backend
             </h3>
 
-            {!allowed && (
+{!allowed && (
                 <p className="text-xs text-amber-900">
-                    Paid Poe generation is currently restricted to the real
-                    super-admin account. The existing manual importer remains available.
+                    Paid Poe generation requires a real verified administrator
+                    account and is unavailable during impersonation.
+                    The existing manual importer remains available.
                 </p>
             )}
 

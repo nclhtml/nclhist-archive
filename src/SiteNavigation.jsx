@@ -10,11 +10,12 @@ export default function SiteNavigation({ isAdmin, isPhoneLayout }) {
   const navRef = useRef(null);
 
   const groups = [
-    {
+{
       label: 'DSE-related',
       links: [
         { to: '/', label: 'Search Engine' },
-        { to: '/trend', label: 'DSE Trend Analysis' }
+        { to: '/trend', label: 'DSE Trend Analysis' },
+        { to: '/knowledge-test', label: 'Knowledge Test' }
       ]
     },
     {

@@ -53,8 +53,17 @@ import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage
 import { UpdateContent, updateVersion } from './UpdateContent.jsx';
 import { useLanguage } from './LanguageContext.jsx';
 import PoeImportPanel from './PoeImportPanel.jsx';
+import StudentSampleAuditPanel from './StudentSampleAuditPanel.jsx';
 import usePhoneLayout from './usePhoneLayout.js';
 import { useSkillBooks } from './SkillBooks.jsx';
+import {
+  DesignatedSampleEditor,
+  DesignatedSampleList,
+  getDesignatedSamples,
+  stripDesignatedSampleFiles,
+  validateDesignatedSampleDrafts,
+  uploadQuestionDesignatedSamples
+} from './DesignatedSamples.jsx';
 
 import {
   normalizeArchiveName,
@@ -78,7 +87,14 @@ const createEmptyFilters = () => ({
 });
 
 // --- APP CONSTANTS ---
-const ORIGINS = ["DSE Pastpaper", "Internal School Exam", "Mock Examination", "Quiz", "Exercise"];
+const ORIGINS = [
+  "DSE Pastpaper",
+  "CE/AL",
+  "Internal School Exam",
+  "Mock Examination",
+  "Quiz",
+  "Exercise"
+];
 const PAPER_TYPES = ["Paper 1 (DBQ)", "Paper 2 (Essay)"];
 const SORT_OPTIONS = [
   { label: "Year (Newest)", value: "year_desc" },
@@ -1236,18 +1252,33 @@ export default function AdvancedHistoryArchive() {
   // Prevent an earlier archive fetch from restoring stale deleted records.
   const archiveReadVersionRef = useRef(0);
 
-  // Highlight literal search text, including punctuation such as ( or [.
+  // Highlight each comma-separated search term as literal text.
   const highlightText = (text, highlight) => {
     const cleanText = String(text ?? '').replace(/\*\*/g, '');
-    const term = String(highlight ?? '').trim();
 
-    if (!term) return cleanText;
+    const terms = [
+      ...new Set(
+        String(highlight ?? '')
+          .split(/[,，]/)
+          .map(term => term.trim().toLowerCase())
+          .filter(Boolean)
+      )
+    ];
 
-    const escapedTerm = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const parts = cleanText.split(new RegExp(`(${escapedTerm})`, 'gi'));
+    if (terms.length === 0) return cleanText;
+
+    // Longer terms go first when two terms overlap.
+    const escapedTerms = [...terms]
+      .sort((a, b) => b.length - a.length)
+      .map(term => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+
+    const termSet = new Set(terms);
+    const parts = cleanText.split(
+      new RegExp(`(${escapedTerms.join('|')})`, 'gi')
+    );
 
     return parts.map((part, index) =>
-      part.toLowerCase() === term.toLowerCase() ? (
+      termSet.has(part.toLowerCase()) ? (
         <mark
           key={index}
           className="bg-yellow-300 text-slate-900 rounded-sm px-0.5"
@@ -2585,6 +2616,17 @@ export default function AdvancedHistoryArchive() {
       }
     }
 
+    // A comma separates alternative searches.
+    // Support both English commas and Chinese full-width commas.
+    const searchTerms = [
+      ...new Set(
+        String(searchTerm ?? '')
+          .split(/[,，]/)
+          .map(term => term.trim().toLowerCase())
+          .filter(Boolean)
+      )
+    ];
+
     let results = [];
     archives.forEach(parent => {
       const parentTierStr = parent.tier || '10';
@@ -2675,10 +2717,14 @@ export default function AdvancedHistoryArchive() {
         const cleanContentChi = (child.contentChi || '').replace(/\s+/g, '');
         const searchString = `${parent.title} ${specificTag} ${parentTopicsStr} ${childTopicsStr} ${qTypesStr} ${sTypesStr} ${child.content || ''} ${cleanContentChi}`.toLowerCase();
 
-        // Match exact search term, OR match search term with spaces removed (useful for Chinese queries)
-        const matchSearch = searchTerm === '' ||
-          searchString.includes(searchTerm.toLowerCase()) ||
-          searchString.includes(searchTerm.toLowerCase().replace(/\s+/g, ''));
+        // Match ANY comma-separated term.
+        // Keep the existing normal-text and space-free matching behavior.
+        const matchSearch =
+          searchTerms.length === 0 ||
+          searchTerms.some(term =>
+            searchString.includes(term) ||
+            searchString.includes(term.replace(/\s+/g, ''))
+          );
 
         if (matchQuestionType && matchSourceType && matchMarks && matchSearch && matchTopic) {
           // Identify if it's Extra Practice: Tier < 10, unlocked naturally, NOT via dashboard link
@@ -3087,6 +3133,7 @@ export default function AdvancedHistoryArchive() {
         id: item.id,
         originalTitle: item.title,
         originalUpdatedAt: item.updatedAt || '',
+        designatedSample: item.designatedSample || {},
         questionNumber: getArchiveQuestionNumber(item),
         paperType: item.paperType,
         rating: item.rating ?? 0,
@@ -3564,7 +3611,15 @@ export default function AdvancedHistoryArchive() {
         );
       }
 
-      const entries = buildBatchWriteEntries(batchForm, originals);
+      await validateDesignatedSampleDrafts(batchForm.questions);
+
+      const entries = buildBatchWriteEntries(
+        {
+          ...batchForm,
+          questions: batchForm.questions.map(stripDesignatedSampleFiles)
+        },
+        originals
+      );
 
       const writePlan = await prepareArchiveWrite({
         originals,
@@ -3671,11 +3726,18 @@ export default function AdvancedHistoryArchive() {
           qAnsFileUrlChi = await getDownloadURL(splitAnsRefChi);
         }
 
+        const savedDesignatedSamples =
+          await uploadQuestionDesignatedSamples(
+            q,
+            `${writePlan.entries[i].id}/${writePlan.token}`
+          );
+
         const payload = {
           ...writePlan.entries[i].data,
           topic: q.topic,
           tier: batchForm.tier,
-          subQuestions: q.subQuestions.map(sq => ({
+          designatedSample: savedDesignatedSamples.designatedSample,
+          subQuestions: savedDesignatedSamples.subQuestions.map(sq => ({
             ...sq,
             marks: q.paperType === 'Paper 2 (Essay)'
               ? ''
@@ -4698,7 +4760,11 @@ export default function AdvancedHistoryArchive() {
                   <Search className="absolute left-3 md:left-4 top-2 md:top-3.5 text-slate-400 w-4 h-4 md:w-5 md:h-5" />
                   <input
                     type="text"
-                    placeholder={t("Search topics, types...")}
+                    placeholder={
+                      language === 'zh'
+                        ? '搜尋題目或主題；多項搜尋請用逗號分隔，例如 2013D Q1, 2014D Q2'
+                        : 'Search titles or topics; separate searches with commas'
+                    }
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="w-full pl-9 md:pl-12 pr-3 md:pr-4 py-1.5 md:py-3 text-xs md:text-base bg-white border border-slate-200 rounded-lg md:rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500 outline-none"
@@ -5203,6 +5269,18 @@ export default function AdvancedHistoryArchive() {
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-6 bg-slate-50/50">
+                  <StudentSampleAuditPanel
+                    allowed={Boolean(
+                      !authLoading &&
+                      !impersonatedEmail &&
+                      realUser?.isAuthorized &&
+                      realUser?.isAdmin &&
+                      realUser?.email?.trim().toLowerCase() === 'clng@ktls.edu.hk'
+                    )}
+                    disabled={isLoading || poeBusy}
+                    onEdit={handleEditSample}
+                  />
+
                   {isLoading ? (
                     <div className="flex justify-center py-10"><Loader2 className="animate-spin text-indigo-600" size={32} /></div>
                   ) : manageSampleTab === 'dse' ? (
@@ -6054,7 +6132,6 @@ export default function AdvancedHistoryArchive() {
                       <ArrowLeft size={12} className="md:w-4 md:h-4" /> <span className="hidden sm:inline">{t("Back")}</span>
                     </button>
                   )}
-
                   {user?.isAdmin && (
                     <button
                       onClick={() => handleViewLinkedMarks(previewItem.parent.id, previewItem.parent.title)}
@@ -6116,393 +6193,426 @@ export default function AdvancedHistoryArchive() {
               {/* Preview Body */}
               <div className="archive-preview-body flex-1 min-h-0 min-w-0 overflow-y-auto md:overflow-hidden flex flex-col md:flex-row">
 
-                {(!viewingAnswer || (viewingAnswer && (previewItem.isFullPaper ? previewItem.parent.subQuestions.some(sq => sq.candidatePerformance || sq.candidatePerformanceChi) : (previewItem.child.candidatePerformance || previewItem.child.candidatePerformanceChi)))) && (
-                  <div className={`${(activeSample || previewItem.parent.hasFile || (viewingAnswer && previewItem.parent.hasAnswer)) ? 'md:w-1/3 lg:w-1/4 md:border-r border-slate-200' : 'w-full'} flex flex-col bg-slate-50 overflow-visible md:overflow-hidden`}>
-                    <div className="flex-1 p-3 md:p-6 overflow-visible md:overflow-y-auto custom-scrollbar">
-                      {viewingAnswer ? (
-                        <div className="space-y-4 md:space-y-6">
-                          <h3 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1 md:gap-2">
-                            <FileText size={12} className="md:w-3.5 md:h-3.5" /> {t("Candidate Performance")}
-                          </h3>
-                          {previewItem.isFullPaper ? (
-                            (previewItem.hasFullAccess ? previewItem.parent.subQuestions : (previewItem.matchedChildren || [])).filter(sq => sq.candidatePerformance || sq.candidatePerformanceChi).map(sq => (
-                              <div key={sq.id} className="bg-white p-3 md:p-4 rounded-xl border border-slate-200 shadow-sm">
+                {(
+                  !viewingAnswer ||
+                  !previewItem.isDseViewOnly ||
+                  (
+                    previewItem.isFullPaper
+                      ? previewItem.parent.subQuestions.some(
+                        sq => sq.candidatePerformance || sq.candidatePerformanceChi
+                      )
+                      : (
+                        previewItem.child.candidatePerformance ||
+                        previewItem.child.candidatePerformanceChi
+                      )
+                  )
+                ) && (
+                    <div className={`${(activeSample || previewItem.parent.hasFile || (viewingAnswer && previewItem.parent.hasAnswer)) ? 'md:w-1/3 lg:w-1/4 md:border-r border-slate-200' : 'w-full'} flex flex-col bg-slate-50 overflow-visible md:overflow-hidden`}>
+                      <div className="flex-1 p-3 md:p-6 overflow-visible md:overflow-y-auto custom-scrollbar">
+                        {viewingAnswer ? (
+                          <div className="space-y-4 md:space-y-6">
+                            <h3 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1 md:gap-2">
+                              <FileText size={12} className="md:w-3.5 md:h-3.5" /> {t("Candidate Performance")}
+                            </h3>
+                            {previewItem.isFullPaper ? (
+                              (previewItem.hasFullAccess ? previewItem.parent.subQuestions : (previewItem.matchedChildren || [])).filter(sq => sq.candidatePerformance || sq.candidatePerformanceChi).map(sq => (
+                                <div key={sq.id} className="bg-white p-3 md:p-4 rounded-xl border border-slate-200 shadow-sm">
+                                  <div className="mb-2">
+                                    <span className="bg-slate-800 text-white text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 md:py-1 rounded-md font-bold">
+                                      Q{sq.label}
+                                    </span>
+                                  </div>
+                                  <div className="leading-relaxed text-xs md:text-sm text-slate-800 whitespace-pre-wrap">
+                                    {(() => {
+                                      const isUsingChi = language === 'zh' && sq.candidatePerformanceChi;
+                                      const text = isUsingChi ? sq.candidatePerformanceChi : sq.candidatePerformance;
+                                      if (!text) return null;
+                                      return text;
+                                    })()}
+                                  </div>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="bg-white p-3 md:p-4 rounded-xl border border-slate-200 shadow-sm">
                                 <div className="mb-2">
                                   <span className="bg-slate-800 text-white text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 md:py-1 rounded-md font-bold">
-                                    Q{sq.label}
+                                    Q{previewItem.child.label}
                                   </span>
                                 </div>
                                 <div className="leading-relaxed text-xs md:text-sm text-slate-800 whitespace-pre-wrap">
                                   {(() => {
-                                    const isUsingChi = language === 'zh' && sq.candidatePerformanceChi;
-                                    const text = isUsingChi ? sq.candidatePerformanceChi : sq.candidatePerformance;
+                                    const isUsingChi = language === 'zh' && previewItem.child.candidatePerformanceChi;
+                                    const text = isUsingChi ? previewItem.child.candidatePerformanceChi : previewItem.child.candidatePerformance;
                                     if (!text) return null;
                                     return text;
                                   })()}
                                 </div>
                               </div>
-                            ))
-                          ) : (
-                            <div className="bg-white p-3 md:p-4 rounded-xl border border-slate-200 shadow-sm">
-                              <div className="mb-2">
-                                <span className="bg-slate-800 text-white text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 md:py-1 rounded-md font-bold">
-                                  Q{previewItem.child.label}
-                                </span>
-                              </div>
-                              <div className="leading-relaxed text-xs md:text-sm text-slate-800 whitespace-pre-wrap">
-                                {(() => {
-                                  const isUsingChi = language === 'zh' && previewItem.child.candidatePerformanceChi;
-                                  const text = isUsingChi ? previewItem.child.candidatePerformanceChi : previewItem.child.candidatePerformance;
-                                  if (!text) return null;
-                                  return text;
-                                })()}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <>
-                          {activeSample && activeSample.currentTag && (
-                            <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-200 shadow-sm mb-4 md:mb-6">
-                              <div className="flex justify-between items-center mb-2">
-                                <h3 className="text-[10px] md:text-xs font-bold text-indigo-800 uppercase tracking-wider flex items-center gap-1 md:gap-2">
-                                  <GraduationCap size={14} /> {t("Teacher's Comment")} {compareSample ? t("(Left)") : ""}
-                                </h3>
-                                {user?.isAdmin && !editingComment && (
-                                  <button onClick={() => { setEditingComment(true); setCommentText(activeSample.scoresData[activeSample.currentTag]?.comment || ""); }} className="text-indigo-600 hover:text-indigo-800 text-xs flex items-center gap-1 font-bold">
-                                    <Edit size={12} /> {t("Edit")}
-                                  </button>
-                                )}
-                              </div>
-                              {editingComment ? (
-                                <div className="space-y-2">
-                                  <textarea
-                                    value={commentText}
-                                    onChange={(e) => setCommentText(e.target.value)}
-                                    className="w-full p-2 text-sm border border-indigo-300 rounded-md focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
-                                    rows={3}
-                                    placeholder={t("Add a comment about this student's performance...")}
-                                  />
-                                  <div className="flex gap-2 justify-end">
-                                    <button onClick={() => setEditingComment(false)} className="px-3 py-1 text-xs text-slate-600 hover:bg-slate-200 rounded-md font-medium">{t("Cancel")}</button>
-                                    <button onClick={handleSaveComment} className="px-3 py-1 text-xs bg-indigo-600 text-white hover:bg-indigo-700 rounded-md font-bold">{t("Save")}</button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <div className="text-sm text-indigo-900 whitespace-pre-wrap">
-                                  {activeSample.scoresData[activeSample.currentTag]?.comment || <span className="text-indigo-400 italic">{t("No comments yet.")}</span>}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                          {compareSample && compareSample.currentTag && (
-                            <div className="bg-fuchsia-50 p-4 rounded-xl border border-fuchsia-200 shadow-sm mb-4 md:mb-6">
-                              <h3 className="text-[10px] md:text-xs font-bold text-fuchsia-800 uppercase tracking-wider flex items-center gap-1 md:gap-2 mb-2">
-                                <GraduationCap size={14} /> {t("Teacher's Comment (Right)")}
-                              </h3>
-                              <div className="text-sm text-fuchsia-900 whitespace-pre-wrap">
-                                {compareSample.scoresData[compareSample.currentTag]?.comment || <span className="text-fuchsia-400 italic">{t("No comments yet.")}</span>}
-                              </div>
-                            </div>
-                          )}
-                          {/* FULL PAPER LEFT PANEL */}
-                          {previewItem.isFullPaper ? (
-                            <div className="space-y-4 md:space-y-6">
-                              {showTags && (
-                                <div className="hidden md:block bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                                  <h3 className="text-sm font-bold text-slate-800 mb-2">{t("Paper Overview")}</h3>
-                                  <div className="flex flex-wrap gap-2">
-                                    {ensureArray(previewItem.parent.topic).map((t, i) => (
-                                      <span key={i} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1">
-                                        <Tag size={12} /> {getTranslatedTag(t)}
-                                      </span>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-
-                              <h3 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1 md:gap-2">
-                                <LayoutList size={12} className="md:w-3.5 md:h-3.5" /> {previewItem.hasFullAccess ? t("All Sub-Questions") : t("Allowed Sub-Questions")}
-                              </h3>
-
-                              {(previewItem.hasFullAccess ? previewItem.parent.subQuestions : (previewItem.matchedChildren || [])).map((sq, idx) => (
-                                <div key={sq.id} className="bg-white p-3 md:p-4 rounded-xl border border-slate-200 shadow-sm">
-                                  <div className="flex justify-between items-start mb-2">
-                                    <span className="bg-slate-800 text-white text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 md:py-1 rounded-md font-bold">
-                                      Q{sq.label}
-                                    </span>
-                                    {previewItem.parent.paperType === "Paper 1 (DBQ)" && sq.marks && (
-                                      <span className="text-[10px] md:text-xs text-slate-500 font-normal border border-slate-200 px-1.5 py-0.5 rounded bg-slate-50">
-                                        {t(`${sq.marks} Marks`)}
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className={`leading-relaxed mb-2 md:mb-3 ${previewItem.parent.paperType === "Paper 2 (Essay)" && !previewItem.parent.hasFile ? 'text-2xl md:text-5xl font-medium text-slate-800 py-2 md:py-4' : 'text-xs md:text-sm text-slate-700'}`}>
-                                    {(() => {
-                                      const isUsingChi = language === 'zh' && sq.contentChi;
-                                      const text = isUsingChi ? sq.contentChi : sq.content;
-                                      if (!text) return <span className="text-slate-400 italic text-xs md:text-sm">{t("No text content available.")}</span>;
-                                      return text.replace(/\*\*/g, '');
-                                    })()}
-                                  </div>
-                                  {showTags && (
-                                    <div className="flex flex-wrap gap-1 md:gap-1.5">
-                                      {ensureArray(sq.topic).map((t, i) => (
-                                        <span key={`t-${i}`} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[9px] md:text-[10px] font-medium border border-blue-100">
-                                          {getTranslatedTag(t)}
-                                        </span>
-                                      ))}
-                                      {ensureArray(sq.questionType).map((qt, i) => (
-                                        <span key={`qt-${i}`} className="px-1.5 py-0.5 bg-green-50 text-green-700 rounded text-[9px] md:text-[10px] font-medium border border-green-100">
-                                          {getTranslatedTag(qt)}
-                                        </span>
-                                      ))}
-                                      {ensureArray(sq.sourceType).map((st, i) => (
-                                        <span key={`st-${i}`} className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[9px] md:text-[10px] font-medium border border-slate-200">
-                                          {getTranslatedTag(st)}
-                                        </span>
-                                      ))}
-                                    </div>
+                            )}
+                          </div>
+                        ) : (
+                          <>
+                            {activeSample && activeSample.currentTag && (
+                              <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-200 shadow-sm mb-4 md:mb-6">
+                                <div className="flex justify-between items-center mb-2">
+                                  <h3 className="text-[10px] md:text-xs font-bold text-indigo-800 uppercase tracking-wider flex items-center gap-1 md:gap-2">
+                                    <GraduationCap size={14} /> {t("Teacher's Comment")} {compareSample ? t("(Left)") : ""}
+                                  </h3>
+                                  {user?.isAdmin && !editingComment && (
+                                    <button onClick={() => { setEditingComment(true); setCommentText(activeSample.scoresData[activeSample.currentTag]?.comment || ""); }} className="text-indigo-600 hover:text-indigo-800 text-xs flex items-center gap-1 font-bold">
+                                      <Edit size={12} /> {t("Edit")}
+                                    </button>
                                   )}
                                 </div>
-                              ))}
-                            </div>
-                          ) : (
-                            /* SINGLE SUB-QUESTION LEFT PANEL */
-                            <div className="prose max-w-none">
-                              <h3 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1 md:gap-2">
-                                <FileText size={12} className="md:w-3.5 md:h-3.5" /> {t("Question Content")}
-                              </h3>
-                              <div className={`leading-relaxed bg-white p-3 md:p-4 rounded-lg border border-slate-200 shadow-sm ${previewItem.parent.paperType === "Paper 2 (Essay)" && !previewItem.parent.hasFile ? 'text-2xl md:text-5xl font-medium text-slate-900 p-4 md:p-8' : 'text-xs md:text-sm text-slate-800'}`}>
-                                {(() => {
-                                  const isUsingChi = language === 'zh' && previewItem.child.contentChi;
-                                  const text = isUsingChi ? previewItem.child.contentChi : previewItem.child.content;
-                                  if (!text) return <span className="text-slate-400 italic text-xs md:text-sm">{t("No text content available. Please refer to the PDF.")}</span>;
-                                  return text.replace(/\*\*/g, '');
-                                })()}
+                                {editingComment ? (
+                                  <div className="space-y-2">
+                                    <textarea
+                                      value={commentText}
+                                      onChange={(e) => setCommentText(e.target.value)}
+                                      className="w-full p-2 text-sm border border-indigo-300 rounded-md focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                                      rows={3}
+                                      placeholder={t("Add a comment about this student's performance...")}
+                                    />
+                                    <div className="flex gap-2 justify-end">
+                                      <button onClick={() => setEditingComment(false)} className="px-3 py-1 text-xs text-slate-600 hover:bg-slate-200 rounded-md font-medium">{t("Cancel")}</button>
+                                      <button onClick={handleSaveComment} className="px-3 py-1 text-xs bg-indigo-600 text-white hover:bg-indigo-700 rounded-md font-bold">{t("Save")}</button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="text-sm text-indigo-900 whitespace-pre-wrap">
+                                    {activeSample.scoresData[activeSample.currentTag]?.comment || <span className="text-indigo-400 italic">{t("No comments yet.")}</span>}
+                                  </div>
+                                )}
                               </div>
-
-                              {showTags && (
-                                <div className="mt-4 md:mt-6 space-y-3 md:space-y-4">
-                                  <div>
-                                    <h4 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5 md:mb-2">{t("Topics")}</h4>
-                                    <div className="flex flex-wrap gap-1.5 md:gap-2">
-                                      {[...ensureArray(previewItem.parent.topic), ...ensureArray(previewItem.child.topic)].map((t, i) => (
-                                        <span key={i} className="px-1.5 md:px-2 py-0.5 md:py-1 bg-blue-50 text-blue-700 rounded-md text-[9px] md:text-xs font-medium border border-blue-100 flex items-center gap-1">
-                                          <Tag size={10} className="md:w-3 md:h-3" /> {getTranslatedTag(t)}
+                            )}
+                            {compareSample && compareSample.currentTag && (
+                              <div className="bg-fuchsia-50 p-4 rounded-xl border border-fuchsia-200 shadow-sm mb-4 md:mb-6">
+                                <h3 className="text-[10px] md:text-xs font-bold text-fuchsia-800 uppercase tracking-wider flex items-center gap-1 md:gap-2 mb-2">
+                                  <GraduationCap size={14} /> {t("Teacher's Comment (Right)")}
+                                </h3>
+                                <div className="text-sm text-fuchsia-900 whitespace-pre-wrap">
+                                  {compareSample.scoresData[compareSample.currentTag]?.comment || <span className="text-fuchsia-400 italic">{t("No comments yet.")}</span>}
+                                </div>
+                              </div>
+                            )}
+                            {/* FULL PAPER LEFT PANEL */}
+                            {previewItem.isFullPaper ? (
+                              <div className="space-y-4 md:space-y-6">
+                                {showTags && (
+                                  <div className="hidden md:block bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                                    <h3 className="text-sm font-bold text-slate-800 mb-2">{t("Paper Overview")}</h3>
+                                    <div className="flex flex-wrap gap-2">
+                                      {ensureArray(previewItem.parent.topic).map((t, i) => (
+                                        <span key={i} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1">
+                                          <Tag size={12} /> {getTranslatedTag(t)}
                                         </span>
                                       ))}
                                     </div>
                                   </div>
+                                )}
 
-                                  <div>
-                                    <h4 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5 md:mb-2">{t("Question Types")}</h4>
-                                    <div className="flex flex-wrap gap-1.5 md:gap-2">
-                                      {ensureArray(previewItem.child.questionType).map((qt, i) => (
-                                        <span key={i} className="px-1.5 md:px-2 py-0.5 md:py-1 bg-green-50 text-green-700 rounded-md text-[9px] md:text-xs font-medium border border-green-100">
-                                          {getTranslatedTag(qt)}
+                                <h3 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1 md:gap-2">
+                                  <LayoutList size={12} className="md:w-3.5 md:h-3.5" /> {previewItem.hasFullAccess ? t("All Sub-Questions") : t("Allowed Sub-Questions")}
+                                </h3>
+
+                                {(previewItem.hasFullAccess ? previewItem.parent.subQuestions : (previewItem.matchedChildren || [])).map((sq, idx) => (
+                                  <div key={sq.id} className="bg-white p-3 md:p-4 rounded-xl border border-slate-200 shadow-sm">
+                                    <div className="flex justify-between items-start mb-2">
+                                      <span className="bg-slate-800 text-white text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 md:py-1 rounded-md font-bold">
+                                        Q{sq.label}
+                                      </span>
+                                      {previewItem.parent.paperType === "Paper 1 (DBQ)" && sq.marks && (
+                                        <span className="text-[10px] md:text-xs text-slate-500 font-normal border border-slate-200 px-1.5 py-0.5 rounded bg-slate-50">
+                                          {t(`${sq.marks} Marks`)}
                                         </span>
-                                      ))}
+                                      )}
                                     </div>
+                                    <div className={`leading-relaxed mb-2 md:mb-3 ${previewItem.parent.paperType === "Paper 2 (Essay)" && !previewItem.parent.hasFile ? 'text-2xl md:text-5xl font-medium text-slate-800 py-2 md:py-4' : 'text-xs md:text-sm text-slate-700'}`}>
+                                      {(() => {
+                                        const isUsingChi = language === 'zh' && sq.contentChi;
+                                        const text = isUsingChi ? sq.contentChi : sq.content;
+                                        if (!text) return <span className="text-slate-400 italic text-xs md:text-sm">{t("No text content available.")}</span>;
+                                        return text.replace(/\*\*/g, '');
+                                      })()}
+                                    </div>
+                                    {showTags && (
+                                      <div className="flex flex-wrap gap-1 md:gap-1.5">
+                                        {ensureArray(sq.topic).map((t, i) => (
+                                          <span key={`t-${i}`} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[9px] md:text-[10px] font-medium border border-blue-100">
+                                            {getTranslatedTag(t)}
+                                          </span>
+                                        ))}
+                                        {ensureArray(sq.questionType).map((qt, i) => (
+                                          <span key={`qt-${i}`} className="px-1.5 py-0.5 bg-green-50 text-green-700 rounded text-[9px] md:text-[10px] font-medium border border-green-100">
+                                            {getTranslatedTag(qt)}
+                                          </span>
+                                        ))}
+                                        {ensureArray(sq.sourceType).map((st, i) => (
+                                          <span key={`st-${i}`} className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[9px] md:text-[10px] font-medium border border-slate-200">
+                                            {getTranslatedTag(st)}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
                                   </div>
+                                ))}
+                              </div>
+                            ) : (
+                              /* SINGLE SUB-QUESTION LEFT PANEL */
+                              <div className="prose max-w-none">
+                                <h3 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1 md:gap-2">
+                                  <FileText size={12} className="md:w-3.5 md:h-3.5" /> {t("Question Content")}
+                                </h3>
+                                <div className={`leading-relaxed bg-white p-3 md:p-4 rounded-lg border border-slate-200 shadow-sm ${previewItem.parent.paperType === "Paper 2 (Essay)" && !previewItem.parent.hasFile ? 'text-2xl md:text-5xl font-medium text-slate-900 p-4 md:p-8' : 'text-xs md:text-sm text-slate-800'}`}>
+                                  {(() => {
+                                    const isUsingChi = language === 'zh' && previewItem.child.contentChi;
+                                    const text = isUsingChi ? previewItem.child.contentChi : previewItem.child.content;
+                                    if (!text) return <span className="text-slate-400 italic text-xs md:text-sm">{t("No text content available. Please refer to the PDF.")}</span>;
+                                    return text.replace(/\*\*/g, '');
+                                  })()}
+                                </div>
 
-                                  {ensureArray(previewItem.child.sourceType).length > 0 && (
+                                {showTags && (
+                                  <div className="mt-4 md:mt-6 space-y-3 md:space-y-4">
                                     <div>
-                                      <h4 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5 md:mb-2">{t("Source Types")}</h4>
+                                      <h4 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5 md:mb-2">{t("Topics")}</h4>
                                       <div className="flex flex-wrap gap-1.5 md:gap-2">
-                                        {ensureArray(previewItem.child.sourceType).map((st, i) => (
-                                          <span key={i} className="px-1.5 md:px-2 py-0.5 md:py-1 bg-slate-100 text-slate-600 rounded-md text-[9px] md:text-xs font-medium border border-slate-200 flex items-center gap-1">
-                                            <FileDigit size={10} className="md:w-3 md:h-3" /> {getTranslatedTag(st)}
+                                        {[...ensureArray(previewItem.parent.topic), ...ensureArray(previewItem.child.topic)].map((t, i) => (
+                                          <span key={i} className="px-1.5 md:px-2 py-0.5 md:py-1 bg-blue-50 text-blue-700 rounded-md text-[9px] md:text-xs font-medium border border-blue-100 flex items-center gap-1">
+                                            <Tag size={10} className="md:w-3 md:h-3" /> {getTranslatedTag(t)}
                                           </span>
                                         ))}
                                       </div>
                                     </div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          )}
+
+                                    <div>
+                                      <h4 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5 md:mb-2">{t("Question Types")}</h4>
+                                      <div className="flex flex-wrap gap-1.5 md:gap-2">
+                                        {ensureArray(previewItem.child.questionType).map((qt, i) => (
+                                          <span key={i} className="px-1.5 md:px-2 py-0.5 md:py-1 bg-green-50 text-green-700 rounded-md text-[9px] md:text-xs font-medium border border-green-100">
+                                            {getTranslatedTag(qt)}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </div>
+
+                                    {ensureArray(previewItem.child.sourceType).length > 0 && (
+                                      <div>
+                                        <h4 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5 md:mb-2">{t("Source Types")}</h4>
+                                        <div className="flex flex-wrap gap-1.5 md:gap-2">
+                                          {ensureArray(previewItem.child.sourceType).map((st, i) => (
+                                            <span key={i} className="px-1.5 md:px-2 py-0.5 md:py-1 bg-slate-100 text-slate-600 rounded-md text-[9px] md:text-xs font-medium border border-slate-200 flex items-center gap-1">
+                                              <FileDigit size={10} className="md:w-3 md:h-3" /> {getTranslatedTag(st)}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+
+                      {/* STUDENT SAMPLES SECTION (Bottom Left) */}
+                      {!previewItem.isDseViewOnly && (
+                        <>
+                          <div className="p-4 border-t border-slate-200 bg-white shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-10 flex flex-col">
+                            <button
+                              onClick={() => setShowStudentSamples(!showStudentSamples)}
+                              className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2 hover:text-indigo-600 transition-colors"
+                            >
+                              <GraduationCap size={14} />
+                              {language === 'zh' ? '範例' : 'Samples'}
+                              {' ('}
+                              {previewSamples.length + getDesignatedSamples(
+                                previewItem,
+                                language,
+                                Boolean(user?.isAdmin)
+                              ).length}
+                              {')'}
+                              <ChevronDown size={14} className={`transition-transform ${showStudentSamples ? 'rotate-180' : ''}`} />
+                            </button>
+
+                            {showStudentSamples && (
+                              <select
+                                value={sampleSortOption}
+                                onChange={(e) => setSampleSortOption(e.target.value)}
+                                className="text-xs border border-slate-200 rounded p-1 outline-none focus:border-indigo-500"
+                              >
+                                <option value="mark_desc">{t("Mark (High to Low)")}</option>
+                                <option value="lang_en_ch">{t("Language (EN to CH)")}</option>
+                                <option value="both">{t("Both (Lang then Mark)")}</option>
+                              </select>
+                            )}
+                          </div>
+
+                          <AnimatePresence>
+                            {showStudentSamples && (
+                              <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                className="space-y-2 max-h-[36rem] overflow-y-auto custom-scrollbar pr-1"
+                              >
+                                <DesignatedSampleList
+                                  key={`${previewItem.uniqueId}:${language}`}
+                                  previewItem={previewItem}
+                                  language={language}
+                                  isAdmin={Boolean(user?.isAdmin)}
+                                  getPdfUrl={getSecurePdfUrl}
+                                  PdfViewer={CustomPDFViewer}
+                                  onDownload={handleDownloadTracking}
+                                />
+
+                                {previewSamples.length === 0 ? (
+                                  <div className="text-sm text-slate-500 italic p-4 text-center border border-slate-200 rounded-lg bg-slate-50">
+                                    {language === 'zh'
+                                      ? '目前沒有其他學生範例。'
+                                      : 'There are currently no additional student samples.'}
+                                  </div>
+                                ) : [...previewSamples].sort((a, b) => {
+                                  // Helper to get marks for sorting
+                                  const getMark = (sample) => {
+                                    if (previewItem.isFullPaper) {
+                                      let maxMark = 0;
+                                      Object.keys(sample.scoresData || {}).forEach(tag => {
+                                        if (tag.startsWith(previewItem.parent.title)) {
+                                          const m = parseFloat(sample.scoresData[tag].mark) || 0;
+                                          if (m > maxMark) maxMark = m;
+                                        }
+                                      });
+                                      return maxMark;
+                                    } else {
+                                      const tags = [
+                                        previewItem.parent.paperType === "Paper 2 (Essay)" ? `${previewItem.parent.title} Q${previewItem.child.label}` : `${previewItem.parent.title} Q1${previewItem.child.label}`,
+                                        previewItem.parent.paperType === "Paper 2 (Essay)" ? `${previewItem.parent.title} Q${previewItem.child.label.replace(/[a-z]/gi, '')}` : `${previewItem.parent.title} Q1`,
+                                        previewItem.parent.title,
+                                        `${previewItem.parent.title}${previewItem.child.label}`
+                                      ];
+                                      for (let t of tags) {
+                                        if (sample.scoresData[t]?.mark) return parseFloat(sample.scoresData[t].mark) || 0;
+                                      }
+                                      return 0;
+                                    }
+                                  };
+
+                                  const markA = getMark(a);
+                                  const markB = getMark(b);
+                                  const langA = a.language || '';
+                                  const langB = b.language || '';
+
+                                  if (sampleSortOption === 'mark_desc') return markB - markA;
+                                  if (sampleSortOption === 'lang_en_ch') return langA.localeCompare(langB);
+                                  if (sampleSortOption === 'both') {
+                                    if (langA !== langB) return langA.localeCompare(langB);
+                                    return markB - markA;
+                                  }
+                                  return 0;
+                                }).map(sample => {
+                                  let scoreData = null;
+                                  let displayTag = "";
+
+                                  if (previewItem.isFullPaper) {
+                                    // Find the best matching score data for the full paper
+                                    const matchingTag = Object.keys(sample.scoresData || {}).find(tag => tag.startsWith(previewItem.parent.title));
+                                    if (matchingTag) {
+                                      scoreData = sample.scoresData[matchingTag];
+                                      displayTag = matchingTag;
+                                    }
+                                  } else {
+                                    const exactTag = previewItem.parent.paperType === "Paper 2 (Essay)"
+                                      ? `${previewItem.parent.title} Q${previewItem.child.label}`
+                                      : `${previewItem.parent.title} Q1${previewItem.child.label}`;
+                                    const parentTag = previewItem.parent.paperType === "Paper 2 (Essay)"
+                                      ? `${previewItem.parent.title} Q${previewItem.child.label.replace(/[a-z]/gi, '')}`
+                                      : `${previewItem.parent.title} Q1`;
+
+                                    const titleTag = previewItem.parent.title;
+                                    const titleWithChildTag = `${previewItem.parent.title}${previewItem.child.label}`;
+
+                                    // Check all possible tag combinations
+                                    scoreData = sample.scoresData[exactTag] ||
+                                      sample.scoresData[parentTag] ||
+                                      sample.scoresData[titleTag] ||
+                                      sample.scoresData[titleWithChildTag];
+                                  }
+
+                                  // If we still don't have scoreData, skip rendering this sample
+                                  if (!scoreData) return null;
+
+                                  return (
+                                    <div key={sample.id} className={`p-3 border rounded-lg transition-colors ${activeSample?.id === sample.id ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-slate-200 hover:border-indigo-300'}`}>
+                                      <div className="flex justify-between items-start mb-2">
+                                        <div className="text-xs font-medium text-slate-700">
+                                          <span className="font-bold text-slate-900">[{sample.language}]</span> {t("Overall grade:")} <span className="font-bold text-indigo-600">{sample.overallGrade}</span>
+                                        </div>
+                                      </div>
+                                      <div className="flex justify-between items-end">
+                                        <div className="flex flex-col gap-1">
+                                          <div className="text-xs text-slate-600">
+                                            {previewItem.isFullPaper ? `${t("Mark")} (${displayTag}): ` : `${t("Mark (this question)")}: `}
+                                            <span className="font-bold text-slate-900">{scoreData?.mark}</span>
+                                          </div>
+                                          {scoreData?.subMarks && Object.keys(scoreData.subMarks).length > 0 && (
+                                            <div className="flex flex-wrap gap-1 mt-1">
+                                              {Object.entries(scoreData.subMarks)
+                                                .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+                                                .map(([subQ, sMark]) => (
+                                                  <span key={subQ} className="text-[10px] bg-white border border-slate-200 px-1.5 py-0.5 rounded text-slate-500">
+                                                    Q{subQ}: <span className="font-bold text-slate-700">{sMark}</span>
+                                                  </span>
+                                                ))}
+                                            </div>
+                                          )}
+                                        </div>
+                                        <>
+                                          {/* Desktop View Button */}
+                                          <button
+                                            onClick={() => {
+                                              const tag = Object.keys(sample.scoresData).find(k => sample.scoresData[k] === scoreData);
+                                              if (activeSample?.id === sample.id) {
+                                                setActiveSample(null);
+                                                setCompareSample(null);
+                                              } else if (compareSample?.id === sample.id) {
+                                                setCompareSample(null);
+                                              } else if (activeSample) {
+                                                setCompareSample({ ...sample, currentFileUrl: scoreData.fileUrl, currentTag: tag });
+                                              } else {
+                                                setActiveSample({ ...sample, currentFileUrl: scoreData.fileUrl, currentTag: tag });
+                                                setEditingComment(false);
+                                                setCommentText(scoreData.comment || "");
+                                              }
+                                            }}
+                                            className={`hidden md:block text-xs font-bold px-3 py-1.5 rounded-md transition-colors h-fit ${activeSample?.id === sample.id || compareSample?.id === sample.id ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'}`}
+                                          >
+                                            {activeSample?.id === sample.id || compareSample?.id === sample.id ? t("Close") : (activeSample ? t("Compare") : t("View Sample"))}
+                                          </button>
+
+                                          {/* Mobile Direct Download/View Button */}
+                                          <a
+                                            href={getSecurePdfUrl(scoreData.fileUrl)}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            onClick={() => handleDownloadTracking("Student Sample")}
+                                            className="md:hidden text-xs font-bold px-3 py-1.5 rounded-md transition-colors h-fit bg-indigo-600 text-white flex items-center gap-1.5 shadow-sm"
+                                          >
+                                            <Download size={12} /> {t("View PDF")}
+                                          </a>
+                                        </>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
                         </>
                       )}
                     </div>
-
-                    {/* STUDENT SAMPLES SECTION (Bottom Left) */}
-                    {!previewItem.isDseViewOnly && (
-                      <>
-                        <div className="p-4 border-t border-slate-200 bg-white shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-10 flex flex-col">
-                          <button
-                            onClick={() => setShowStudentSamples(!showStudentSamples)}
-                            className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2 hover:text-indigo-600 transition-colors"
-                          >
-                            <GraduationCap size={14} /> {t("Student Samples")} ({previewSamples.length})
-                            <ChevronDown size={14} className={`transition-transform ${showStudentSamples ? 'rotate-180' : ''}`} />
-                          </button>
-
-                          {showStudentSamples && (
-                            <select
-                              value={sampleSortOption}
-                              onChange={(e) => setSampleSortOption(e.target.value)}
-                              className="text-xs border border-slate-200 rounded p-1 outline-none focus:border-indigo-500"
-                            >
-                              <option value="mark_desc">{t("Mark (High to Low)")}</option>
-                              <option value="lang_en_ch">{t("Language (EN to CH)")}</option>
-                              <option value="both">{t("Both (Lang then Mark)")}</option>
-                            </select>
-                          )}
-                        </div>
-
-                        <AnimatePresence>
-                          {showStudentSamples && (
-                            <motion.div
-                              initial={{ height: 0, opacity: 0 }}
-                              animate={{ height: 'auto', opacity: 1 }}
-                              exit={{ height: 0, opacity: 0 }}
-                              className="space-y-2 max-h-[36rem] overflow-y-auto custom-scrollbar pr-1"
-                            >
-                              {previewSamples.length === 0 ? (
-                                <div className="text-sm text-slate-500 italic p-4 text-center border border-slate-200 rounded-lg bg-slate-50">
-                                  {t("There is currently no sample available.")}
-                                </div>
-                              ) : previewSamples.sort((a, b) => {
-                                // Helper to get marks for sorting
-                                const getMark = (sample) => {
-                                  if (previewItem.isFullPaper) {
-                                    let maxMark = 0;
-                                    Object.keys(sample.scoresData || {}).forEach(tag => {
-                                      if (tag.startsWith(previewItem.parent.title)) {
-                                        const m = parseFloat(sample.scoresData[tag].mark) || 0;
-                                        if (m > maxMark) maxMark = m;
-                                      }
-                                    });
-                                    return maxMark;
-                                  } else {
-                                    const tags = [
-                                      previewItem.parent.paperType === "Paper 2 (Essay)" ? `${previewItem.parent.title} Q${previewItem.child.label}` : `${previewItem.parent.title} Q1${previewItem.child.label}`,
-                                      previewItem.parent.paperType === "Paper 2 (Essay)" ? `${previewItem.parent.title} Q${previewItem.child.label.replace(/[a-z]/gi, '')}` : `${previewItem.parent.title} Q1`,
-                                      previewItem.parent.title,
-                                      `${previewItem.parent.title}${previewItem.child.label}`
-                                    ];
-                                    for (let t of tags) {
-                                      if (sample.scoresData[t]?.mark) return parseFloat(sample.scoresData[t].mark) || 0;
-                                    }
-                                    return 0;
-                                  }
-                                };
-
-                                const markA = getMark(a);
-                                const markB = getMark(b);
-                                const langA = a.language || '';
-                                const langB = b.language || '';
-
-                                if (sampleSortOption === 'mark_desc') return markB - markA;
-                                if (sampleSortOption === 'lang_en_ch') return langA.localeCompare(langB);
-                                if (sampleSortOption === 'both') {
-                                  if (langA !== langB) return langA.localeCompare(langB);
-                                  return markB - markA;
-                                }
-                                return 0;
-                              }).map(sample => {
-                                let scoreData = null;
-                                let displayTag = "";
-
-                                if (previewItem.isFullPaper) {
-                                  // Find the best matching score data for the full paper
-                                  const matchingTag = Object.keys(sample.scoresData || {}).find(tag => tag.startsWith(previewItem.parent.title));
-                                  if (matchingTag) {
-                                    scoreData = sample.scoresData[matchingTag];
-                                    displayTag = matchingTag;
-                                  }
-                                } else {
-                                  const exactTag = previewItem.parent.paperType === "Paper 2 (Essay)"
-                                    ? `${previewItem.parent.title} Q${previewItem.child.label}`
-                                    : `${previewItem.parent.title} Q1${previewItem.child.label}`;
-                                  const parentTag = previewItem.parent.paperType === "Paper 2 (Essay)"
-                                    ? `${previewItem.parent.title} Q${previewItem.child.label.replace(/[a-z]/gi, '')}`
-                                    : `${previewItem.parent.title} Q1`;
-
-                                  const titleTag = previewItem.parent.title;
-                                  const titleWithChildTag = `${previewItem.parent.title}${previewItem.child.label}`;
-
-                                  // Check all possible tag combinations
-                                  scoreData = sample.scoresData[exactTag] ||
-                                    sample.scoresData[parentTag] ||
-                                    sample.scoresData[titleTag] ||
-                                    sample.scoresData[titleWithChildTag];
-                                }
-
-                                // If we still don't have scoreData, skip rendering this sample
-                                if (!scoreData) return null;
-
-                                return (
-                                  <div key={sample.id} className={`p-3 border rounded-lg transition-colors ${activeSample?.id === sample.id ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-slate-200 hover:border-indigo-300'}`}>
-                                    <div className="flex justify-between items-start mb-2">
-                                      <div className="text-xs font-medium text-slate-700">
-                                        <span className="font-bold text-slate-900">[{sample.language}]</span> {t("Overall grade:")} <span className="font-bold text-indigo-600">{sample.overallGrade}</span>
-                                      </div>
-                                    </div>
-                                    <div className="flex justify-between items-end">
-                                      <div className="flex flex-col gap-1">
-                                        <div className="text-xs text-slate-600">
-                                          {previewItem.isFullPaper ? `${t("Mark")} (${displayTag}): ` : `${t("Mark (this question)")}: `}
-                                          <span className="font-bold text-slate-900">{scoreData?.mark}</span>
-                                        </div>
-                                        {scoreData?.subMarks && Object.keys(scoreData.subMarks).length > 0 && (
-                                          <div className="flex flex-wrap gap-1 mt-1">
-                                            {Object.entries(scoreData.subMarks)
-                                              .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
-                                              .map(([subQ, sMark]) => (
-                                                <span key={subQ} className="text-[10px] bg-white border border-slate-200 px-1.5 py-0.5 rounded text-slate-500">
-                                                  Q{subQ}: <span className="font-bold text-slate-700">{sMark}</span>
-                                                </span>
-                                              ))}
-                                          </div>
-                                        )}
-                                      </div>
-                                      <>
-                                        {/* Desktop View Button */}
-                                        <button
-                                          onClick={() => {
-                                            const tag = Object.keys(sample.scoresData).find(k => sample.scoresData[k] === scoreData);
-                                            if (activeSample?.id === sample.id) {
-                                              setActiveSample(null);
-                                              setCompareSample(null);
-                                            } else if (compareSample?.id === sample.id) {
-                                              setCompareSample(null);
-                                            } else if (activeSample) {
-                                              setCompareSample({ ...sample, currentFileUrl: scoreData.fileUrl, currentTag: tag });
-                                            } else {
-                                              setActiveSample({ ...sample, currentFileUrl: scoreData.fileUrl, currentTag: tag });
-                                              setEditingComment(false);
-                                              setCommentText(scoreData.comment || "");
-                                            }
-                                          }}
-                                          className={`hidden md:block text-xs font-bold px-3 py-1.5 rounded-md transition-colors h-fit ${activeSample?.id === sample.id || compareSample?.id === sample.id ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'}`}
-                                        >
-                                          {activeSample?.id === sample.id || compareSample?.id === sample.id ? t("Close") : (activeSample ? t("Compare") : t("View Sample"))}
-                                        </button>
-
-                                        {/* Mobile Direct Download/View Button */}
-                                        <a
-                                          href={getSecurePdfUrl(scoreData.fileUrl)}
-                                          target="_blank"
-                                          rel="noreferrer"
-                                          onClick={() => handleDownloadTracking("Student Sample")}
-                                          className="md:hidden text-xs font-bold px-3 py-1.5 rounded-md transition-colors h-fit bg-indigo-600 text-white flex items-center gap-1.5 shadow-sm"
-                                        >
-                                          <Download size={12} /> {t("View PDF")}
-                                        </a>
-                                      </>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
-                      </>
-                    )}
-                  </div>
-                )}
+                  )}
 
                 {(activeSample || viewingAnswer || previewItem.parent.hasFile) && (
                   <div className="hidden md:flex flex-1 bg-slate-200 flex-col h-full relative">
@@ -6948,9 +7058,26 @@ export default function AdvancedHistoryArchive() {
                     <div className="flex-1 overflow-y-auto custom-scrollbar lg:w-1/2 border-r border-slate-200 relative">
 
                       <div className="sticky top-0 z-20 bg-slate-50/95 backdrop-blur-sm px-6 pt-6 pb-2 border-b border-slate-200 mb-4 flex overflow-x-auto shadow-sm">
-                        <button type="button" onClick={() => setBatchLangTab('en')} className={`px-6 py-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${batchLangTab === 'en' ? 'border-teal-600 text-teal-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>English Version</button>
-                        <button type="button" onClick={() => setBatchLangTab('zh')} className={`px-6 py-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${batchLangTab === 'zh' ? 'border-teal-600 text-teal-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>Chinese Version (中文版)</button>
-                        <button type="button" onClick={() => setBatchLangTab('perf')} className={`px-6 py-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${batchLangTab === 'perf' ? 'border-teal-600 text-teal-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>Candidate Performances</button>
+                        {[
+                          ['en', 'English Version'],
+                          ['zh', 'Chinese Version (中文版)'],
+                          ['perf', 'Candidate Performances'],
+                          ['designated', 'Designated Samples / 指定範例']
+                        ].map(([value, label]) => (
+                          <button
+                            key={value}
+                            type="button"
+                            onClick={() => setBatchLangTab(value)}
+                            className={`px-6 py-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${batchLangTab === value
+                              ? value === 'designated'
+                                ? 'border-amber-700 text-amber-900'
+                                : 'border-teal-600 text-teal-600'
+                              : 'border-transparent text-slate-500 hover:text-slate-700'
+                              }`}
+                          >
+                            {label}
+                          </button>
+                        ))}
                       </div>
 
                       <form id="batch-form" onSubmit={handleBatchSubmit} className="space-y-6 px-6 pb-6">
@@ -7070,7 +7197,20 @@ export default function AdvancedHistoryArchive() {
                           </div>
                         )}
 
-                        {batchLangTab !== 'perf' && (
+                        {batchLangTab === 'designated' && (
+                          <DesignatedSampleEditor
+                            questions={batchForm.questions}
+                            disabled={isLoading || poeBusy || archiveSaving}
+                            onChange={updateQuestions => {
+                              setBatchForm(previous => ({
+                                ...previous,
+                                questions: updateQuestions(previous.questions)
+                              }));
+                            }}
+                          />
+                        )}
+
+                        {(batchLangTab === 'en' || batchLangTab === 'zh') && (
                           <>
                             <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                               <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
@@ -8658,65 +8798,44 @@ The supplied documents follow.`;
                                           newScores[idx].mark = e.target.value;
                                           setSampleForm({ ...sampleForm, scores: newScores });
                                         }}
-                                        // --- ADD THIS ONPASTE BLOCK HERE ---
+                                        // Official totals must not be reconstructed
+                                        // by distributing pasted marking-table rows.
                                         onPaste={(e) => {
-                                          const pasteData = e.clipboardData.getData('text');
-                                          if (pasteData.includes('\n')) {
+                                          const pasted = e.clipboardData
+                                            .getData('text')
+                                            .trim();
+
+                                          const isOneNumber =
+                                            /^\d+(?:\.\d+)?$/.test(pasted);
+
+                                          if (!isOneNumber) {
                                             e.preventDefault();
-                                            const lines = pasteData.trim().split('\n').map(l => l.trim()).filter(l => l);
 
-                                            const newScores = [...sampleForm.scores];
-                                            let currentLineIdx = 0;
+                                            alert(
+                                              'Paste ONE official question total here, ' +
+                                              'such as 13.5 or 0.\n\n' +
+                                              'Automatic distribution of marking tables ' +
+                                              'has been disabled because it can mix essay ' +
+                                              'questions, misalign DBQ components, and ' +
+                                              'replace the official total with calculated marks.\n\n' +
+                                              'Use Fill Sample Form for structured JSON, ' +
+                                              'or enter the component marks individually.'
+                                            );
 
-                                            for (let i = idx; i < newScores.length; i++) {
-                                              if (currentLineIdx >= lines.length) break;
-
-                                              const currentScore = newScores[i];
-
-                                              let currentMatchedParent = null;
-                                              if (currentScore.tag.trim()) {
-                                                const tagLower = currentScore.tag.trim().toLowerCase();
-                                                currentMatchedParent = archives.find(a =>
-                                                  tagLower === a.title.toLowerCase() || tagLower.startsWith(a.title.toLowerCase())
-                                                );
-                                              }
-
-                                              // If it matches a parent with sub-questions, distribute the marks
-                                              if (currentMatchedParent && currentMatchedParent.subQuestions && currentMatchedParent.subQuestions.length > 0) {
-                                                const newSubMarks = { ...currentScore.subMarks };
-                                                let markerTotals = [];
-
-                                                currentMatchedParent.subQuestions.forEach((subQ) => {
-                                                  if (currentLineIdx < lines.length) {
-                                                    const line = lines[currentLineIdx];
-                                                    const marks = line.split(/\s+/).map(m => parseInt(m, 10)).filter(m => !isNaN(m));
-
-                                                    if (marks.length > 0) {
-                                                      marks.forEach((m, mIdx) => {
-                                                        markerTotals[mIdx] = (markerTotals[mIdx] || 0) + m;
-                                                      });
-                                                      const allSame = marks.every(m => m === marks[0]);
-                                                      newSubMarks[subQ.label] = allSame ? String(marks[0]) : marks.join('/');
-                                                    }
-                                                    currentLineIdx++;
-                                                  }
-                                                });
-
-                                                currentScore.subMarks = newSubMarks;
-                                                if (markerTotals.length > 0) {
-                                                  const allTotalsSame = markerTotals.every(t => t === markerTotals[0]);
-                                                  currentScore.mark = allTotalsSame ? String(markerTotals[0]) : markerTotals.join('/');
-                                                }
-                                              } else {
-                                                // If no sub-questions exist, just dump the line into the total mark
-                                                currentScore.mark = lines[currentLineIdx];
-                                                currentLineIdx++;
-                                              }
-                                            }
-                                            setSampleForm({ ...sampleForm, scores: newScores });
+                                            return;
                                           }
+
+                                          e.preventDefault();
+
+                                          setSampleForm(previous => ({
+                                            ...previous,
+                                            scores: previous.scores.map((item, index) =>
+                                              index !== idx
+                                                ? item
+                                                : { ...item, mark: pasted }
+                                            )
+                                          }));
                                         }}
-                                      // --- END ONPASTE BLOCK ---
                                       />
                                     </div>
                                     <div className="col-span-4">

@@ -196,7 +196,7 @@ exports.getWatermarkedPdf = functions.https.onRequest(async (req, res) => {
     }
 
     try {
-const { fileUrl, email } = req.query;
+        const { fileUrl, email } = req.query;
 
         if (typeof fileUrl !== 'string' || !fileUrl) {
             return res.status(400).send('Missing fileUrl');
@@ -357,3 +357,7 @@ exports.cleanupPoeUploads = poeImport.cleanupPoeUploads;
 const skillbooks = require("./skillbooks.cjs");
 exports.skillsApi = skillbooks.skillsApi;
 exports.cleanupSkillSessions = skillbooks.cleanupSkillSessions;
+
+const knowledgeTest = require("./knowledge-test/api.cjs");
+exports.knowledgeApi = knowledgeTest.knowledgeApi;
+exports.knowledgeNotifications = knowledgeTest.knowledgeNotifications;

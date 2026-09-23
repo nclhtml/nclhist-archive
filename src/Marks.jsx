@@ -54,9 +54,53 @@ export default function Marks() {
 
   // Selection State
   const [selectedClass, setSelectedClass] = useState('');
-  const [selectedTerm, setSelectedTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Assignments');
   const [selectedAssessment, setSelectedAssessment] = useState(null);
+
+  const [isAssessmentsLoading, setIsAssessmentsLoading] = useState(false);
+  const [assessmentsError, setAssessmentsError] = useState('');
+  const [isSavingAssessment, setIsSavingAssessment] = useState(false);
+
+  // Keep term preferences separate for every user and every class.
+  // Preserve the exact class name, including any invisible characters.
+  const termStorageKey = `marks:last-term:v1:${JSON.stringify([
+    user?.uid || user?.email || 'guest',
+    selectedClass
+  ])}`;
+
+  const rememberedTermsRef = React.useRef({});
+  const [termSelection, setTermSelection] = useState({
+    key: '',
+    value: ''
+  });
+
+  // Never temporarily use the previous class's term for the new class.
+  const selectedTerm =
+    termSelection.key === termStorageKey ? termSelection.value : '';
+
+  const setSelectedTerm = React.useCallback((value) => {
+    const nextTerm = typeof value === 'string' ? value : '';
+
+    setTermSelection({
+      key: termStorageKey,
+      value: nextTerm
+    });
+
+    if (!selectedClass) return;
+
+    // Keep an in-memory fallback if browser storage is unavailable.
+    rememberedTermsRef.current[termStorageKey] = nextTerm;
+
+    try {
+      if (nextTerm) {
+        window.localStorage.setItem(termStorageKey, nextTerm);
+      } else {
+        window.localStorage.removeItem(termStorageKey);
+      }
+    } catch (error) {
+      console.warn('Could not save the last-viewed term:', error);
+    }
+  }, [selectedClass, termStorageKey]);
 
   // Term Management State
   const [showTermManager, setShowTermManager] = useState(false);
@@ -166,8 +210,21 @@ export default function Marks() {
   const [compareAssessmentsList, setCompareAssessmentsList] = useState([]);
   const [selectedCompareId, setSelectedCompareId] = useState('');
 
-  // Helper to check if current category requires multi-section layout
-  const isMultiSectionCategory = multiSectionCategories.includes(selectedCategory) || forceMultiSection || (selectedAssessment && selectedAssessment.sectionsConfig && selectedAssessment.sectionsConfig.length > 0);
+  // Category defaults are used only when creating a new assessment.
+  const categoryDefaultsToMultiSection =
+    multiSectionCategories.includes(selectedCategory);
+
+  // The existing assessment's own configuration controls its marks display.
+  const selectedAssessmentHasSections =
+    Array.isArray(selectedAssessment?.sectionsConfig) &&
+    selectedAssessment.sectionsConfig.length > 0;
+
+  const isMultiSectionCategory = selectedAssessment
+    ? selectedAssessmentHasSections
+    : categoryDefaultsToMultiSection;
+
+  // The add/edit form has its own independent layout state.
+  const isMultiSectionForm = forceMultiSection;
 
   // Fetch Comparison Assessments
   useEffect(() => {
@@ -275,9 +332,9 @@ export default function Marks() {
           setClasses(loadedClasses);
           setArchivedClasses(loadedArchivedClasses);
 
-const urlParams = new URLSearchParams(window.location.search);
+          const urlParams = new URLSearchParams(window.location.search);
           const classFromUrl = urlParams.get('class');
-          
+
           if (urlParams.get('studentView') === 'true') {
             setStudentView(true);
           }
@@ -305,8 +362,8 @@ const urlParams = new URLSearchParams(window.location.search);
           if (termDocSnap.data().map) {
             loadedTermsMap = termDocSnap.data().map;
           } else if (termDocSnap.data().list) {
-            loadedClasses.forEach(c => {
-              loadedTermsMap[c] = termDocSnap.data().list;
+            [...loadedClasses, ...loadedArchivedClasses].forEach(c => {
+              loadedTermsMap[c.name] = termDocSnap.data().list;
             });
           }
         }
@@ -435,23 +492,44 @@ const urlParams = new URLSearchParams(window.location.search);
   }, [user]);
 
   useEffect(() => {
-    if (selectedClass) {
-      setSelectedClassesForNew([selectedClass]);
+    // Wait until the saved terms have finished loading.
+    if (isLoading) return;
 
-      const classTerms = termsMap[selectedClass] && termsMap[selectedClass].length > 0
-        ? termsMap[selectedClass]
-        : getDefaultTerms(selectedClass);
-
-      setTerms(classTerms);
-
-      setTerms(prevTerms => {
-        if (!classTerms.includes(selectedTerm)) {
-          setSelectedTerm(classTerms[0] || '');
-        }
-        return classTerms;
-      });
+    if (!selectedClass) {
+      setTerms([]);
+      return;
     }
-  }, [selectedClass, termsMap]);
+
+    setSelectedClassesForNew([selectedClass]);
+
+    const classTerms = Array.isArray(termsMap[selectedClass])
+      ? termsMap[selectedClass]
+      : getDefaultTerms(selectedClass);
+
+    setTerms(classTerms);
+
+    let rememberedTerm = rememberedTermsRef.current[termStorageKey];
+
+    if (rememberedTerm === undefined) {
+      try {
+        rememberedTerm = window.localStorage.getItem(termStorageKey);
+      } catch (error) {
+        console.warn('Could not restore the last-viewed term:', error);
+      }
+    }
+
+    const nextTerm = classTerms.includes(rememberedTerm)
+      ? rememberedTerm
+      : (classTerms[0] || '');
+
+    setSelectedTerm(nextTerm);
+  }, [
+    isLoading,
+    selectedClass,
+    termsMap,
+    termStorageKey,
+    setSelectedTerm
+  ]);
 
   useEffect(() => {
     if (selectedTerm) {
@@ -462,60 +540,104 @@ const urlParams = new URLSearchParams(window.location.search);
   // ============================================================================
   // 2. FETCH ASSESSMENTS WHEN CLASS, TERM OR CATEGORY CHANGES
   // ============================================================================
-  useEffect(() => {
-    const fetchAssessments = async () => {
-      if (!selectedClass || !selectedCategory || !selectedTerm) return;
+  const firstTerm = terms[0] || '';
 
+  useEffect(() => {
+    let cancelled = false;
+
+    setAssessments([]);
+    setSelectedAssessment(null);
+    setMarksData({});
+    setBulkText('');
+    setSelectedCompareId('');
+    setCompareAssessmentsList([]);
+    setAssessmentsError('');
+
+    if (
+      isLoading ||
+      !selectedClass ||
+      !selectedCategory ||
+      !selectedTerm
+    ) {
+      setIsAssessmentsLoading(false);
+      return;
+    }
+
+    setIsAssessmentsLoading(true);
+
+    const fetchAssessments = async () => {
       try {
         const q = query(
-          collection(db, "assessments"),
-          where("category", "==", selectedCategory)
+          collection(db, 'assessments'),
+          where('category', '==', selectedCategory)
         );
+
         const querySnapshot = await getDocs(q);
 
+        if (cancelled) return;
+
         const loadedAssessments = querySnapshot.docs
-          .map(doc => ({ id: doc.id, ...doc.data() }))
+          .map(d => ({ id: d.id, ...d.data() }))
           .filter(a => {
-            const matchesClass = (a.classes && Array.isArray(a.classes))
+            const matchesClass = Array.isArray(a.classes)
               ? a.classes.includes(selectedClass)
               : a.className === selectedClass;
-            const matchesTerm = a.term === selectedTerm || (!a.term && selectedTerm === terms[0]);
+
+            const matchesTerm =
+              a.term === selectedTerm ||
+              (!a.term && selectedTerm === firstTerm);
+
             return matchesClass && matchesTerm;
           });
 
-        // Treat items without an order as -1 so they appear at the top, then sort by date (newest to oldest)
-        loadedAssessments.sort((a, b) => (a.order ?? -1) - (b.order ?? -1) || new Date(b.date) - new Date(a.date));
+        loadedAssessments.sort((a, b) => {
+          const orderDifference = (a.order ?? -1) - (b.order ?? -1);
+          if (orderDifference !== 0) return orderDifference;
+
+          const dateA = Date.parse(a.date || '') || 0;
+          const dateB = Date.parse(b.date || '') || 0;
+          return dateB - dateA;
+        });
+
         setAssessments(loadedAssessments);
 
-        if (isMultiSectionCategory) {
-          if (loadedAssessments.length > 0) {
-            setSelectedAssessment(loadedAssessments[0]);
-          } else {
-            setSelectedAssessment(null);
-          }
-        } else {
-          setSelectedAssessment(null);
-        }
-
-        setMarksData({});
-        setBulkText('');
-
+        // Always start a newly selected class/term/category at Overall.
+        // Selecting an individual item does not rerun this effect.
+        setSelectedAssessment(null);
       } catch (error) {
-        console.error("Error fetching assessments:", error);
+        if (cancelled) return;
+
+        console.error('Error fetching assessments:', error);
+        setAssessmentsError(
+          'Could not load assessments. Please check your connection, then switch to another category and back, or refresh the page.'
+        );
+      } finally {
+        if (!cancelled) {
+          setIsAssessmentsLoading(false);
+        }
       }
     };
 
     fetchAssessments();
-  }, [selectedClass, selectedCategory, selectedTerm, isMultiSectionCategory, terms]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isLoading,
+    selectedClass,
+    selectedCategory,
+    selectedTerm,
+    firstTerm
+  ]);
+
+  const selectedAssessmentId = selectedAssessment?.id || '';
+  const selectedAssessmentMarks = selectedAssessment?.marks;
 
   useEffect(() => {
-    if (selectedAssessment) {
-      setMarksData(selectedAssessment.marks || {});
-      setBulkText('');
-    } else {
-      setMarksData({});
-    }
-  }, [selectedAssessment]);
+    setMarksData(selectedAssessmentMarks || {});
+    setBulkText('');
+  }, [selectedAssessmentId, selectedAssessmentMarks]);
 
   // ============================================================================
   // 3. TERM & CATEGORY MANAGEMENT
@@ -656,12 +778,29 @@ const urlParams = new URLSearchParams(window.location.search);
   // 4. ASSESSMENT MANAGEMENT & CONFIG
   // ============================================================================
   const openAddModal = () => {
+    if (!selectedClass || !selectedTerm || !selectedCategory) {
+      alert('Please select a class, term, and category first.');
+      return;
+    }
+
     setNewAssessmentName('');
     setNewAssessmentDate(new Date().toISOString().split('T')[0]);
     setFullMark(100);
     setPaperFullMark(100);
     setLinkedDocId('');
-    setSectionsConfig([{ id: generateId(), name: 'Paper 1', fullMark: 100, weight: 100, hasSubSections: false, subSections: [] }]);
+    setForceMultiSection(categoryDefaultsToMultiSection);
+
+    setSectionsConfig([
+      {
+        id: generateId(),
+        name: 'Paper 1',
+        fullMark: 100,
+        weight: 100,
+        hasSubSections: false,
+        subSections: []
+      }
+    ]);
+
     setSelectedClassesForNew([selectedClass]);
     setFormTerm(selectedTerm);
     setIsEditingAssessment(false);
@@ -670,13 +809,50 @@ const urlParams = new URLSearchParams(window.location.search);
 
   const openEditModal = () => {
     if (!selectedAssessment) return;
+
+    const existingSections = Array.isArray(selectedAssessment.sectionsConfig)
+      ? selectedAssessment.sectionsConfig
+      : [];
+
     setNewAssessmentName(selectedAssessment.name || '');
-    setNewAssessmentDate(selectedAssessment.date || new Date().toISOString().split('T')[0]);
-    setFullMark(selectedAssessment.fullMark || 100);
-    setPaperFullMark(selectedAssessment.paperFullMark || 100);
+    setNewAssessmentDate(
+      selectedAssessment.date || new Date().toISOString().split('T')[0]
+    );
+
+    setFullMark(selectedAssessment.fullMark ?? 100);
+    setPaperFullMark(selectedAssessment.paperFullMark ?? 100);
     setLinkedDocId(selectedAssessment.linkedDocId || '');
-    setSectionsConfig(selectedAssessment.sectionsConfig || [{ id: generateId(), name: 'Paper 1', fullMark: 100, weight: 100, hasSubSections: false, subSections: [] }]);
-    setSelectedClassesForNew(selectedAssessment.classes || [selectedAssessment.className]);
+
+    // Determine the form format from this item, not from another item
+    // or a previously opened form.
+    setForceMultiSection(existingSections.length > 0);
+
+    setSectionsConfig(
+      existingSections.length > 0
+        ? existingSections.map(section => ({
+          ...section,
+          subSections: (section.subSections || []).map(sub => ({
+            ...sub
+          }))
+        }))
+        : [
+          {
+            id: generateId(),
+            name: 'Paper 1',
+            fullMark: 100,
+            weight: 100,
+            hasSubSections: false,
+            subSections: []
+          }
+        ]
+    );
+
+    setSelectedClassesForNew(
+      Array.isArray(selectedAssessment.classes)
+        ? [...selectedAssessment.classes]
+        : [selectedAssessment.className || selectedClass]
+    );
+
     setFormTerm(selectedAssessment.term || selectedTerm);
     setIsEditingAssessment(true);
     setShowAddAssessment(true);
@@ -781,59 +957,198 @@ const urlParams = new URLSearchParams(window.location.search);
 
   const handleSaveAssessment = async (e) => {
     e.preventDefault();
+    if (isSavingAssessment) return;
 
-    const finalName = isMultiSectionCategory ? `${formTerm} ${selectedCategory}` : newAssessmentName.trim();
+    const useSections = isMultiSectionForm;
 
-    if (!finalName || selectedClassesForNew.length === 0 || !selectedCategory || !formTerm) {
-      alert("Please provide required fields and select at least one class.");
+    const finalName =
+      newAssessmentName.trim() ||
+      (useSections ? `${formTerm} ${selectedCategory}` : '');
+
+    if (
+      !finalName ||
+      selectedClassesForNew.length === 0 ||
+      !selectedCategory ||
+      !formTerm ||
+      !newAssessmentDate
+    ) {
+      alert('Please complete the required fields and select at least one class.');
       return;
     }
 
-    if (isMultiSectionCategory && sectionsConfig.length === 0) {
-      alert("Please provide at least one valid section.");
+    if (isEditingAssessment && !selectedAssessment) {
+      alert('Please close this form and select the assessment again.');
       return;
     }
+
+    // Changing an existing item's mark-storage format could make its
+    // existing marks unreadable. Full marks and weights remain editable.
+    if (
+      isEditingAssessment &&
+      useSections !== selectedAssessmentHasSections
+    ) {
+      alert(
+        'The layout of an existing assessment cannot be changed here. ' +
+        'Please create a separate assessment if you need a different layout.'
+      );
+      return;
+    }
+
+    const isPositiveNumber = value =>
+      String(value ?? '').trim() !== '' &&
+      Number.isFinite(Number(value)) &&
+      Number(value) > 0;
+
+    const isNonNegativeNumber = value =>
+      String(value ?? '').trim() !== '' &&
+      Number.isFinite(Number(value)) &&
+      Number(value) >= 0;
+
+    if (!useSections && !isPositiveNumber(fullMark)) {
+      alert('The item full mark must be a number greater than zero.');
+      return;
+    }
+
+    let savedSections = null;
+
+    if (useSections) {
+      if (!isPositiveNumber(paperFullMark)) {
+        alert('The paper full mark must be a number greater than zero.');
+        return;
+      }
+
+      if (sectionsConfig.length === 0) {
+        alert('Please add at least one section.');
+        return;
+      }
+
+      for (const section of sectionsConfig) {
+        if (
+          !section.name?.trim() ||
+          !isPositiveNumber(section.fullMark) ||
+          !isNonNegativeNumber(section.weight)
+        ) {
+          alert(
+            'Each section needs a name, a full mark greater than zero, ' +
+            'and a weight of zero or greater.'
+          );
+          return;
+        }
+
+        if (section.hasSubSections) {
+          const subSections = section.subSections || [];
+
+          if (
+            subSections.length === 0 ||
+            subSections.some(sub =>
+              !sub.name?.trim() || !isPositiveNumber(sub.fullMark)
+            )
+          ) {
+            alert(
+              'Each enabled subsection needs a name and a full mark greater than zero.'
+            );
+            return;
+          }
+        }
+      }
+
+      savedSections = sectionsConfig.map(section => ({
+        ...section,
+        name: section.name.trim(),
+        fullMark: Number(section.fullMark),
+        weight: Number(section.weight),
+        subSections: (section.subSections || []).map(sub => ({
+          ...sub,
+          name: (sub.name || '').trim(),
+          // Retain unused subsection settings without forcing a conversion.
+          fullMark: section.hasSubSections
+            ? Number(sub.fullMark)
+            : sub.fullMark
+        }))
+      }));
+    }
+
+    setIsSavingAssessment(true);
 
     try {
       const assessmentData = {
-        classes: selectedClassesForNew,
+        classes: [...selectedClassesForNew],
         category: selectedCategory,
         term: formTerm,
         name: finalName,
         date: newAssessmentDate,
-        fullMark: isMultiSectionCategory ? null : parseFloat(fullMark),
-        paperFullMark: isMultiSectionCategory ? parseFloat(paperFullMark) : null,
-        sectionsConfig: isMultiSectionCategory ? sectionsConfig : null,
-        linkedDocId: linkedDocId || null,
-        isDisclosed: false, // NEW: Default to not disclosed
+        fullMark: useSections ? null : Number(fullMark),
+        paperFullMark: useSections ? Number(paperFullMark) : null,
+        sectionsConfig: savedSections,
+        linkedDocId: linkedDocId || null
       };
 
-      if (isEditingAssessment && selectedAssessment) {
-        const docRef = doc(db, "assessments", selectedAssessment.id);
-        await updateDoc(docRef, assessmentData);
+      if (isEditingAssessment) {
+        const assessmentId = selectedAssessment.id;
 
-        const updatedAssessment = { ...selectedAssessment, ...assessmentData };
-        setAssessments(assessments.map(a => a.id === updatedAssessment.id ? updatedAssessment : a));
-        setSelectedAssessment(updatedAssessment);
+        await updateDoc(
+          doc(db, 'assessments', assessmentId),
+          assessmentData
+        );
 
-        if (formTerm !== selectedTerm) {
+        const updatedAssessment = {
+          ...selectedAssessment,
+          ...assessmentData
+        };
+
+        const remainsInCurrentClass =
+          selectedClassesForNew.includes(selectedClass);
+
+        const remainsInCurrentView =
+          remainsInCurrentClass && formTerm === selectedTerm;
+
+        setAssessments(previous =>
+          remainsInCurrentView
+            ? previous.map(a =>
+              a.id === assessmentId ? { ...a, ...assessmentData } : a
+            )
+            : previous.filter(a => a.id !== assessmentId)
+        );
+
+        setSelectedAssessment(
+          remainsInCurrentView ? updatedAssessment : null
+        );
+
+        if (remainsInCurrentClass && formTerm !== selectedTerm) {
           setSelectedTerm(formTerm);
         }
       } else {
-        assessmentData.marks = {};
-        const docRef = await addDoc(collection(db, "assessments"), assessmentData);
-        const addedAssessment = { id: docRef.id, ...assessmentData };
+        const newData = {
+          ...assessmentData,
+          marks: {},
+          isDisclosed: false
+        };
 
-        if (selectedClassesForNew.includes(selectedClass) && formTerm === selectedTerm) {
-          setAssessments([addedAssessment, ...assessments]);
+        const docRef = await addDoc(
+          collection(db, 'assessments'),
+          newData
+        );
+
+        const addedAssessment = {
+          id: docRef.id,
+          ...newData
+        };
+
+        if (
+          selectedClassesForNew.includes(selectedClass) &&
+          formTerm === selectedTerm
+        ) {
+          setAssessments(previous => [addedAssessment, ...previous]);
           setSelectedAssessment(addedAssessment);
         }
       }
 
       setShowAddAssessment(false);
     } catch (error) {
-      console.error("Error saving assessment:", error);
-      alert("Failed to save assessment item.");
+      console.error('Error saving assessment:', error);
+      alert('Failed to save the assessment. Please try again.');
+    } finally {
+      setIsSavingAssessment(false);
     }
   };
 
@@ -2191,10 +2506,246 @@ const urlParams = new URLSearchParams(window.location.search);
   }
 
   return (
-    <div className="bg-gray-50 min-h-screen font-sans flex w-full p-4 sm:p-6 gap-6">
+    <div className="marks-page bg-gray-50 min-h-screen font-sans flex flex-col xl:flex-row w-full min-w-0 p-3 sm:p-4 xl:p-6 gap-4 xl:gap-6">
+
+      <style>{`
+        .marks-page {
+          box-sizing: border-box;
+          max-width: 100%;
+        }
+
+        .marks-page *,
+        .marks-page *::before,
+        .marks-page *::after {
+          box-sizing: border-box;
+        }
+
+        .marks-page .flex,
+        .marks-page .flex-1,
+        .marks-page .grid,
+        .marks-page .flex > input,
+        .marks-page .flex > select {
+          min-width: 0;
+        }
+
+        .marks-page h1,
+        .marks-page h2,
+        .marks-page h3 {
+          min-width: 0;
+          overflow-wrap: anywhere;
+        }
+
+        .marks-page h2 > .flex,
+        .marks-page p.flex {
+          flex-wrap: wrap;
+          row-gap: 0.5rem;
+        }
+
+        .marks-page button {
+          touch-action: manipulation;
+        }
+
+        .marks-page button:focus-visible,
+        .marks-page summary:focus-visible {
+          outline: 2px solid #2563eb;
+          outline-offset: 2px;
+        }
+
+        .marks-page button > svg,
+        .marks-page h2 > svg {
+          flex-shrink: 0;
+        }
+
+        .marks-page .overflow-x-auto {
+          min-width: 0;
+          max-width: 100%;
+          overscroll-behavior-x: contain;
+          -webkit-overflow-scrolling: touch;
+        }
+
+        .marks-page table {
+          width: max-content;
+          min-width: 100%;
+        }
+
+        .marks-page table th,
+        .marks-page table td {
+          white-space: nowrap;
+        }
+
+        .marks-page > .fixed {
+          overflow: auto;
+          overscroll-behavior: contain;
+        }
+
+        .marks-page > .fixed > div {
+          min-width: 0;
+          min-height: 0;
+          max-width: 100%;
+          max-height: calc(100vh - 2rem);
+          max-height: calc(100dvh - 2rem);
+          overflow: hidden;
+        }
+
+        .marks-page > .fixed > div > .flex-1 {
+          min-height: 0;
+          min-width: 0;
+          overflow: auto;
+          -webkit-overflow-scrolling: touch;
+        }
+
+        .marks-page > .fixed > div > .p-6 {
+          min-height: 0;
+          min-width: 0;
+          overflow: auto;
+          -webkit-overflow-scrolling: touch;
+        }
+
+        .marks-page > .fixed > div > .border-b {
+          flex-shrink: 0;
+          flex-wrap: wrap;
+          gap: 0.75rem;
+        }
+
+        .marks-page > .fixed > div > .border-b h2 {
+          flex: 1 1 12rem;
+        }
+
+        .marks-page #assessment-form .flex {
+          flex-wrap: wrap;
+          row-gap: 0.5rem;
+        }
+
+        .marks-page #assessment-form input {
+          max-width: 100%;
+        }
+
+        @media (min-width: 768px) and (max-width: 1279px) {
+          .marks-page .marks-sidebar {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            align-items: start;
+            gap: 1rem;
+          }
+
+          .marks-page .marks-sidebar > * {
+            margin-top: 0;
+          }
+
+          .marks-page .marks-sidebar > :first-child,
+          .marks-page .marks-sidebar > .marks-items {
+            grid-column: 1 / -1;
+          }
+        }
+
+        @media (max-width: 1279px) {
+          .marks-page .pl-8 {
+            padding-left: 0;
+          }
+
+          .marks-page .marks-reveal {
+            justify-content: flex-start;
+            padding: 1.25rem;
+            overflow-y: auto;
+          }
+
+          .marks-page .marks-reveal .gap-16 {
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 1rem;
+            width: 100%;
+          }
+
+          .marks-page .marks-reveal [class*="min-w-"] {
+            min-width: 0;
+            width: min(100%, 24rem);
+            max-width: 100%;
+            padding: 1.25rem;
+            transform: none !important;
+          }
+
+          .marks-page .marks-reveal h3 {
+            font-size: clamp(1.5rem, 5vw, 3rem);
+            line-height: 1.2;
+            margin-bottom: 1.5rem;
+          }
+
+          .marks-page .marks-reveal p[class*="text-["] {
+            font-size: clamp(2.5rem, 10vw, 5rem);
+          }
+
+          .marks-page .marks-reveal button {
+            max-width: 100%;
+            white-space: normal;
+            padding: 1rem 1.5rem;
+            font-size: 1.125rem;
+          }
+        }
+
+        @media (max-width: 767px) {
+          .marks-page input:not([type="checkbox"]):not([type="radio"]),
+          .marks-page select,
+          .marks-page textarea {
+            font-size: 16px;
+          }
+
+          .marks-page button,
+          .marks-page summary {
+            min-height: 44px;
+          }
+
+          .marks-page button {
+            min-width: 44px;
+          }
+
+          .marks-page > .fixed {
+            padding: 0.5rem;
+          }
+
+          .marks-page > .fixed > div {
+            max-height: calc(100vh - 1rem);
+            max-height: calc(100dvh - 1rem);
+            border-radius: 0.75rem;
+          }
+
+          .marks-page > .fixed > div > .p-6 {
+            padding: 1rem;
+          }
+
+          .marks-page > .fixed h2 {
+            font-size: 1.125rem;
+            line-height: 1.4;
+          }
+
+          .marks-page > .fixed .border-b > .flex {
+            flex-wrap: wrap;
+            gap: 0.5rem;
+          }
+
+          .marks-page > .fixed button.hidden,
+          .marks-page > .fixed a.hidden {
+            display: inline-flex;
+          }
+
+          .marks-page .custom-scrollbar {
+            max-height: 35vh;
+            max-height: 35dvh;
+          }
+
+          .marks-page iframe {
+            min-height: 50vh;
+            min-height: 50dvh;
+          }
+
+          .marks-page .marks-reveal .text-4xl,
+          .marks-page .marks-reveal .text-5xl {
+            font-size: 1.75rem;
+          }
+        }
+      `}</style>
 
       {/* Left Sidebar */}
-      <div className="w-64 xl:w-72 flex-shrink-0 sticky left-4 top-6 space-y-6 z-20 h-max">
+      <div className="marks-sidebar w-full xl:w-72 flex-shrink-0 xl:sticky xl:top-6 space-y-4 h-max xl:max-h-[calc(100dvh-3rem)] xl:overflow-y-auto xl:pr-1">
 
         <div className="mb-6">
           <h1 className="text-2xl font-bold text-gray-800 flex items-center">
@@ -2446,73 +2997,154 @@ const urlParams = new URLSearchParams(window.location.search);
           </ul>
         </div>
 
-        {/* Assessment Items List */}
-        {!isMultiSectionCategory && (
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-            <div className="bg-gray-100 p-3 border-b border-gray-200 flex justify-between items-center">
-              <h2 className="font-semibold text-gray-800 truncate pr-2 text-sm">{selectedCategory} Items</h2>
-              <button
-                onClick={openAddModal}
-                className="text-green-600 hover:text-green-800 flex-shrink-0"
-                title="Add Assessment Item"
-              >
-                <PlusCircle className="w-4 h-4" />
-              </button>
-            </div>
+        {/* Assessment Items List — always available for every category */}
+        <div className="marks-items bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+          <div className="bg-gray-100 p-3 border-b border-gray-200 flex justify-between items-center gap-2">
+            <h2 className="font-semibold text-gray-800 text-sm min-w-0">
+              {selectedCategory || 'Assessment'} Items
+            </h2>
+            <button
+              type="button"
+              onClick={openAddModal}
+              disabled={
+                !selectedClass ||
+                !selectedTerm ||
+                !selectedCategory ||
+                isAssessmentsLoading
+              }
+              className="text-green-600 hover:text-green-800 flex-shrink-0 p-2 rounded-md disabled:opacity-40"
+              title="Add Assessment Item"
+              aria-label="Add assessment item"
+            >
+              <PlusCircle className="w-5 h-5" />
+            </button>
+          </div>
 
-            <ul className="divide-y divide-gray-100 max-h-96 overflow-y-auto">
-              {assessments.length === 0 ? (
-                <li className="p-4 text-sm text-gray-500 text-center italic">No items found for {selectedTerm}.</li>
-              ) : (
-                <>
-                  <li>
-                    <div
-                      onClick={() => setSelectedAssessment(null)}
-                      className={`w-full text-left px-4 py-3 transition-colors cursor-pointer flex justify-between items-center ${!selectedAssessment ? 'bg-blue-50 text-blue-700 font-bold' : 'hover:bg-gray-50 text-gray-700 font-medium'
-                        }`}
+          <button
+            type="button"
+            onClick={() => setSelectedAssessment(null)}
+            aria-pressed={!selectedAssessment}
+            className={`w-full text-left px-4 py-3 border-b border-gray-200 flex items-center gap-2 transition-colors ${!selectedAssessment
+                ? 'bg-blue-50 text-blue-700 font-bold'
+                : 'hover:bg-gray-50 text-gray-700 font-medium'
+              }`}
+          >
+            <Layers className="w-4 h-4 flex-shrink-0" />
+            Overall
+          </button>
+
+          <div className="max-h-96 overflow-y-auto">
+            {isAssessmentsLoading ? (
+              <div className="p-4 flex items-center justify-center gap-2 text-sm text-gray-500">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Loading items...
+              </div>
+            ) : assessmentsError ? (
+              <p className="p-4 text-sm text-red-600" role="alert">
+                {assessmentsError}
+              </p>
+            ) : assessments.length === 0 ? (
+              <p className="p-4 text-sm text-gray-500 text-center">
+                No items found for {selectedTerm || 'this term'}.
+              </p>
+            ) : (
+              <ul className="divide-y divide-gray-100">
+                {assessments.map((item, index) => {
+                  const itemHasSections =
+                    Array.isArray(item.sectionsConfig) &&
+                    item.sectionsConfig.length > 0;
+
+                  const itemIsSelected = selectedAssessment?.id === item.id;
+
+                  return (
+                    <li
+                      key={item.id}
+                      className={itemIsSelected ? 'bg-blue-50' : 'bg-white'}
                     >
-                      Overview
-                    </div>
-                  </li>
-                  {assessments.map(item => (
-                    <li key={item.id}>
-                      <div
+                      <button
+                        type="button"
                         onClick={() => setSelectedAssessment(item)}
-                        className={`w-full text-left px-4 py-3 transition-colors cursor-pointer flex justify-between items-center ${selectedAssessment?.id === item.id ? 'bg-blue-50' : 'hover:bg-gray-50'
-                          }`}
+                        aria-pressed={itemIsSelected}
+                        className="w-full min-w-0 text-left px-4 pt-3 pb-2 hover:bg-blue-50 transition-colors"
                       >
-                        <div className="overflow-hidden pr-2">
-                          <div className={`font-medium text-sm truncate ${selectedAssessment?.id === item.id ? 'text-blue-700' : 'text-gray-800'}`}>
-                            {item.name}
-                          </div>
-                          <div className="text-xs text-gray-500 flex items-center mt-1">
-                            <Calendar className="w-3 h-3 mr-1" /> {item.date} | Full: {item.fullMark || 100}
-                          </div>
-                        </div>
-                        <div className="flex items-center space-x-1 flex-shrink-0">
-                          <button onClick={(e) => handleMoveAssessment(assessments.indexOf(item), 'up', e)} disabled={assessments.indexOf(item) === 0} className={`p-1 ${assessments.indexOf(item) === 0 ? 'text-gray-300' : 'text-gray-400 hover:text-blue-600'}`}><ChevronUp className="w-4 h-4" /></button>
-                          <button onClick={(e) => handleMoveAssessment(assessments.indexOf(item), 'down', e)} disabled={assessments.indexOf(item) === assessments.length - 1} className={`p-1 ${assessments.indexOf(item) === assessments.length - 1 ? 'text-gray-300' : 'text-gray-400 hover:text-blue-600'}`}><ChevronDown className="w-4 h-4" /></button>
-                          <button
-                            onClick={(e) => handleDeleteAssessment(item.id, e)}
-                            className="text-gray-400 hover:text-red-500 p-1"
-                            title="Delete Assessment"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
+                        <span
+                          className={`block text-sm font-semibold break-words ${itemIsSelected ? 'text-blue-700' : 'text-gray-800'
+                            }`}
+                        >
+                          {item.name}
+                        </span>
+                        <span className="block text-xs text-gray-500 mt-1">
+                          {item.date || 'No date'}
+                          {' · '}
+                          {itemHasSections
+                            ? `Paper full mark: ${item.paperFullMark ?? 100}`
+                            : `Full mark: ${item.fullMark ?? 100}`}
+                        </span>
+                        {itemHasSections && (
+                          <span className="block text-xs text-indigo-600 mt-1">
+                            Multi-section item
+                          </span>
+                        )}
+                      </button>
+
+                      <div className="flex justify-end gap-1 px-2 pb-2">
+                        <button
+                          type="button"
+                          onClick={(e) => handleMoveAssessment(index, 'up', e)}
+                          disabled={index === 0}
+                          className="p-2 rounded text-gray-500 hover:bg-blue-100 hover:text-blue-700 disabled:opacity-30"
+                          title="Move item up"
+                          aria-label={`Move ${item.name} up`}
+                        >
+                          <ChevronUp className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => handleMoveAssessment(index, 'down', e)}
+                          disabled={index === assessments.length - 1}
+                          className="p-2 rounded text-gray-500 hover:bg-blue-100 hover:text-blue-700 disabled:opacity-30"
+                          title="Move item down"
+                          aria-label={`Move ${item.name} down`}
+                        >
+                          <ChevronDown className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteAssessment(item.id, e)}
+                          className="p-2 rounded text-gray-400 hover:bg-red-50 hover:text-red-600"
+                          title="Delete assessment"
+                          aria-label={`Delete ${item.name}`}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </li>
-                  ))}
-                </>
-              )}
-            </ul>
+                  );
+                })}
+              </ul>
+            )}
           </div>
-        )}
+        </div>
       </div>
 
       {/* Right Main Area */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {!selectedAssessment ? (
+      <div className="flex-1 flex flex-col min-w-0 w-full">
+        {isAssessmentsLoading ? (
+          <div
+            className="bg-white rounded-lg shadow-sm border border-gray-200 p-10 flex items-center justify-center gap-3 text-gray-500"
+            role="status"
+          >
+            <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+            Loading assessments...
+          </div>
+        ) : assessmentsError ? (
+          <div
+            className="bg-red-50 rounded-lg border border-red-200 p-6 text-red-700"
+            role="alert"
+          >
+            {assessmentsError}
+          </div>
+        ) : !selectedAssessment ? (
           assessments.length === 0 ? (
             <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 flex flex-col items-center justify-center text-gray-500 w-full max-w-3xl mt-12 self-center">
               <FileText className="w-16 h-16 text-gray-300 mb-4" />
@@ -3212,71 +3844,104 @@ const urlParams = new URLSearchParams(window.location.search);
             <div className="p-6 overflow-y-auto flex-1">
               <form id="assessment-form" onSubmit={handleSaveAssessment} className="space-y-6">
                 {/* Basic Info */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {!isMultiSectionCategory && (
-                    <div>
-                      <label className="block text-sm font-semibold text-gray-700 mb-1">Assessment Name</label>
-                      <input
-                        type="text"
-                        value={newAssessmentName}
-                        onChange={(e) => setNewAssessmentName(e.target.value)}
-                        data-gramm="false" data-gramm_editor="false"
-                        className="w-full border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                        required={!isMultiSectionCategory}
-                      />
-                    </div>
-                  )}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+                  <div className="min-w-0">
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">
+                      Assessment Name
+                    </label>
+                    <input
+                      type="text"
+                      value={newAssessmentName}
+                      onChange={(e) => setNewAssessmentName(e.target.value)}
+                      placeholder={
+                        isMultiSectionForm
+                          ? `${formTerm} ${selectedCategory}`
+                          : 'e.g. Quiz 1'
+                      }
+                      data-gramm="false"
+                      data-gramm_editor="false"
+                      className="w-full min-w-0 border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                      required={!isMultiSectionForm}
+                    />
+                  </div>
 
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">Date</label>
+                  <div className="min-w-0">
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">
+                      Date
+                    </label>
                     <input
                       type="date"
                       value={newAssessmentDate}
                       onChange={(e) => setNewAssessmentDate(e.target.value)}
-                      className="w-full border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                      className="w-full min-w-0 border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                       required
                     />
                   </div>
 
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">Term</label>
+                  <div className="min-w-0">
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">
+                      Term
+                    </label>
                     <select
                       value={formTerm}
                       onChange={(e) => setFormTerm(e.target.value)}
-                      className="w-full border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                      className="w-full min-w-0 border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                      required
                     >
-                      {terms.map(t => <option key={t} value={t}>{t}</option>)}
+                      {terms.map(t => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
                     </select>
                   </div>
 
-                  {(!isMultiSectionCategory && !forceMultiSection) && (
-                    <div>
-                      <label className="block text-sm font-semibold text-gray-700 mb-1">Full Mark</label>
+                  {!isMultiSectionForm && (
+                    <div className="min-w-0">
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">
+                        Item Full Mark — Original Maximum
+                      </label>
                       <input
                         type="number"
+                        min="0"
                         step="any"
+                        inputMode="decimal"
                         value={fullMark}
                         onChange={(e) => setFullMark(e.target.value)}
-                        data-gramm="false" data-gramm_editor="false"
-                        className="w-full border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                        data-gramm="false"
+                        data-gramm_editor="false"
+                        className="w-full min-w-0 border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                         required
                       />
+                      <p className="mt-1 text-xs text-gray-500">
+                        The maximum mark for this item, not its term weighting.
+                        Changing it does not change students' entered marks.
+                      </p>
                     </div>
                   )}
                 </div>
 
-                {!multiSectionCategories.includes(selectedCategory) && (
-                  <div className="flex items-center mt-2 mb-4">
-                    <input
-                      type="checkbox"
-                      id="forceMultiSection"
-                      checked={forceMultiSection}
-                      onChange={(e) => setForceMultiSection(e.target.checked)}
-                      className="mr-2 rounded text-blue-600 focus:ring-blue-500"
-                    />
-                    <label htmlFor="forceMultiSection" className="text-sm font-semibold text-gray-700">
+                {!categoryDefaultsToMultiSection && (
+                  <div className="mt-2 mb-4">
+                    <label
+                      htmlFor="forceMultiSection"
+                      className="flex items-start gap-2 text-sm font-semibold text-gray-700"
+                    >
+                      <input
+                        type="checkbox"
+                        id="forceMultiSection"
+                        checked={forceMultiSection}
+                        onChange={(e) => setForceMultiSection(e.target.checked)}
+                        disabled={isEditingAssessment}
+                        className="mt-1 rounded text-blue-600 focus:ring-blue-500 disabled:opacity-50"
+                      />
                       Enable Multi-Section Layout for this specific item
                     </label>
+
+                    {isEditingAssessment && (
+                      <p className="mt-1 text-xs text-gray-500">
+                        The layout is locked to protect existing marks.
+                        Full marks and section weights can still be edited.
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -3321,7 +3986,7 @@ const urlParams = new URLSearchParams(window.location.search);
                 </div>
 
                 {/* Multi-Section Config */}
-                {isMultiSectionCategory && (
+                {isMultiSectionForm && (
                   <div className="border-t border-gray-200 pt-6 mt-6">
                     <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-4 gap-4">
                       <div>
@@ -3431,8 +4096,18 @@ const urlParams = new URLSearchParams(window.location.search);
 
             <div className="p-4 border-t border-gray-200 bg-gray-50 rounded-b-lg flex justify-end space-x-3 shrink-0">
               <button type="button" onClick={() => setShowAddAssessment(false)} className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-md font-medium hover:bg-gray-50">Cancel</button>
-              <button type="submit" form="assessment-form" className="px-6 py-2 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 shadow-sm flex items-center">
-                <Save className="w-4 h-4 mr-2" /> Save Assessment
+              <button
+                type="submit"
+                form="assessment-form"
+                disabled={isSavingAssessment}
+                className="px-6 py-2 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 shadow-sm flex items-center disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isSavingAssessment ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <Save className="w-4 h-4 mr-2" />
+                )}
+                {isSavingAssessment ? 'Saving...' : 'Save Assessment'}
               </button>
             </div>
           </div>
@@ -3777,7 +4452,7 @@ const urlParams = new URLSearchParams(window.location.search);
             </div>
 
             {revealStep < 4 ? (
-              <div className="flex-1 flex flex-col items-center justify-center p-10 bg-gradient-to-br from-indigo-50 to-blue-100 text-center overflow-hidden">
+              <div className="marks-reveal flex-1 min-h-0 min-w-0 flex flex-col items-center justify-start lg:justify-center p-4 sm:p-6 lg:p-10 bg-gradient-to-br from-indigo-50 to-blue-100 text-center overflow-y-auto">
                 <AnimatePresence mode="wait">
                   {revealStep === 0 && (
                     <motion.div
@@ -3979,30 +4654,40 @@ const urlParams = new URLSearchParams(window.location.search);
               <div className="flex items-center space-x-4 w-full xl:w-auto flex-wrap gap-y-3">
                 <div className="flex items-center space-x-2">
                   <label className="font-semibold text-gray-700 text-sm">Classes:</label>
-                  <div className="relative group">
-                    <button className="border border-gray-300 rounded-md p-1.5 text-sm bg-white flex items-center justify-between min-w-[140px] hover:border-purple-400 focus:outline-none">
-                      <span className="truncate max-w-[100px]">{modalClasses.length} Selected</span>
+                  <details className="relative min-w-0">
+                    <summary className="list-none cursor-pointer border border-gray-300 rounded-md px-3 py-2 text-sm bg-white flex items-center justify-between min-w-[140px] hover:border-purple-400">
+                      <span>{modalClasses.length} Selected</span>
                       <ChevronDown className="w-4 h-4 ml-2 text-gray-500" />
-                    </button>
-                    <div className="absolute left-0 top-full mt-1 w-56 bg-white border border-gray-200 shadow-xl rounded-md hidden group-hover:block z-50 max-h-64 overflow-y-auto">
+                    </summary>
+
+                    <div className="mt-2 w-56 max-w-full bg-white border border-gray-200 shadow-sm rounded-md max-h-64 overflow-y-auto">
                       <div className="p-2 flex flex-col gap-1">
                         {classes.map(c => (
-                          <label key={c.name} className="flex items-center text-sm p-1.5 hover:bg-purple-50 rounded cursor-pointer transition-colors">
+                          <label
+                            key={c.name}
+                            className="flex items-center text-sm p-3 hover:bg-purple-50 rounded cursor-pointer transition-colors"
+                          >
                             <input
                               type="checkbox"
                               checked={modalClasses.includes(c.name)}
                               onChange={() => {
-                                setModalClasses(prev => prev.includes(c.name) ? prev.filter(x => x !== c.name) : [...prev, c.name]);
+                                setModalClasses(previous =>
+                                  previous.includes(c.name)
+                                    ? previous.filter(name => name !== c.name)
+                                    : [...previous, c.name]
+                                );
                                 setTermScoresData([]);
                               }}
                               className="mr-2 rounded text-purple-600 focus:ring-purple-500"
                             />
-                            {c.name}
+                            <span className="break-words">
+                              {c.name.replace(/\u200B/g, '')}
+                            </span>
                           </label>
                         ))}
                       </div>
                     </div>
-                  </div>
+                  </details>
                 </div>
 
                 <div className="flex items-center space-x-2 pl-4 border-l border-gray-200">

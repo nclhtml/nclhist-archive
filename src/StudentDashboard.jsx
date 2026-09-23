@@ -1372,20 +1372,136 @@ export default function StudentDashboard() {
         setIsLoading(true);
         try {
             const { PDFDocument, rgb, StandardFonts } = await import('pdf-lib');
-            const terms = level === 'S4' ? ['S4 Term 1', 'S4 Term 2'] : level === 'S5' ? ['S5 Term 1', 'S5 Term 2'] : ['S6 Term 1', 'S6 Mock'];
+            const isS6Export = level === 'S6';
 
-            const filteredItems = allItems.filter(item =>
-                terms.includes(item.term) &&
-                (item.classes?.includes(selectedClass) || item.className === selectedClass)
-            );
+            // Keep the existing S4/S5 term selection unchanged.
+            const terms = level === 'S4'
+                ? ['S4 Term 1', 'S4 Term 2']
+                : level === 'S5'
+                    ? ['S5 Term 1', 'S5 Term 2']
+                    : [];
+
+            const normalizeBisText = (value) =>
+                String(value ?? '')
+                    .normalize('NFKC')
+                    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+                    .trim()
+                    .toLowerCase();
+
+            const isCorrectionItem = (item) =>
+                normalizeBisText(item.name).includes('corr');
+
+            // Every S6 item belongs to exactly one export group.
+            // Corrections take priority over the saved category.
+            const getS6BisGroup = (item) => {
+                if (isCorrectionItem(item)) {
+                    return 'Internal Assessments';
+                }
+
+                const category = normalizeBisText(item.category)
+                    .replace(/[\s_-]+/g, ' ');
+
+                if ([
+                    'uniform test',
+                    'uniform tests',
+                    'exam',
+                    'exams',
+                    'examination',
+                    'examinations',
+                    'internal assessment',
+                    'internal assessments',
+                    'mock',
+                    'mock examination',
+                    'pre mock',
+                    'pre mock examination'
+                ].includes(category)) {
+                    return 'Internal Assessments';
+                }
+
+                if ([
+                    'quiz',
+                    'quizzes'
+                ].includes(category)) {
+                    return 'Quizzes';
+                }
+
+                // Assignments, Practice, Others, and other non-test
+                // categories stay in the export under Assignments.
+                return 'Assignments';
+            };
+
+            const filteredItems = allItems.filter(item => {
+                const matchesClass =
+                    item.classes?.includes(selectedClass) ||
+                    item.className === selectedClass;
+
+                if (!matchesClass) return false;
+
+                if (isS6Export) {
+                    const term = normalizeBisText(item.term);
+
+                    // Include "S6" as well as "S6 Term 1",
+                    // "S6 Term 2", "S6 Mock", and other S6-labelled terms.
+                    // Do not pull in S4/S5 items from the same class.
+                    return /^s\s*6(?:\b|(?=term|mock))/.test(term);
+                }
+
+                return terms.includes(item.term);
+            });
+
+            if (isS6Export && filteredItems.length === 0) {
+                alert(
+                    'No S6 records were found in the loaded data for this class. ' +
+                    'Please check that the items belong to the selected class ' +
+                    'and have a term such as "S6", "S6 Term 1", or "S6 Mock".'
+                );
+                setIsLoading(false);
+                return;
+            }
+
+            const getBisDateValue = (value) => {
+                if (!value) return Number.POSITIVE_INFINITY;
+
+                const time = new Date(value).getTime();
+
+                // Put missing or invalid dates after dated items.
+                return Number.isFinite(time)
+                    ? time
+                    : Number.POSITIVE_INFINITY;
+            };
 
             const reversedItems = [...filteredItems].sort((a, b) => {
+                if (isS6Export) {
+                    const dateA = getBisDateValue(a.date);
+                    const dateB = getBisDateValue(b.date);
+
+                    if (dateA !== dateB) {
+                        return dateA < dateB ? -1 : 1;
+                    }
+
+                    // Stable, predictable ordering when dates are equal.
+                    const nameDifference = String(a.name ?? '').localeCompare(
+                        String(b.name ?? ''),
+                        undefined,
+                        { numeric: true }
+                    );
+
+                    if (nameDifference !== 0) return nameDifference;
+
+                    return String(a.id ?? '').localeCompare(
+                        String(b.id ?? '')
+                    );
+                }
+
+                // Preserve the previous S4/S5 ordering.
                 const orderA = a.order !== undefined ? a.order : -1;
                 const orderB = b.order !== undefined ? b.order : -1;
                 if (orderA !== orderB) return orderB - orderA;
+
                 const weightA = getTermWeight(a.term);
                 const weightB = getTermWeight(b.term);
                 if (weightA !== weightB) return weightA - weightB;
+
                 return new Date(a.date) - new Date(b.date);
             });
 
@@ -1563,39 +1679,131 @@ export default function StudentDashboard() {
                 y -= 30;
             };
 
-            const topicsOrder = ["World War I", "World War II", "Cold War", "Japan", "Hong Kong", "China", "International Cooperation"];
-            const topicsZhMap = {
-                "World War I": "一戰", "World War II": "二戰", "Cold War": "冷戰",
-                "Japan": "日本", "Hong Kong": "香港", "China": "中國", "International Cooperation": "國際合作"
-            };
-            const originsOrder = ["Assignments", "Quizzes", "Others"];
-            const typeZhMap = { "Practice": "練習", "Quiz": "小測", "Task": "其他" };
+            if (isS6Export) {
+                // S6: no topic lookup, no archive-link requirement.
+                // These headings use the same style as the S4/S5
+                // topic headings. Rows use the same fonts and columns.
+                const s6Groups = [
+                    {
+                        key: 'Assignments',
+                        headingEn: 'Assignments',
+                        headingZh: '練習',
+                        typeEn: 'Practice',
+                        typeZh: '練習'
+                    },
+                    {
+                        key: 'Quizzes',
+                        headingEn: 'Quizzes',
+                        headingZh: '小測',
+                        typeEn: 'Quiz',
+                        typeZh: '小測'
+                    }
+                ];
 
-            topicsOrder.forEach(topic => {
-                let topicItems = [];
-                originsOrder.forEach(origin => {
-                    const items = reversedItems.filter(item => item.category === origin && !item.name?.toLowerCase().includes('corr') && getDocGroups(item.linkedDocId).includes(topic));
-                    topicItems.push(...items);
-                });
+                s6Groups.forEach(group => {
+                    // reversedItems is already sorted by date for S6.
+                    const groupItems = reversedItems.filter(
+                        item => getS6BisGroup(item) === group.key
+                    );
 
-                if (topicItems.length > 0) {
-                    checkPageBreak();
-                    page.drawRectangle({ x: colX[0], y: y - 10, width: colX[4] + colW[4] - colX[0], height: 30, color: rgb(0.95, 0.95, 0.95), borderColor: rgb(0, 0, 0), borderWidth: 1 });
-                    drawText(tr(topic, topicsZhMap[topic]), colX[0] + 5, y, 12, true);
+                    if (groupItems.length === 0) return;
+
+                    // Keep the heading with at least its first item.
+                    if (y < 80) {
+                        page = pdfDoc.addPage([595.28, 841.89]);
+                        y = 800;
+                    }
+
+                    page.drawRectangle({
+                        x: colX[0],
+                        y: y - 10,
+                        width: colX[4] + colW[4] - colX[0],
+                        height: 30,
+                        color: rgb(0.95, 0.95, 0.95),
+                        borderColor: rgb(0, 0, 0),
+                        borderWidth: 1
+                    });
+
+                    drawText(
+                        tr(group.headingEn, group.headingZh),
+                        colX[0] + 5,
+                        y,
+                        12,
+                        true
+                    );
+
                     y -= 30;
 
-                    let typeCounters = { 'Assignments': 1, 'Quizzes': 1, 'Others': 1 };
-                    topicItems.forEach(item => {
-                        const marks = item.fullMark || item.paperFullMark || '';
-                        let typeNameEn = item.category === 'Assignments' ? 'Practice' : (item.category === 'Quizzes' ? 'Quiz' : 'Task');
-                        let typeName = tr(typeNameEn, typeZhMap[typeNameEn]);
-                        drawRow(formatDate(item.date), `${typeName} ${typeCounters[item.category]++}`, item.name, marks ? `/${marks}` : '');
+                    let typeCounter = 1;
+
+                    groupItems.forEach(item => {
+                        const marks =
+                            item.fullMark || item.paperFullMark || '';
+
+                        const typeName = tr(
+                            group.typeEn,
+                            group.typeZh
+                        );
+
+                        drawRow(
+                            formatDate(item.date),
+                            `${typeName} ${typeCounter++}`,
+                            item.name,
+                            marks ? `/${marks}` : ''
+                        );
                     });
+                });
+            } else {
+                // S4/S5: retain the existing topic-based BIS output.
+                const topicsOrder = ["World War I", "World War II", "Cold War", "Japan", "Hong Kong", "China", "International Cooperation"];
+                const topicsZhMap = {
+                    "World War I": "一戰", "World War II": "二戰", "Cold War": "冷戰",
+                    "Japan": "日本", "Hong Kong": "香港", "China": "中國", "International Cooperation": "國際合作"
+                };
+                const originsOrder = ["Assignments", "Quizzes", "Others"];
+                const typeZhMap = { "Practice": "練習", "Quiz": "小測", "Task": "其他" };
+
+                topicsOrder.forEach(topic => {
+                    let topicItems = [];
+                    originsOrder.forEach(origin => {
+                        const items = reversedItems.filter(item => item.category === origin && !item.name?.toLowerCase().includes('corr') && getDocGroups(item.linkedDocId).includes(topic));
+                        topicItems.push(...items);
+                    });
+
+                    if (topicItems.length > 0) {
+                        checkPageBreak();
+                        page.drawRectangle({ x: colX[0], y: y - 10, width: colX[4] + colW[4] - colX[0], height: 30, color: rgb(0.95, 0.95, 0.95), borderColor: rgb(0, 0, 0), borderWidth: 1 });
+                        drawText(tr(topic, topicsZhMap[topic]), colX[0] + 5, y, 12, true);
+                        y -= 30;
+
+                        let typeCounters = { 'Assignments': 1, 'Quizzes': 1, 'Others': 1 };
+                        topicItems.forEach(item => {
+                            const marks = item.fullMark || item.paperFullMark || '';
+                            let typeNameEn = item.category === 'Assignments' ? 'Practice' : (item.category === 'Quizzes' ? 'Quiz' : 'Task');
+                            let typeName = tr(typeNameEn, typeZhMap[typeNameEn]);
+                            drawRow(formatDate(item.date), `${typeName} ${typeCounters[item.category]++}`, item.name, marks ? `/${marks}` : '');
+                        });
+                    }
+                });
+            }
+
+            const internalItems = reversedItems.filter(item => {
+                if (isS6Export) {
+                    return getS6BisGroup(item) === 'Internal Assessments';
                 }
+
+                // Keep the previous S4/S5 inclusion rules unchanged.
+                return ['Uniform Test', 'Exam'].includes(item.category) ||
+                    item.name?.toLowerCase().includes('corr');
             });
 
-            const internalItems = reversedItems.filter(item => ['Uniform Test', 'Exam'].includes(item.category) || item.name?.toLowerCase().includes('corr'));
             if (internalItems.length > 0) {
+                // For S6, keep the group heading with its first item.
+                if (isS6Export && y < 80) {
+                    page = pdfDoc.addPage([595.28, 841.89]);
+                    y = 800;
+                }
+
                 checkPageBreak();
                 page.drawRectangle({ x: colX[0], y: y - 10, width: colX[4] + colW[4] - colX[0], height: 30, color: rgb(0.95, 0.95, 0.95), borderColor: rgb(0, 0, 0), borderWidth: 1 });
                 drawText(tr("Internal Assessments", "測考項目"), colX[0] + 5, y, 12, true);
@@ -1616,17 +1824,45 @@ export default function StudentDashboard() {
                     page.drawRectangle({ x: colX[2], y: y - 10, width: colW[2] + colW[3], height: 30, borderColor: rgb(0, 0, 0), borderWidth: 1 });
                     page.drawRectangle({ x: colX[4], y: y - 10, width: colW[4], height: 30, borderColor: rgb(0, 0, 0), borderWidth: 1 });
 
-                    // Check if the item name matches any of our specific internal assessment mappings
+                    // Preserve existing language rules.
+                    // Do not rename correction items as the original exam.
                     let displayName = item.name;
-                    if (level === 'S6') {
-                        if (item.category === 'Uniform Test') {
-                            displayName = tr('Pre-mock Examination', '模擬預試');
-                        } else if (item.category === 'Exam') {
-                            displayName = tr('Mock Examination', '模擬試');
+
+                    if (isS6Export) {
+                        const category = normalizeBisText(item.category)
+                            .replace(/[\s_-]+/g, ' ');
+
+                        if (isCorrectionItem(item)) {
+                            // Keep the saved correction title in both versions,
+                            // just as ordinary item titles are preserved.
+                            displayName = item.name;
+                        } else if (
+                            category === 'uniform test' ||
+                            category === 'uniform tests' ||
+                            category === 'pre mock' ||
+                            category === 'pre mock examination'
+                        ) {
+                            displayName = tr(
+                                'Pre-mock Examination',
+                                '模擬預試'
+                            );
+                        } else if ([
+                            'exam',
+                            'exams',
+                            'examination',
+                            'examinations',
+                            'mock',
+                            'mock examination'
+                        ].includes(category)) {
+                            displayName = tr(
+                                'Mock Examination',
+                                '模擬試'
+                            );
                         } else if (isZh && internalZhMap[item.name]) {
                             displayName = internalZhMap[item.name];
                         }
                     } else {
+                        // Existing S4/S5 translations remain unchanged.
                         if (isZh && internalZhMap[item.name]) {
                             displayName = internalZhMap[item.name];
                         }
@@ -1815,8 +2051,8 @@ export default function StudentDashboard() {
                                     type="button"
                                     onClick={() => setSelectedClass(className)}
                                     className={`shrink-0 px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap ${selectedClass === className
-                                            ? 'bg-blue-600 text-white'
-                                            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                                        ? 'bg-blue-600 text-white'
+                                        : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
                                         }`}
                                 >
                                     {className.replace(/\u200B/g, '')}

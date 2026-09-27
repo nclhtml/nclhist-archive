@@ -361,3 +361,8 @@ exports.cleanupSkillSessions = skillbooks.cleanupSkillSessions;
 const knowledgeTest = require("./knowledge-test/api.cjs");
 exports.knowledgeApi = knowledgeTest.knowledgeApi;
 exports.knowledgeNotifications = knowledgeTest.knowledgeNotifications;
+
+const archiveAccess = require("./archive-access.cjs");
+exports.archiveCatalogue = archiveAccess.archiveCatalogue;
+exports.archiveVersionPdf = archiveAccess.archiveVersionPdf;
+exports.archiveClassAssessments = archiveAccess.archiveClassAssessments;

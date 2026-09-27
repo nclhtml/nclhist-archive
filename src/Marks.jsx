@@ -12,6 +12,7 @@ import {
   addDoc, deleteDoc, query, where, getDoc
 } from 'firebase/firestore';
 import { db } from './firebase';
+import { loadAccessibleArchives } from './archiveAccessClient.js';
 import { useAuth } from './main.jsx'; // NEW IMPORT
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -19,6 +20,53 @@ import {
 } from 'recharts';
 import { motion, AnimatePresence } from 'framer-motion';
 import * as XLSX from 'xlsx';
+import { VersionPdfInline } from './VersionPdf.jsx';
+
+function getMarksAttachmentUrl(parent, isAnswer, language) {
+  if (!parent) return '';
+
+  const english = isAnswer
+    ? parent.answerFileUrl || ''
+    : parent.fileUrl || '';
+
+  const chinese = isAnswer
+    ? parent.answerFileUrlChi || ''
+    : parent.fileUrlChi || '';
+
+  return language === 'zh'
+    ? chinese || english
+    : english || chinese;
+}
+
+function MarksPdfAttachment({ fileUrl, title }) {
+  if (!fileUrl) {
+    return (
+      <div className="flex items-center justify-center h-full p-6 text-slate-500">
+        No PDF attached for this view.
+      </div>
+    );
+  }
+
+  const renderPdf = url => (
+    <iframe
+      src={`${url}#view=Fit&pagemode=thumbs&page=1&zoom=page-fit`}
+      className="w-full h-full border-0"
+      title={title}
+    />
+  );
+
+  if (fileUrl.startsWith('/archive-pdf?')) {
+    return (
+      <VersionPdfInline
+        key={fileUrl}
+        fileUrl={fileUrl}
+        renderViewer={renderPdf}
+      />
+    );
+  }
+
+  return renderPdf(fileUrl);
+}
 
 // Helper to generate unique IDs for sections/subsections
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -194,6 +242,13 @@ export default function Marks() {
   // Preview Modal State
   const [previewItem, setPreviewItem] = useState(null);
   const [viewingAnswer, setViewingAnswer] = useState(false);
+  const [previewLanguage, setPreviewLanguage] = useState('en');
+
+  const previewPdfUrl = getMarksAttachmentUrl(
+    previewItem?.parent,
+    viewingAnswer,
+    previewLanguage
+  );
 
   // Linked Marks Modal State
   const [showMarksModal, setShowMarksModal] = useState(false);
@@ -475,9 +530,11 @@ export default function Marks() {
           .filter(student => !student.isDummy && !student.isDeleted);
         setStudents(studentsList);
 
-        // Fetch Archives for linking
-        const archivesSnap = await getDocs(collection(db, "archives"));
-        const archivesList = archivesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        // Fetch the archive catalogue through the shared access service.
+        const archivesList = await loadAccessibleArchives({
+          effectiveEmail: user.email
+        });
+
         setArchives(archivesList);
 
       } catch (error) {
@@ -2078,22 +2135,51 @@ export default function Marks() {
   const uniqueYears = useMemo(() => [...new Set(linkableDocs.map(a => String(a.year)).filter(Boolean))].sort().reverse(), [linkableDocs]);
 
   const handleOpenPreview = (docId) => {
-    const linkedDoc = linkableDocs.find(a => a.id === docId);
-    if (linkedDoc) {
-      if (linkedDoc.id.includes('_')) {
-        const [parentId, childId] = linkedDoc.id.split('_');
-        const parentDoc = archives.find(a => a.id === parentId);
-        const childDoc = parentDoc?.subQuestions?.find(sq => sq.id.toString() === childId);
-        if (parentDoc && childDoc) {
-          setPreviewItem({ parent: parentDoc, child: childDoc, isFullPaper: false });
-        }
-      } else {
-        const parentDoc = archives.find(a => a.id === docId);
-        if (parentDoc) {
-          setPreviewItem({ parent: parentDoc, isFullPaper: true });
+    let parentDoc = archives.find(archive => archive.id === docId);
+    let childDoc = null;
+
+    if (!parentDoc) {
+      for (const archive of archives) {
+        const match = (archive.subQuestions || []).find(
+          child => `${archive.id}_${child.id}` === docId
+        );
+
+        if (match) {
+          parentDoc = archive;
+          childDoc = match;
+          break;
         }
       }
     }
+
+    if (!parentDoc) {
+      alert(
+        'This linked document is not in the loaded catalogue. ' +
+        'Refresh the page and try again.'
+      );
+      return;
+    }
+
+    // Derive these display flags from actual saved URLs.
+    // Do not rely on an old hasFile/hasAnswer value.
+    const parent = {
+      ...parentDoc,
+      hasFile: Boolean(parentDoc.fileUrl || parentDoc.fileUrlChi),
+      hasAnswer: Boolean(
+        parentDoc.answerFileUrl || parentDoc.answerFileUrlChi
+      )
+    };
+
+    setViewingAnswer(false);
+    setPreviewLanguage(
+      !parent.fileUrl && parent.fileUrlChi ? 'zh' : 'en'
+    );
+
+    setPreviewItem({
+      parent,
+      ...(childDoc ? { child: childDoc } : {}),
+      isFullPaper: !childDoc
+    });
   };
 
   // NEW: Missing function that was causing crashes or rendering issues when viewing linked marks
@@ -3025,8 +3111,8 @@ export default function Marks() {
             onClick={() => setSelectedAssessment(null)}
             aria-pressed={!selectedAssessment}
             className={`w-full text-left px-4 py-3 border-b border-gray-200 flex items-center gap-2 transition-colors ${!selectedAssessment
-                ? 'bg-blue-50 text-blue-700 font-bold'
-                : 'hover:bg-gray-50 text-gray-700 font-medium'
+              ? 'bg-blue-50 text-blue-700 font-bold'
+              : 'hover:bg-gray-50 text-gray-700 font-medium'
               }`}
           >
             <Layers className="w-4 h-4 flex-shrink-0" />
@@ -5125,7 +5211,9 @@ export default function Marks() {
                   <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                     {viewingAnswer ? "Answer Key: " : ""}{previewItem.parent.title || 'Untitled Document'}
                     <span className="bg-blue-100 text-blue-800 text-xs px-2 py-0.5 rounded-md font-bold ml-2">
-                      Full Paper View
+                      {previewItem.isFullPaper
+                        ? 'Full Paper View'
+                        : `Part ${previewItem.child?.label || ''}`}
                     </span>
                   </h2>
                 </div>
@@ -5176,14 +5264,27 @@ export default function Marks() {
                   <BarChart2 size={16} /> View Marks
                 </button>
 
-                {((!viewingAnswer && previewItem.parent.hasFile) || (viewingAnswer && previewItem.parent.hasAnswer)) && (
+                <label className="flex items-center gap-2 text-xs font-bold text-slate-600">
+                  Language
+                  <select
+                    value={previewLanguage}
+                    onChange={event => setPreviewLanguage(event.target.value)}
+                    className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm"
+                  >
+                    <option value="en">English</option>
+                    <option value="zh">中文</option>
+                  </select>
+                </label>
+
+                {previewPdfUrl && (
                   <a
-                    href={viewingAnswer ? previewItem.parent.answerFileUrl : previewItem.parent.fileUrl}
+                    href={previewPdfUrl}
                     target="_blank"
                     rel="noreferrer"
                     className="hidden sm:flex px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 transition-all items-center gap-2"
                   >
-                    <Download size={16} /> {viewingAnswer ? "Download Answer" : "Download PDF"}
+                    <Download size={16} />
+                    {viewingAnswer ? 'Open / Download Answer' : 'Open / Download PDF'}
                   </a>
                 )}
 
@@ -5200,69 +5301,132 @@ export default function Marks() {
             </div>
 
             {/* Preview Body */}
-            <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
+            <div className="flex-1 min-h-0 min-w-0 overflow-auto md:overflow-hidden flex flex-col md:flex-row">
               {!viewingAnswer && (
-                <div className={`${previewItem.parent.hasFile ? 'md:w-1/3 lg:w-1/4 border-r border-slate-200' : 'w-full'} p-6 overflow-y-auto bg-slate-50 custom-scrollbar`}>
-                  <div className="space-y-6">
+                <div
+                  className={`${previewPdfUrl
+                      ? 'md:w-1/3 lg:w-1/4 md:border-r border-slate-200 shrink-0'
+                      : 'w-full'
+                    } p-4 md:p-6 overflow-y-auto bg-slate-50`}
+                >
+                  <div className="space-y-4">
                     <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                      <h3 className="text-sm font-bold text-slate-800 mb-2">Paper Overview</h3>
+                      <h3 className="text-sm font-bold text-slate-800 mb-2">
+                        Paper Overview
+                      </h3>
+
+                      {previewItem.parent.versionFamilyId && (
+                        <p className="mb-3 text-xs font-bold text-indigo-700">
+                          Version:{' '}
+                          {previewItem.parent.versionLabel ||
+                            previewItem.parent.year ||
+                            'Year unknown'}
+                          {previewItem.parent.versionIsOriginal
+                            ? ' (Original)'
+                            : ''}
+                        </p>
+                      )}
+
                       <div className="flex flex-wrap gap-2">
-                        {(Array.isArray(previewItem.parent.topic) ? previewItem.parent.topic : (previewItem.parent.topic ? [previewItem.parent.topic] : [])).filter(Boolean).map((t, i) => (
-                          <span key={i} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1">
-                            <Tag size={12} /> {t}
+                        {(
+                          Array.isArray(previewItem.parent.topic)
+                            ? previewItem.parent.topic
+                            : previewItem.parent.topic
+                              ? [previewItem.parent.topic]
+                              : []
+                        ).filter(Boolean).map((topic, index) => (
+                          <span
+                            key={index}
+                            className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1"
+                          >
+                            <Tag size={12} /> {topic}
                           </span>
                         ))}
                       </div>
                     </div>
 
                     <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                      <FileText size={14} /> All Sub-Questions
+                      <FileText size={14} />
+                      {previewItem.isFullPaper
+                        ? 'All Sub-Questions'
+                        : 'Linked Sub-Question'}
                     </h3>
 
-                    {previewItem.parent.subQuestions?.map((sq, idx) => (
-                      <div key={sq.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                        <div className="flex justify-between items-start mb-2">
-                          <span className="bg-slate-800 text-white text-xs px-2 py-1 rounded-md font-bold">
-                            Q{sq.label}
-                          </span>
-                          {sq.marks && (
-                            <span className="text-xs text-slate-500 font-normal border border-slate-200 px-1.5 py-0.5 rounded bg-slate-50">
-                              {sq.marks} Marks
+                    {(
+                      previewItem.isFullPaper
+                        ? previewItem.parent.subQuestions || []
+                        : previewItem.child
+                          ? [previewItem.child]
+                          : []
+                    ).map(sq => {
+                      const preferredText = previewLanguage === 'zh'
+                        ? sq.contentChi
+                        : sq.content;
+
+                      const alternativeText = previewLanguage === 'zh'
+                        ? sq.content
+                        : sq.contentChi;
+
+                      const text = preferredText || alternativeText || '';
+
+                      return (
+                        <div
+                          key={sq.id}
+                          className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm"
+                        >
+                          <div className="flex justify-between items-start mb-2">
+                            <span className="bg-slate-800 text-white text-xs px-2 py-1 rounded-md font-bold">
+                              Q{sq.label}
                             </span>
+
+                            {previewItem.parent.paperType === 'Paper 1 (DBQ)' &&
+                              String(sq.marks ?? '') !== '' && (
+                                <span className="text-xs text-slate-500 border border-slate-200 px-1.5 py-0.5 rounded bg-slate-50">
+                                  {sq.marks} Marks
+                                </span>
+                              )}
+                          </div>
+
+                          {!preferredText && alternativeText && (
+                            <p className="mb-2 text-xs text-amber-700">
+                              Selected language unavailable; showing the other language.
+                            </p>
                           )}
+
+                          <div className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
+                            {text || (
+                              <span className="text-slate-400 italic">
+                                No text content available.
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <div className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap mb-3">
-                          {sq.content || <span className="text-slate-400 italic">No text content available.</span>}
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
 
-              <div className="flex-1 bg-slate-200 flex flex-col h-full relative">
-                {viewingAnswer ? (
-                  previewItem.parent.hasAnswer ? (
-                    <iframe
-                      src={`${previewItem.parent.answerFileUrl}#view=Fit&pagemode=thumbs&page=1&zoom=page-fit`}
-                      className="w-full h-full"
-                      title="Answer Preview"
-                    />
-                  ) : (
-                    <div className="flex items-center justify-center h-full text-slate-500">No answer file available.</div>
-                  )
-                ) : (
-                  previewItem.parent.hasFile ? (
-                    <iframe
-                      src={`${previewItem.parent.fileUrl}#view=Fit&pagemode=thumbs&page=1&zoom=page-fit`}
-                      className="w-full h-full"
-                      title="PDF Preview"
-                    />
-                  ) : (
-                    <div className="flex items-center justify-center h-full text-slate-500">No question file available.</div>
-                  )
-                )}
-              </div>
+              {(previewPdfUrl || viewingAnswer) && (
+                <div className="flex-1 min-w-0 min-h-[50vh] md:min-h-0 bg-slate-200 flex flex-col relative">
+                  <div className="shrink-0 px-3 py-2 bg-slate-100 text-xs text-slate-600 border-b border-slate-300">
+                    {previewLanguage === 'zh'
+                      ? 'Chinese preferred'
+                      : 'English preferred'}
+                    {' — '}
+                    Falls back to the other language when its PDF is unavailable.
+                  </div>
+
+                  <div className="relative flex-1 min-h-[45vh] md:min-h-0">
+                    <div className="absolute inset-0">
+                      <MarksPdfAttachment
+                        fileUrl={previewPdfUrl}
+                        title={viewingAnswer ? 'Answer Preview' : 'Question Preview'}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

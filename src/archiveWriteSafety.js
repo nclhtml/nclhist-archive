@@ -8,9 +8,14 @@ import {
 
 import { db } from './firebase.js';
 
-// Shared revision document used by the updated upload/delete handlers.
-// If permission is denied, stop rather than bypassing duplicate protection.
 const guardRef = doc(db, 'system_settings', 'archive_write_guard');
+
+const VERSION_FIELDS = [
+  'versionFamilyId',
+  'versionId',
+  'versionLabel',
+  'versionIsOriginal'
+];
 
 export function normalizeArchiveName(value) {
   return String(value ?? '')
@@ -21,7 +26,6 @@ export function normalizeArchiveName(value) {
     .replace(/\s+/g, '');
 }
 
-// Recover the exact exam family, not a loose title prefix.
 export function getArchiveBatchTitle(archive) {
   if (String(archive.batchTitle || '').trim()) {
     return String(archive.batchTitle).trim();
@@ -43,13 +47,58 @@ export function getArchiveBatchTitle(archive) {
 }
 
 export function getArchiveQuestionNumber(archive) {
-  const match = String(archive.title || '')
-    .match(/D\s+Q\s*(\d+)$/i);
-
+  const match = String(archive.title || '').match(/D\s+Q\s*(\d+)$/i);
   return match ? String(Number(match[1])) : '';
 }
 
-// Stable comparison also works when object property order differs.
+export function canVersionArchive(archive) {
+  const origin = String(archive?.origin || '')
+    .normalize('NFKC')
+    .trim()
+    .toLowerCase();
+
+  if (!origin) return false;
+
+  return !(
+    origin.includes('dse') ||
+    origin.includes('mock') ||
+    origin.includes('internal assessment') ||
+    origin.includes('internal school exam')
+  );
+}
+
+export function getArchiveVersionLabel(archive) {
+  const label = String(
+    archive?.versionLabel || archive?.year || 'Year unknown'
+  );
+
+  return archive?.versionFamilyId
+    ? `${label}${archive.versionIsOriginal ? ' (Original)' : ''}`
+    : `${label} (Original)`;
+}
+
+// Once a family exists, title/year matching must never combine versions.
+export function getArchiveEditGroup(records, selected) {
+  if (selected.versionFamilyId) {
+    return records.filter(item =>
+      item.versionFamilyId === selected.versionFamilyId &&
+      item.versionId === selected.versionId
+    );
+  }
+
+  const base = getArchiveBatchTitle(selected);
+
+  if (!base) return [selected];
+
+  return records.filter(item =>
+    !item.versionFamilyId &&
+    normalizeArchiveName(getArchiveBatchTitle(item)) ===
+      normalizeArchiveName(base) &&
+    String(item.year) === String(selected.year) &&
+    item.origin === selected.origin
+  );
+}
+
 function stableValue(value) {
   if (Array.isArray(value)) return value.map(stableValue);
 
@@ -77,31 +126,137 @@ function withoutId(value) {
   return data;
 }
 
+function versionMetadata(record) {
+  if (!record?.versionFamilyId) return {};
+
+  if (
+    typeof record.versionFamilyId !== 'string' ||
+    typeof record.versionId !== 'string' ||
+    !record.versionId ||
+    typeof record.versionLabel !== 'string' ||
+    !record.versionLabel
+  ) {
+    throw new Error('This record has incomplete version information.');
+  }
+
+  return Object.fromEntries(
+    VERSION_FIELDS.map(field => [field, record[field]])
+  );
+}
+
+function assertUnchanged(expected, actual) {
+  if (
+    !actual ||
+    fingerprint(withoutId(actual)) !== fingerprint(withoutId(expected))
+  ) {
+    throw new Error(
+      `"${expected.title}" changed or was deleted after the editor opened.\n\n` +
+      'Close the editor, refresh, and reopen Edit Parent. Nothing was saved.'
+    );
+  }
+}
+
+function getNewVersionMetadata(form) {
+  const draft = form.versionDraft;
+  if (!draft) return {};
+
+  const sources = draft.sources || [];
+  const first = sources[0];
+
+  if (!first || !sources.every(canVersionArchive)) {
+    throw new Error('These documents cannot have additional versions.');
+  }
+
+  const base = getArchiveBatchTitle(first) || first.title;
+
+  if (
+    normalizeArchiveName(form.title) !== normalizeArchiveName(base) ||
+    form.origin !== first.origin
+  ) {
+    throw new Error(
+      'A new version must keep the original document title and origin.'
+    );
+  }
+
+  const label = String(form.versionLabel || form.year || '').trim();
+
+  if (!label || label.length > 80) {
+    throw new Error('Enter a version label of 1–80 characters.');
+  }
+
+  const familyId = first.versionFamilyId ||
+    [...sources].map(item => item.id).sort()[0];
+
+  if (
+    draft.familyId !== familyId ||
+    typeof draft.versionId !== 'string' ||
+    !draft.versionId ||
+    sources.some(item =>
+      first.versionFamilyId
+        ? (
+          item.versionFamilyId !== first.versionFamilyId ||
+          item.versionId !== first.versionId
+        )
+        : Boolean(item.versionFamilyId)
+    )
+  ) {
+    throw new Error('The version draft is invalid. Reopen Edit Parent.');
+  }
+
+  return {
+    versionFamilyId: familyId,
+    versionId: draft.versionId,
+    versionLabel: label,
+    versionIsOriginal: false
+  };
+}
+
 export function buildBatchWriteEntries(form, originals) {
   const originalMap = new Map(originals.map(item => [item.id, item]));
   const baseTitle = String(form.title || '').trim();
 
-  // Editing an existing exam must not silently rename its records.
+  if (originals.length && form.versionDraft) {
+    throw new Error('A draft cannot edit an existing version and create one together.');
+  }
+
+  let metadata = {};
+
   if (originals.length) {
     const first = originals[0];
     const originalBase = getArchiveBatchTitle(first) || first.title;
 
     if (
-      normalizeArchiveName(baseTitle) !==
-        normalizeArchiveName(originalBase) ||
+      normalizeArchiveName(baseTitle) !== normalizeArchiveName(originalBase) ||
       form.origin !== first.origin ||
       String(form.year) !== String(first.year)
     ) {
       throw new Error(
-        'When editing an existing exam, keep its exam title, origin and year unchanged. ' +
-        'This prevents existing question links from being silently reassigned.'
+        'When editing, keep the original title, origin and year. ' +
+        'Use Add new version to create a different year/version.'
       );
     }
+
+    metadata = versionMetadata(first);
+
+    if (originals.some(item =>
+      (item.versionFamilyId || '') !== (first.versionFamilyId || '') ||
+      (item.versionId || '') !== (first.versionId || '')
+    )) {
+      throw new Error('This editing session contains different versions.');
+    }
+  } else {
+    metadata = getNewVersionMetadata(form);
   }
 
-  // Allocate new DBQ numbers above the existing/explicit numbers.
-  // Removing Q2 must NOT rename Q3 to Q2.
   let highestNumber = 0;
+
+  // Include removed originals, so their numbers are not silently reused.
+  originals.forEach(item => {
+    highestNumber = Math.max(
+      highestNumber,
+      Number(getArchiveQuestionNumber(item)) || 0
+    );
+  });
 
   form.questions.forEach(question => {
     const original = originalMap.get(question.id);
@@ -119,8 +274,7 @@ export function buildBatchWriteEntries(form, originals) {
 
     if (typeof question.id === 'string' && !original) {
       throw new Error(
-        'This draft contains a saved document from outside the exam being edited. ' +
-        'Remove it from this draft and edit its original exam separately.'
+        'This draft contains a saved record from another editing session.'
       );
     }
 
@@ -129,9 +283,7 @@ export function buildBatchWriteEntries(form, originals) {
     }
 
     if (original && question.paperType !== original.paperType) {
-      throw new Error(
-        `Keep the existing paper type for "${original.title}".`
-      );
+      throw new Error(`Keep the existing paper type for "${original.title}".`);
     }
 
     let title;
@@ -149,7 +301,7 @@ export function buildBatchWriteEntries(form, originals) {
       }
 
       if (!/^[1-9]\d*$/.test(questionNumber)) {
-        throw new Error('DBQ question numbers must be positive whole numbers.');
+        throw new Error('DBQ numbers must be positive whole numbers.');
       }
 
       title = `${baseTitle}D Q${questionNumber}`;
@@ -157,33 +309,54 @@ export function buildBatchWriteEntries(form, originals) {
       title = `${baseTitle}E`;
     }
 
-    const subQuestions = (question.subQuestions || []).map(subQuestion => ({
-      ...subQuestion,
+    // Preserve corresponding legacy question titles in a new version.
+    // This also supports single documents with non-standard titles.
+    if (!original && form.versionDraft) {
+      const sources = form.versionDraft.sources;
+
+      let corresponding = sources.find(item =>
+        item.paperType === question.paperType &&
+        (
+          question.paperType === 'Paper 2 (Essay)' ||
+          getArchiveQuestionNumber(item) === questionNumber
+        )
+      );
+
+      if (
+        sources.length === 1 &&
+        form.questions.length === 1 &&
+        sources[0].paperType === question.paperType
+      ) {
+        corresponding = sources[0];
+      }
+
+      if (corresponding) title = corresponding.title;
+    }
+
+    const subQuestions = (question.subQuestions || []).map(sub => ({
+      ...sub,
       marks: question.paperType === 'Paper 2 (Essay)'
         ? ''
-        : (subQuestion.marks ?? '')
+        : (sub.marks ?? '')
     }));
 
     if (!subQuestions.length) {
-      throw new Error(
-        `"${title}" has no sub-questions. Remove its whole question card instead.`
-      );
+      throw new Error(`"${title}" needs at least one sub-question.`);
     }
 
-    const labels = subQuestions.map(subQuestion =>
-      normalizeArchiveName(subQuestion.label)
+    const labels = subQuestions.map(sub => normalizeArchiveName(sub.label));
+    const ids = subQuestions.map(sub =>
+      sub.id === undefined || sub.id === null ? '' : String(sub.id)
     );
-
-    const ids = subQuestions.map(subQuestion => String(subQuestion.id));
 
     if (
       labels.some(label => !label) ||
+      ids.some(id => !id) ||
       new Set(labels).size !== labels.length ||
       new Set(ids).size !== ids.length
     ) {
       throw new Error(
-        `"${title}" contains blank/duplicate sub-question labels or duplicate IDs. ` +
-        'Remove the duplicated sub-question before saving.'
+        `"${title}" has blank or duplicated sub-question labels/IDs.`
       );
     }
 
@@ -199,33 +372,31 @@ export function buildBatchWriteEntries(form, originals) {
         topic: question.topic || [],
         tier: form.tier,
         rating: question.rating ?? original?.rating ?? 0,
-        subQuestions
+        subQuestions,
+        ...metadata
       }
     };
   });
 }
 
-// Run BEFORE uploading any PDF bytes.
 export async function prepareArchiveWrite({
   originals = [],
   entries = [],
-  newExamTitle = ''
+  newExamTitle = '',
+  versionDraft = null
 }) {
-  if (originals.length + entries.length > 150) {
+  const sources = versionDraft?.sources || [];
+
+  if (originals.length + entries.length + sources.length > 150) {
     throw new Error(
-      'This editor supports at most 150 combined original/new question records per save. ' +
-      'Nothing was changed.'
+      'At most 150 combined original, source and draft records are supported per save.'
     );
   }
 
-  // Read the revision BEFORE checking existing archive records.
   const guardSnapshot = await getDocFromServer(guardRef);
   const version = guardSnapshot.data()?.version || '';
 
-  const archiveSnapshot = await getDocsFromServer(
-    collection(db, 'archives')
-  );
-
+  const archiveSnapshot = await getDocsFromServer(collection(db, 'archives'));
   const current = archiveSnapshot.docs.map(snapshot => ({
     ...snapshot.data(),
     id: snapshot.id
@@ -234,76 +405,144 @@ export async function prepareArchiveWrite({
   const currentMap = new Map(current.map(item => [item.id, item]));
   const originalIds = new Set(originals.map(item => item.id));
 
-  for (const original of originals) {
-    const saved = currentMap.get(original.id);
+  [...originals, ...sources].forEach(original => {
+    assertUnchanged(original, currentMap.get(original.id));
+  });
+
+  const promotions = [];
+
+  if (versionDraft) {
+    if (originals.length || !sources.length || !entries.length) {
+      throw new Error('Invalid new-version operation.');
+    }
+
+    const first = sources[0];
+    const meta = entries[0].data;
+
+    const actualGroup = getArchiveEditGroup(current, currentMap.get(first.id));
+    const sourceIds = new Set(sources.map(item => item.id));
 
     if (
-      !saved ||
-      fingerprint(withoutId(saved)) !==
-        fingerprint(withoutId(original))
+      actualGroup.length !== sources.length ||
+      actualGroup.some(item => !sourceIds.has(item.id))
     ) {
       throw new Error(
-        `"${original.title}" changed after this editor was opened. ` +
-        'Close the editor and reopen Edit Parent before saving.'
+        'The original question group changed. Reopen Edit Parent before adding a version.'
+      );
+    }
+
+    if (
+      !sources.every(canVersionArchive) ||
+      !meta.versionFamilyId ||
+      !meta.versionId ||
+      meta.versionIsOriginal !== false ||
+      entries.some(entry =>
+        entry.data.versionFamilyId !== meta.versionFamilyId ||
+        entry.data.versionId !== meta.versionId ||
+        entry.data.versionLabel !== meta.versionLabel ||
+        entry.data.origin !== first.origin
+      )
+    ) {
+      throw new Error('Invalid version identity.');
+    }
+
+    if (!first.versionFamilyId) {
+      const familyId = [...sourceIds].sort()[0];
+
+      if (meta.versionFamilyId !== familyId) {
+        throw new Error('The original family identifier changed.');
+      }
+
+      sources.forEach(item => {
+        promotions.push({
+          id: item.id,
+          data: {
+            versionFamilyId: familyId,
+            versionId: familyId,
+            versionLabel: String(item.year || 'Year unknown'),
+            versionIsOriginal: true
+          }
+        });
+      });
+    } else if (meta.versionFamilyId !== first.versionFamilyId) {
+      throw new Error('The new version belongs to a different family.');
+    }
+
+    const familyRecords = [
+      ...current.filter(item => item.versionFamilyId === meta.versionFamilyId),
+      ...promotions.map(item => ({
+        ...currentMap.get(item.id),
+        ...item.data
+      }))
+    ];
+
+    if (familyRecords.some(item =>
+      item.versionId === meta.versionId ||
+      normalizeArchiveName(item.versionLabel) ===
+        normalizeArchiveName(meta.versionLabel)
+    )) {
+      throw new Error(
+        `Version "${meta.versionLabel}" already exists in this family.\n\n` +
+        'Choose a different label, for example "2026 revised". ' +
+        'The year field can remain unchanged.'
       );
     }
   }
 
-  if (newExamTitle) {
-    const examKey = normalizeArchiveName(newExamTitle);
-
-    const existingExam = current.find(item =>
-      normalizeArchiveName(
-        getArchiveBatchTitle(item) || item.title
-      ) === examKey
+  if (newExamTitle && !versionDraft) {
+    const key = normalizeArchiveName(newExamTitle);
+    const existing = current.find(item =>
+      normalizeArchiveName(getArchiveBatchTitle(item) || item.title) === key
     );
 
-    if (existingExam) {
+    if (existing) {
       throw new Error(
-        `The exam "${newExamTitle}" already exists.\n\n` +
-        `Existing record: ${existingExam.title}\n` +
-        `ID: ${existingExam.id}\n\n` +
-        'Use Edit Parent on that exam to add Chinese files, answers or corrections. ' +
-        'Do not upload the full exam again.'
+        `The document family "${newExamTitle}" already exists.\n\n` +
+        'Use Edit Parent to correct it or Add new version to create a version.'
       );
     }
   }
 
+  const promotedMap = new Map(promotions.map(item => [item.id, item.data]));
   const names = new Set();
   const retainedIds = new Set();
 
   const plannedEntries = entries.map(entry => {
     const titleKey = normalizeArchiveName(entry.data.title);
 
-    if (!titleKey) throw new Error('A document title is missing.');
-
-    if (names.has(titleKey)) {
-      throw new Error(
-        `Duplicate question title in this draft: "${entry.data.title}".\n\n` +
-        'Keep only one card for each DBQ number and one grouped Essay card.'
-      );
+    if (!titleKey || names.has(titleKey)) {
+      throw new Error(`Missing or duplicated draft title: "${entry.data.title}".`);
     }
 
     names.add(titleKey);
 
     if (entry.id) {
       if (!originalIds.has(entry.id) || retainedIds.has(entry.id)) {
-        throw new Error('A saved document ID is invalid or repeated in this draft.');
+        throw new Error('A saved document ID is invalid or repeated.');
       }
 
       retainedIds.add(entry.id);
     }
 
-    const conflictingDocument = current.find(item =>
-      !originalIds.has(item.id) &&
-      normalizeArchiveName(item.title) === titleKey
-    );
+    const conflict = current.find(item => {
+      if (originalIds.has(item.id)) return false;
+      if (normalizeArchiveName(item.title) !== titleKey) return false;
 
-    if (conflictingDocument) {
+      const other = { ...item, ...(promotedMap.get(item.id) || {}) };
+
+      // Equal titles are valid ONLY across versions of the SAME family.
+      return !(
+        entry.data.versionFamilyId &&
+        other.versionFamilyId === entry.data.versionFamilyId &&
+        other.versionId &&
+        other.versionId !== entry.data.versionId
+      );
+    });
+
+    if (conflict) {
       throw new Error(
-        `"${entry.data.title}" already exists outside this editing session.\n\n` +
-        `Existing ID: ${conflictingDocument.id}\n` +
-        'Close this draft and edit the existing record instead.'
+        `"${entry.data.title}" already exists outside this version.\n` +
+        `Existing ID: ${conflict.id}`
       );
     }
 
@@ -315,29 +554,38 @@ export async function prepareArchiveWrite({
 
   const removed = originals.filter(item => !retainedIds.has(item.id));
   const removedIds = new Set(removed.map(item => item.id));
-
-  // Protect references to deleted whole documents and removed sub-questions.
   const removedChildLinks = new Set();
 
   for (const entry of plannedEntries) {
     const original = currentMap.get(entry.id);
     if (!original) continue;
 
-    const keptChildIds = new Set(
+    const kept = new Set(
       (entry.data.subQuestions || []).map(child => String(child.id))
     );
 
     (original.subQuestions || []).forEach(child => {
-      if (!keptChildIds.has(String(child.id))) {
+      if (!kept.has(String(child.id))) {
         removedChildLinks.add(`${original.id}_${child.id}`);
       }
     });
   }
 
-  if (removed.length || removedChildLinks.size) {
-    const assessmentSnapshot = await getDocsFromServer(
-      collection(db, 'assessments')
+  // Version deletion is deliberately not part of this feature.
+  // Retaining saved IDs avoids breaking old assignment links.
+  if (
+    originals.some(item => item.versionFamilyId) &&
+    (removed.length || removedChildLinks.size)
+  ) {
+    throw new Error(
+      'Saved version records and their question IDs must be retained.\n\n' +
+      'You may edit their wording, tags and attachments, or add questions. ' +
+      'To create a different question structure, use Add new version.'
     );
+  }
+
+  if (removed.length || removedChildLinks.size) {
+    const assessments = await getDocsFromServer(collection(db, 'assessments'));
 
     const isRemovedLink = link =>
       typeof link === 'string' &&
@@ -347,25 +595,21 @@ export async function prepareArchiveWrite({
         [...removedIds].some(id => link.startsWith(`${id}_`))
       );
 
-    const linkedAssessments = assessmentSnapshot.docs.filter(snapshot => {
-      const assessment = snapshot.data();
+    const linked = assessments.docs.filter(snapshot => {
+      const data = snapshot.data();
 
-      return (
-        isRemovedLink(assessment.linkedDocId) ||
-        (assessment.sectionsConfig || []).some(section =>
+      return isRemovedLink(data.linkedDocId) ||
+        (data.sectionsConfig || []).some(section =>
           isRemovedLink(section.linkedDocId)
-        )
-      );
+        );
     });
 
-    if (linkedAssessments.length) {
+    if (linked.length) {
       throw new Error(
-        'Removal stopped because these assessments still link to a document ' +
-        'or sub-question you are removing:\n\n' +
-        linkedAssessments.map(snapshot =>
+        'Removal stopped. These assessments still use the removed records:\n\n' +
+        linked.map(snapshot =>
           `${snapshot.data().name || 'Assessment'} [${snapshot.id}]`
-        ).join('\n') +
-        '\n\nKeep the linked copy, or relink those assessments to the copy you intend to keep first.'
+        ).join('\n')
       );
     }
   }
@@ -375,140 +619,116 @@ export async function prepareArchiveWrite({
     token: doc(collection(db, 'archives')).id,
     entries: plannedEntries,
     originals,
+    sources,
+    promotions,
     removed,
     currentMap
   };
 }
 
-// All archive creates, updates and removals are committed together.
-// No Storage uploads or UI changes take place inside the transaction.
+function checkPrivateAttachments(value, archiveId) {
+  if (!value || typeof value !== 'object') return;
+
+  for (const [key, child] of Object.entries(value)) {
+    if (
+      ['fileUrl', 'fileUrlChi', 'answerFileUrl', 'answerFileUrlChi'].includes(key) &&
+      child
+    ) {
+      if (typeof child !== 'string' || !child.startsWith('/archive-pdf?')) {
+        throw new Error('New versions must use protected PDF attachments.');
+      }
+
+      const params = new URLSearchParams(child.split('?')[1]);
+      const path = params.get('path') || '';
+
+      if (!path.startsWith(`archive_versions/${archiveId}/`)) {
+        throw new Error('A PDF attachment belongs to another version record.');
+      }
+    } else if (child && typeof child === 'object') {
+      checkPrivateAttachments(child, archiveId);
+    }
+  }
+}
+
 export async function commitArchiveWrite(plan, payloads, email) {
   if (payloads.length !== plan.entries.length) {
-    throw new Error('The prepared document count changed. Nothing was saved.');
+    throw new Error('The prepared document count changed.');
   }
 
-  const originalIds = new Set(plan.originals.map(item => item.id));
+  const expectedRecords = new Map(
+    [...plan.originals, ...(plan.sources || [])]
+      .map(item => [item.id, item])
+  );
 
-  const affectedIds = [
-    ...new Set([
-      ...originalIds,
-      ...plan.entries.map(entry => entry.id)
-    ])
-  ];
+  const originalIds = new Set(plan.originals.map(item => item.id));
+  const affectedIds = [...new Set([
+    ...expectedRecords.keys(),
+    ...plan.entries.map(entry => entry.id)
+  ])];
+
+  payloads.forEach((payload, index) => {
+    const entry = plan.entries[index];
+
+    if (
+      payload.title !== entry.data.title ||
+      payload.origin !== entry.data.origin ||
+      String(payload.year) !== String(entry.data.year) ||
+      VERSION_FIELDS.some(field =>
+        payload[field] !== entry.data[field]
+      )
+    ) {
+      throw new Error('Document/version identity changed during saving.');
+    }
+
+    if (payload.versionFamilyId && payload.versionIsOriginal === false) {
+      checkPrivateAttachments(payload, entry.id);
+    }
+  });
 
   await runTransaction(db, async transaction => {
-    const guardSnapshot = await transaction.get(guardRef);
+    const guard = await transaction.get(guardRef);
 
-    if ((guardSnapshot.data()?.version || '') !== plan.version) {
+    if ((guard.data()?.version || '') !== plan.version) {
       throw new Error(
         'Another archive save finished while this operation was preparing. ' +
-        'Close and reopen the editor, then try again. No archive changes from this operation were applied.'
+        'Refresh and reopen the editor. No archive changes were applied.'
       );
     }
 
-    // Read all affected documents before writing anything.
     const snapshots = [];
 
     for (const id of affectedIds) {
-      snapshots.push(
-        await transaction.get(doc(db, 'archives', id))
-      );
+      snapshots.push(await transaction.get(doc(db, 'archives', id)));
     }
 
-for (const snapshot of snapshots) {
-      const expected = plan.currentMap.get(snapshot.id);
+    for (const snapshot of snapshots) {
+      const expected = expectedRecords.get(snapshot.id);
 
-      if (originalIds.has(snapshot.id)) {
-        const documentLabel =
-          expected?.title || snapshot.id;
-
-        if (!expected) {
-          throw new Error(
-            'The original comparison record is missing.\n\n' +
-            `Document: ${documentLabel}\n` +
-            `Database ID: ${snapshot.id}\n\n` +
-            'Close the editor, refresh the page, and reopen Edit Parent.'
-          );
-        }
-
-        if (!snapshot.exists()) {
-          throw new Error(
-            'This document was deleted after saving started.\n\n' +
-            `Document: ${documentLabel}\n` +
-            `Database ID: ${snapshot.id}\n\n` +
-            'Close the editor, refresh the page, and reopen Edit Parent.'
-          );
-        }
-
-        // Compare the same representation on BOTH sides.
-        //
-        // "id" is used by the UI to identify the Firestore document.
-        // Some legacy records also contain an "id" data field.
-        // Do not mistake that legacy field for a content change.
-        //
-        // The actual Firestore document ID remains checked separately
-        // through snapshot.id and originalIds.
-        const actualData = withoutId(snapshot.data());
-        const expectedData = withoutId(expected);
-
-        if (
-          fingerprint(actualData) !==
-          fingerprint(expectedData)
-        ) {
-          const fieldNames = [
-            ...new Set([
-              ...Object.keys(expectedData),
-              ...Object.keys(actualData)
-            ])
-          ];
-
-          const changedFields = fieldNames.filter(field =>
-            fingerprint(actualData[field]) !==
-            fingerprint(expectedData[field])
-          );
-
-          // Log field names only, not question contents or PDF URLs.
-          console.error('Archive comparison detected a real difference:', {
-            documentId: snapshot.id,
-            title: documentLabel,
-            changedFields
-          });
-
-          throw new Error(
-            'The saved document changed while this operation was preparing.\n\n' +
-            `Document: ${documentLabel}\n` +
-            `Database ID: ${snapshot.id}\n` +
-            `Changed fields: ${changedFields.join(', ') || '(unknown)'}\n\n` +
-            'No archive changes from this transaction were applied.\n\n' +
-            'Close other editing tabs, refresh the page, and reopen Edit Parent. ' +
-            'If this repeats, send the full message including the changed fields.'
-          );
-        }
-      } else if (snapshot.exists()) {
-        throw new Error(
-          'A new document ID is already in use. Please retry.'
+      if (expected) {
+        assertUnchanged(
+          expected,
+          snapshot.exists()
+            ? { ...snapshot.data(), id: snapshot.id }
+            : null
         );
+      } else if (snapshot.exists()) {
+        throw new Error('A new archive ID is already in use. Please retry.');
       }
     }
 
     plan.entries.forEach((entry, index) => {
-      const payload = payloads[index];
-
-      if (
-        payload.title !== entry.data.title ||
-        payload.origin !== entry.data.origin ||
-        String(payload.year) !== String(entry.data.year)
-      ) {
-        throw new Error('Document identity changed during saving.');
-      }
-
       const target = doc(db, 'archives', entry.id);
 
       if (originalIds.has(entry.id)) {
-        transaction.update(target, payload);
+        transaction.update(target, payloads[index]);
       } else {
-        transaction.set(target, payload);
+        transaction.set(target, payloads[index]);
       }
+    });
+
+    (plan.promotions || []).forEach(item => {
+      // Metadata only: original content, years, IDs and links stay intact.
+      transaction.update(doc(db, 'archives', item.id), item.data);
     });
 
     plan.removed.forEach(item => {
@@ -522,9 +742,16 @@ for (const snapshot of snapshots) {
     }, { merge: true });
   });
 
-  return plan.entries.map((entry, index) => ({
-    ...(plan.currentMap.get(entry.id) || {}),
-    ...payloads[index],
-    id: entry.id
-  }));
+  return [
+    ...plan.entries.map((entry, index) => ({
+      ...(plan.currentMap.get(entry.id) || {}),
+      ...payloads[index],
+      id: entry.id
+    })),
+    ...(plan.promotions || []).map(item => ({
+      ...plan.currentMap.get(item.id),
+      ...item.data,
+      id: item.id
+    }))
+  ];
 }

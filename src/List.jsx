@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { collection, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
-import { db } from './firebase';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { auth, db } from './firebase.js';
+import { loadAccessibleArchives } from './archiveAccessClient.js';
 import { useAuth } from './main.jsx';
 import { useLanguage } from './LanguageContext.jsx';
 import { BookOpen, Star, CheckCircle, Download, Loader2, FileText, Layers, Eye, FolderPlus, Folder, Trash2, Edit2, ChevronDown, X } from 'lucide-react';
@@ -27,7 +28,7 @@ const CustomPDFViewer = ({ fileUrl }) => {
 };
 
 export default function List() {
-  const { user } = useAuth();
+  const { user, authLoading } = useAuth();
   const { t, language } = useLanguage();
   const isZh = language === 'zh' || language === 'zh-HK' || language === 'zh-TW';
   const [activeTab, setActiveTab] = useState('dse');
@@ -39,8 +40,21 @@ export default function List() {
   const [isCombining, setIsCombining] = useState(false);
   const [previewPdfUrl, setPreviewPdfUrl] = useState(null);
   const [activeFolderId, setActiveFolderId] = useState(null);
+  const [loadError, setLoadError] = useState('');
+  const [reload, setReload] = useState(0);
 
-  const DSE_YEARS = Array.from({ length: 2026 - 2012 + 1 }, (_, i) => 2026 - i);
+  // Invalidate unfinished loads/exports when this account or page changes.
+  const listSessionRef = useRef(0);
+  const combineBusyRef = useRef(false);
+
+  const DSE_YEARS = [...new Set(
+    archives
+      .filter(item =>
+        item.origin === 'DSE Pastpaper' &&
+        /^\d{4}$/.test(String(item.year))
+      )
+      .map(item => Number(item.year))
+  )].sort((a, b) => b - a);
 
   // Reset active folder when switching tabs
   useEffect(() => {
@@ -48,32 +62,106 @@ export default function List() {
   }, [activeTab]);
 
   useEffect(() => {
-    fetchData();
-  }, [user]);
+    let cancelled = false;
+    listSessionRef.current += 1;
 
-  const fetchData = async () => {
     setIsLoading(true);
-    try {
-      const archSnap = await getDocs(collection(db, "archives"));
-      setArchives(archSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+    setLoadError('');
+    setArchives([]);
+    setStarredItems([]);
+    setDoneItems([]);
+    setFolders({ favourites: [], done: [] });
+    setActiveFolderId(null);
+    setPreviewPdfUrl(null);
+    setIsCombining(false);
+    combineBusyRef.current = false;
 
-      if (user?.email) {
-        const progressSnap = await getDoc(doc(db, "user_progress", user.email.toLowerCase().trim()));
-        if (progressSnap.exists()) {
-          const data = progressSnap.data();
-          setStarredItems(data.starredItems || []);
-          setDoneItems(data.doneItems || []);
-          setFolders({
-            favourites: data.favouriteFolders || [],
-            done: data.doneFolders || []
-          });
-        }
-      }
-    } catch (error) {
-      console.error("Error fetching data:", error);
+    const cleanup = () => {
+      cancelled = true;
+      listSessionRef.current += 1;
+    };
+
+    if (authLoading) return cleanup;
+
+    if (!user?.email || !user?.isAuthorized) {
+      setIsLoading(false);
+      return cleanup;
     }
-    setIsLoading(false);
-  };
+
+    const fetchData = async () => {
+      let stage = 'permitted archive documents';
+
+      try {
+        const loadedArchives = await loadAccessibleArchives({
+          effectiveEmail: user.email
+        });
+
+        if (cancelled) return;
+
+        stage = 'your saved favourites and completed items';
+
+        const progressSnap = await getDoc(
+          doc(db, 'user_progress', user.email.toLowerCase().trim())
+        );
+
+        if (cancelled) return;
+
+        const progress = progressSnap.exists()
+          ? progressSnap.data()
+          : {};
+
+        setArchives(loadedArchives);
+        setStarredItems(
+          Array.isArray(progress.starredItems)
+            ? progress.starredItems
+            : []
+        );
+        setDoneItems(
+          Array.isArray(progress.doneItems)
+            ? progress.doneItems
+            : []
+        );
+        setFolders({
+          favourites: Array.isArray(progress.favouriteFolders)
+            ? progress.favouriteFolders
+            : [],
+          done: Array.isArray(progress.doneFolders)
+            ? progress.doneFolders
+            : []
+        });
+      } catch (error) {
+        if (cancelled) return;
+
+        console.error(`List loading failed at ${stage}:`, error);
+
+        setLoadError(
+          `Could not load ${stage}.\n` +
+          `${error.code || 'load-error'}: ` +
+          (error.message || 'Please try again.')
+        );
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    };
+
+    fetchData();
+    return cleanup;
+  }, [
+    authLoading,
+    user?.email,
+    user?.role,
+    user?.isAdmin,
+    user?.isAuthorized,
+    reload
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (previewPdfUrl?.startsWith('blob:')) {
+        URL.revokeObjectURL(previewPdfUrl);
+      }
+    };
+  }, [previewPdfUrl]);
 
   const saveFoldersToFirebase = async (newFolders) => {
     if (!user?.email) return;
@@ -88,10 +176,195 @@ export default function List() {
     }
   };
 
+  const getDsePaperData = (
+    year,
+    paperType,
+    sourceArchives = archives
+  ) => {
+    const records = sourceArchives.filter(item =>
+      item.origin === 'DSE Pastpaper' &&
+      String(item.year) === String(year) &&
+      item.paperType === paperType &&
+      item.archiveAccess?.policyVersion === 2 &&
+      item.archiveAccess?.full === true
+    );
+
+    const unavailable = reason => ({
+      ready: false,
+      reason,
+      documents: [],
+      questions: []
+    });
+
+    if (paperType === 'Paper 1 (DBQ)') {
+      const documents = [];
+
+      for (let number = 1; number <= 4; number++) {
+        const matches = records.filter(item => {
+          const savedNumber = String(item.questionNumber || '').trim();
+
+          const titleMatch = String(item.title || '')
+            .match(/\bQ\s*([1-4])\b/i);
+
+          const actualNumber = /^[1-4]$/.test(savedNumber)
+            ? savedNumber
+            : titleMatch?.[1];
+
+          return actualNumber === String(number);
+        });
+
+        if (matches.length !== 1) {
+          return unavailable(
+            matches.length === 0
+              ? `Q${number} is unavailable, locked, or not identifiable.`
+              : `More than one record represents Q${number}; ask the administrator to check duplicates.`
+          );
+        }
+
+        const record = matches[0];
+        const fileUrl = isZh ? record.fileUrlChi : record.fileUrl;
+
+        if (!fileUrl) {
+          return unavailable(
+            `Q${number} has no accessible ${isZh ? 'Chinese' : 'English'} question PDF.`
+          );
+        }
+
+        documents.push(record);
+      }
+
+      return {
+        ready: true,
+        reason: '',
+        documents,
+        questions: []
+      };
+    }
+
+    const questions = [];
+
+    for (let number = 1; number <= 7; number++) {
+      const matches = [];
+
+      records.forEach(record => {
+        (record.subQuestions || []).forEach(question => {
+          const label = String(question.label || '')
+            .trim()
+            .replace(/^Q\s*/i, '');
+
+          if (label === String(number)) {
+            matches.push(question);
+          }
+        });
+      });
+
+      if (matches.length !== 1) {
+        return unavailable(
+          matches.length === 0
+            ? `Essay Q${number} is unavailable or locked.`
+            : `More than one essay represents Q${number}; ask the administrator to check duplicates.`
+        );
+      }
+
+      const question = matches[0];
+      const content = isZh ? question.contentChi : question.content;
+
+      if (!String(content || '').trim()) {
+        return unavailable(
+          `Essay Q${number} has no ${isZh ? 'Chinese' : 'English'} question text.`
+        );
+      }
+
+      questions.push(question);
+    }
+
+    return {
+      ready: true,
+      reason: '',
+      documents: records,
+      questions
+    };
+  };
+
+  const fetchQuestionPdf = async (fileUrl, effectiveEmail) => {
+    let response;
+
+    if (fileUrl.startsWith('/archive-pdf?')) {
+      const signedInUser = auth.currentUser;
+
+      if (!signedInUser) {
+        throw new Error('Please sign in again.');
+      }
+
+      const parameters = new URLSearchParams(
+        fileUrl.slice(fileUrl.indexOf('?') + 1)
+      );
+
+      const requestParameters = new URLSearchParams({
+        bucket: parameters.get('bucket') || '',
+        path: parameters.get('path') || '',
+        as: effectiveEmail
+      });
+
+      const token = await signedInUser.getIdToken();
+
+      response = await fetch(
+        'https://us-central1-nclhist.cloudfunctions.net/archiveVersionPdf?' +
+        requestParameters.toString(),
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-store'
+        }
+      );
+    } else {
+      // Never send Firebase authentication headers to an arbitrary URL.
+      response = await fetch(fileUrl);
+    }
+
+    if (!response.ok) {
+      throw new Error(`Question PDF request failed: HTTP ${response.status}.`);
+    }
+
+    return response.arrayBuffer();
+  };
+
   const handleCombineAndDownload = async (year, paperType, action = 'download') => {
+    if (
+      authLoading ||
+      !user?.isAuthorized ||
+      !user?.email ||
+      combineBusyRef.current
+    ) return;
+
+    const operationSession = listSessionRef.current;
+
+    const assertCurrentSession = () => {
+      if (listSessionRef.current !== operationSession) {
+        throw new Error('The account or page changed. Export cancelled.');
+      }
+    };
+
+    combineBusyRef.current = true;
     setIsCombining(true);
 
     try {
+      // Recheck the current server policy before preparing an export.
+      const freshArchives = await loadAccessibleArchives({
+        effectiveEmail: user.email
+      });
+
+      assertCurrentSession();
+
+      const paperData = getDsePaperData(
+        year,
+        paperType,
+        freshArchives
+      );
+
+      if (!paperData.ready) {
+        throw new Error(paperData.reason);
+      }
+
       const mergedPdf = await PDFDocument.create();
 
       // Register fontkit to support custom fonts
@@ -287,32 +560,41 @@ export default function List() {
         drawMixedText(coverPage, `${year}-DSE-HIST ${isPaper1 ? '1' : '2'}-1`, 50, 60, 10);
       }
 
-      // --- 2. ADD CONTENT PAGES ---
+      // --- 2. ADD ONLY COMPLETE, PERMITTED CONTENT ---
+      assertCurrentSession();
+
       if (isPaper1) {
-        const matchingDocs = archives.filter(a => a.origin === "DSE Pastpaper" && a.year?.toString() === year.toString() && a.paperType === paperType && (isZh ? a.fileUrlChi : a.fileUrl));
-        if (matchingDocs.length === 0) {
-          alert(`No PDF files found for ${year} ${paperType} in ${isZh ? 'Chinese' : 'English'}.`);
-          setIsCombining(false);
-          return;
-        }
-        matchingDocs.sort((a, b) => a.title.localeCompare(b.title));
-        for (const doc of matchingDocs) {
-          try {
-            const response = await fetch(isZh ? doc.fileUrlChi : doc.fileUrl);
-            const arrayBuffer = await response.arrayBuffer();
-            const pdf = await PDFDocument.load(arrayBuffer);
-            const copiedPages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
-            copiedPages.forEach(page => mergedPdf.addPage(page));
-          } catch (err) { console.warn(`Failed to load PDF for ${doc.title}`, err); }
+        for (const document of paperData.documents) {
+          assertCurrentSession();
+
+          const fileUrl = isZh
+            ? document.fileUrlChi
+            : document.fileUrl;
+
+          const arrayBuffer = await fetchQuestionPdf(
+            fileUrl,
+            user.email
+          );
+
+          assertCurrentSession();
+
+          const pdf = await PDFDocument.load(arrayBuffer);
+
+          if (pdf.getPageCount() === 0) {
+            throw new Error(`${document.title} contains no PDF pages.`);
+          }
+
+          const copiedPages = await mergedPdf.copyPages(
+            pdf,
+            pdf.getPageIndices()
+          );
+
+          copiedPages.forEach(page => mergedPdf.addPage(page));
         }
       } else {
-        // Paper 2: Fetch text from subQuestions
-        const paper2Doc = archives.find(a => a.origin === "DSE Pastpaper" && a.year?.toString() === year.toString() && a.paperType === "Paper 2 (Essay)");
-        if (!paper2Doc || !paper2Doc.subQuestions || paper2Doc.subQuestions.length === 0) {
-          alert(`No essay questions found for ${year} Paper 2 in the database.`);
-          setIsCombining(false);
-          return;
-        }
+        const paper2Doc = {
+          subQuestions: paperData.questions
+        };
 
         const qPage = mergedPdf.addPage();
         let currentY = height - 80;
@@ -392,6 +674,8 @@ export default function List() {
       }
 
       const mergedPdfBytes = await mergedPdf.save();
+      assertCurrentSession();
+
       const blob = new Blob([mergedPdfBytes], { type: 'application/pdf' });
       const url = URL.createObjectURL(blob);
 
@@ -407,10 +691,20 @@ export default function List() {
         URL.revokeObjectURL(url);
       }
     } catch (error) {
-      console.error("Error combining PDFs:", error);
-      alert("Failed to combine PDFs.");
+      console.error('Error combining PDFs:', error);
+
+      if (listSessionRef.current === operationSession) {
+        alert(
+          'The paper was not exported.\n\n' +
+          (error.message || 'Please try again.')
+        );
+      }
+    } finally {
+      if (listSessionRef.current === operationSession) {
+        combineBusyRef.current = false;
+        setIsCombining(false);
+      }
     }
-    setIsCombining(false);
   };
 
   // Folder Management Handlers
@@ -452,33 +746,86 @@ export default function List() {
     saveFoldersToFirebase(newFolders);
   };
 
-  // Filter lists based on progress IDs
+  // Saved stars/completion IDs never grant access.
+  // Resolve them only against the server-permitted catalogue.
   const getFilteredList = (idList) => {
     const results = [];
-    idList.forEach(id => {
-      if (id.includes('_')) {
-        const [parentId, childId] = id.split('_');
-        const parent = archives.find(a => a.id === parentId);
-        if (parent) {
-          const child = parent.subQuestions?.find(sq => sq.id.toString() === childId);
-          if (child) results.push({ ...parent, specificChild: child, uniqueId: id });
+
+    [...new Set(idList)].forEach(id => {
+      if (typeof id !== 'string') return;
+
+      const exactParent = archives.find(archive => archive.id === id);
+
+      if (exactParent) {
+        results.push({ ...exactParent, uniqueId: id });
+        return;
+      }
+
+      for (const parent of archives) {
+        const child = (parent.subQuestions || []).find(
+          question => `${parent.id}_${question.id}` === id
+        );
+
+        if (child) {
+          results.push({
+            ...parent,
+            specificChild: child,
+            uniqueId: id
+          });
+          break;
         }
-      } else {
-        const parent = archives.find(a => a.id === id);
-        if (parent) results.push({ ...parent, uniqueId: id });
       }
     });
+
     return results;
   };
 
-  if (isLoading) {
-    return <div className="flex justify-center py-20"><Loader2 className="animate-spin text-blue-600 w-10 h-10" /></div>;
+  if (authLoading || isLoading) {
+    return (
+      <div className="flex justify-center py-20">
+        <Loader2 className="animate-spin text-blue-600 w-10 h-10" />
+      </div>
+    );
   }
 
-  // Updated to use the correct 'dse_only' role from app.jsx
-  const allowedRoles = ['admin', 'dse_only', 's6dse'];
-  const userRole = user?.role?.toLowerCase() || '';
-  const hasAccess = user?.isAdmin || allowedRoles.includes(userRole);
+  if (!user?.isAuthorized) {
+    return (
+      <div className="max-w-xl mx-auto my-8 rounded-xl border border-slate-200 bg-white p-5 text-center">
+        <h2 className="font-bold text-slate-800">
+          Sign in to view your lists
+        </h2>
+        <p className="mt-2 text-sm text-slate-600">
+          Use an account with saved website access.
+        </p>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div role="alert" className="max-w-xl mx-auto my-8 rounded-xl border border-red-200 bg-red-50 p-5">
+        <h2 className="font-bold text-red-800">
+          Lists could not be loaded
+        </h2>
+        <p className="mt-2 text-sm text-red-700 whitespace-pre-wrap">
+          {loadError}
+        </p>
+        <button
+          type="button"
+          onClick={() => setReload(value => value + 1)}
+          className="mt-4 rounded-lg bg-red-700 px-4 py-2 text-white"
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
+
+  // Eligibility comes from returned document permissions,
+  // not a hard-coded role name such as "s6dse".
+  const hasAccess = archives.some(
+    archive => archive.origin === 'DSE Pastpaper'
+  );
 
   const favouriteList = getFilteredList(starredItems);
   const completedList = getFilteredList(doneItems);
@@ -527,35 +874,69 @@ export default function List() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
+                {DSE_YEARS.length === 0 && (
+                  <tr>
+                    <td colSpan={3} className="p-6 text-center text-sm text-slate-500">
+                      No numbered examination years are available.
+                    </td>
+                  </tr>
+                )}
+
                 {DSE_YEARS.map(year => (
                   <tr key={year} className="hover:bg-slate-50">
-                    <td className="p-2 sm:p-4 text-center font-bold text-slate-700 text-sm sm:text-lg border-r border-slate-100">{year}</td>
-                    <td className="p-2 sm:p-4">
-                      <div className="flex flex-col gap-1 sm:gap-2 items-start">
-                        <span className="hidden sm:block text-sm font-medium text-slate-600">{t("Combined Q1-Q4")}</span>
-                        <div className="flex gap-1 sm:gap-2">
-                          <button onClick={() => handleCombineAndDownload(year, "Paper 1 (DBQ)", 'view')} disabled={isCombining} className="hidden sm:flex items-center gap-1 bg-slate-100 text-slate-700 hover:bg-slate-200 px-3 py-1.5 rounded-lg text-sm font-bold transition-colors disabled:opacity-50">
-                            <Eye size={16} /> {t("View")}
-                          </button>
-                          <button onClick={() => handleCombineAndDownload(year, "Paper 1 (DBQ)", 'download')} disabled={isCombining} className="flex items-center gap-1 bg-blue-50 text-blue-700 hover:bg-blue-100 px-2 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-colors disabled:opacity-50">
-                            <Download size={16} /> <span className="hidden sm:inline">{t("Download")}</span>
-                          </button>
-                        </div>
-                      </div>
+                    <td className="p-2 sm:p-4 text-center font-bold text-slate-700 border-r border-slate-100">
+                      {year}
                     </td>
-                    <td className="p-2 sm:p-4">
-                      <div className="flex flex-col gap-1 sm:gap-2 items-start">
-                        <span className="hidden sm:block text-sm font-medium text-slate-600">{t("All 7 Sub-questions")}</span>
-                        <div className="flex gap-1 sm:gap-2">
-                          <button onClick={() => handleCombineAndDownload(year, "Paper 2 (Essay)", 'view')} disabled={isCombining} className="hidden sm:flex items-center gap-1 bg-slate-100 text-slate-700 hover:bg-slate-200 px-3 py-1.5 rounded-lg text-sm font-bold transition-colors disabled:opacity-50">
-                            <Eye size={16} /> {t("View")}
-                          </button>
-                          <button onClick={() => handleCombineAndDownload(year, "Paper 2 (Essay)", 'download')} disabled={isCombining} className="flex items-center gap-1 bg-purple-50 text-purple-700 hover:bg-purple-100 px-2 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-colors disabled:opacity-50">
-                            <Download size={16} /> <span className="hidden sm:inline">{t("Download")}</span>
-                          </button>
-                        </div>
-                      </div>
-                    </td>
+
+                    {['Paper 1 (DBQ)', 'Paper 2 (Essay)'].map(paperType => {
+                      const availability = getDsePaperData(year, paperType);
+
+                      return (
+                        <td key={paperType} className="p-2 sm:p-4 align-top">
+                          <div className="space-y-2">
+                            <p className="text-xs text-slate-600">
+                              {paperType === 'Paper 1 (DBQ)'
+                                ? 'Combined Q1–Q4'
+                                : 'All seven essay questions'}
+                              {' — '}
+                              {isZh ? 'Chinese' : 'English'}
+                            </p>
+
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                disabled={isCombining || !availability.ready}
+                                onClick={() =>
+                                  handleCombineAndDownload(year, paperType, 'view')
+                                }
+                                className="flex items-center gap-1 rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-700 disabled:opacity-40"
+                              >
+                                <Eye size={14} />
+                                {t('View')}
+                              </button>
+
+                              <button
+                                type="button"
+                                disabled={isCombining || !availability.ready}
+                                onClick={() =>
+                                  handleCombineAndDownload(year, paperType, 'download')
+                                }
+                                className="flex items-center gap-1 rounded-lg bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 disabled:opacity-40"
+                              >
+                                <Download size={14} />
+                                {t('Download')}
+                              </button>
+                            </div>
+
+                            {!availability.ready && (
+                              <p className="max-w-sm text-xs text-amber-800">
+                                {availability.reason}
+                              </p>
+                            )}
+                          </div>
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))}
               </tbody>
@@ -567,7 +948,11 @@ export default function List() {
               <X size={32} />
             </div>
             <h2 className="text-2xl font-bold text-slate-800 mb-2">{t("Access Denied")}</h2>
-            <p className="text-slate-500 mb-6">{t("You must have the S6 DSE tier to access full papers.")}</p>
+            <p className="text-slate-500 mb-6">
+              No DSE documents are currently available under this account's
+              saved tier or assignment permissions. Personal marks are not
+              required.
+            </p>
 
             <div className="bg-slate-50 p-6 rounded-xl border border-slate-100">
               <p className="text-slate-700 font-medium mb-4">{t("You can still review your saved individual questions here:")}</p>

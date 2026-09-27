@@ -11,6 +11,10 @@ const DseTrend = React.lazy(() => import('./DseTrend.jsx'));
 const PdfTool = React.lazy(() => import('./PdfTool.jsx'));
 const Record = React.lazy(() => import('./Record.jsx'));
 const Marks = React.lazy(() => import('./Marks.jsx'));
+const ArchiveVersionAssignments = React.lazy(
+  () => import('./ArchiveVersionAssignments.jsx')
+);
+const VersionPdfPage = React.lazy(() => import('./VersionPdf.jsx'));
 const StudentDashboard = React.lazy(() => import('./StudentDashboard.jsx'));
 const List = React.lazy(() => import('./List.jsx'));
 const Exercises = React.lazy(() => import('./Exercises.jsx'));
@@ -909,6 +913,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
           <Layout>
             <Routes>
               <Route path="/" element={<App />} />
+              <Route path="/archive-pdf" element={<VersionPdfPage />} />
               <Route path="/trend" element={<DseTrend />} />
               <Route path="/pdf" element={
                 <ProtectedAdminRoute>
@@ -923,7 +928,10 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               {/* PROTECTED ROUTE FOR MARKS (ADMIN ONLY) */}
               <Route path="/marks" element={
                 <ProtectedAdminRoute>
-                  <Marks />
+                  <>
+                    <ArchiveVersionAssignments />
+                    <Marks />
+                  </>
                 </ProtectedAdminRoute>
               } />
               <Route path="/lottery" element={
@@ -936,7 +944,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                   <Timetable />
                 </ProtectedAdminRoute>
               } />
-<Route path="/dashboard" element={<StudentDashboard />} />
+              <Route path="/dashboard" element={<StudentDashboard />} />
               <Route path="/list" element={<List />} />
               <Route path="/knowledge-test" element={<KnowledgeTest />} />
               <Route path="/exercises" element={<Exercises />} />

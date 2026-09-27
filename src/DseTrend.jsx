@@ -1,14 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Loader2 } from 'lucide-react';
 
-import {
-  collection,
-  getDocs,
-  query,
-  where
-} from 'firebase/firestore';
-
-import { db } from './firebase.js';
+import { useAuth } from './main.jsx';
+import { loadAccessibleArchives } from './archiveAccessClient.js';
 
 const DBQ_QUESTIONS = ['Q1', 'Q2', 'Q3', 'Q4'];
 const ESSAY_QUESTIONS = ['Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6', 'Q7'];
@@ -248,6 +242,7 @@ function TrendSection({
 }
 
 export default function DseTrend() {
+  const { user, authLoading } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [reload, setReload] = useState(0);
@@ -262,23 +257,43 @@ export default function DseTrend() {
 
     setLoading(true);
     setError('');
+    setYears([]);
+    setSelectedYear('');
+    setTrendData({});
+    setTrendDataEssay({});
+
+    if (authLoading) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!user?.email || !user?.isAuthorized) {
+      setLoading(false);
+
+      return () => {
+        cancelled = true;
+      };
+    }
 
     const loadTrend = async () => {
       try {
-        // Filter in Firestore, not after downloading all archives.
-        const snapshot = await getDocs(
-          query(
-            collection(db, 'archives'),
-            where('origin', '==', 'DSE Pastpaper')
-          )
+        // The backend enforces role, tier and version permissions.
+        const accessibleArchives = await loadAccessibleArchives({
+          effectiveEmail: user.email
+        });
+
+        if (cancelled) return;
+
+        const dseArchives = accessibleArchives.filter(
+          item => item.origin === 'DSE Pastpaper'
         );
 
         const dbqGrid = {};
         const essayGrid = {};
-        const foundYears = new Set(['SP', 'PP']);
+        const foundYears = new Set();
 
-        snapshot.docs.forEach(document => {
-          const item = document.data();
+        dseArchives.forEach(item => {
 
           if (
             item.year === undefined ||
@@ -358,9 +373,29 @@ export default function DseTrend() {
     return () => {
       cancelled = true;
     };
-  }, [reload]);
+  }, [
+    reload,
+    authLoading,
+    user?.email,
+    user?.role,
+    user?.isAdmin,
+    user?.isAuthorized
+  ]);
 
-  if (loading) {
+  if (!authLoading && !user?.isAuthorized) {
+    return (
+      <div className="mx-auto my-8 max-w-xl rounded-xl border border-slate-200 bg-white p-5 text-center">
+        <h2 className="font-bold text-slate-800">
+          Sign in to view DSE topic trends
+        </h2>
+        <p className="mt-2 text-sm text-slate-600">
+          Use an account with saved website access.
+        </p>
+      </div>
+    );
+  }
+
+  if (authLoading || loading) {
     return (
       <div
         role="status"
@@ -396,6 +431,19 @@ export default function DseTrend() {
       <h1 className="mb-4 text-xl md:text-2xl font-bold text-slate-800">
         DSE Topic Trends
       </h1>
+
+      <p className="mb-4 text-sm text-slate-600">
+        These tables include only DSE questions available to your account.
+        They may be incomplete if some documents are still locked.
+      </p>
+
+      {years.length === 0 && (
+        <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          No DSE documents are currently available to this account.
+          Personal assessment marks are not required. Check the role's
+          saved tier settings on the archive page.
+        </div>
+      )}
 
       <label className="compact-phone-only mb-5">
         <span className="mb-1 block text-xs font-bold text-slate-500">
@@ -435,8 +483,9 @@ export default function DseTrend() {
         <AlertCircle size={15} className="shrink-0" />
 
         <span>
-          Generated from DSE Pastpaper entries. Topic totals include
-          all loaded years, including SP and PP—not only the selected year.
+          Generated from the DSE Pastpaper entries available to your account.
+          Topic totals include all loaded years—not only the selected year.
+          SP and PP appear when accessible records exist for them.
         </span>
       </p>
     </div>

@@ -16,6 +16,8 @@ import {
 import { db } from './firebase';
 import { useAuth } from './main.jsx';
 import { getUserClassAccess } from './classAccess.js';
+import { loadAssignedClassAssessments } from './dashboardAccessClient.js';
+import { loadAccessibleArchives } from './archiveAccessClient.js';
 
 import {
     loadClassAssessments,
@@ -137,7 +139,7 @@ export default function StudentDashboard() {
     // Failed requests can be retried.
     const getCatalogue = () => {
         if (!cataloguePromiseRef.current) {
-            const request = loadArchiveCatalogue().catch(error => {
+            const request = loadArchiveCatalogue(user?.email).catch(error => {
                 if (cataloguePromiseRef.current === request) {
                     cataloguePromiseRef.current = null;
                 }
@@ -420,18 +422,58 @@ export default function StudentDashboard() {
         setShowRecommendations(false);
         setRecommendedQuestions([]);
 
+        setPreviewPdfUrl(previous => {
+            if (previous?.startsWith('blob:')) {
+                URL.revokeObjectURL(previous);
+            }
+
+            return null;
+        });
+
         const loadSelectedClass = async () => {
+            let stage = 'class assessments';
+
             try {
-                const [assessments, classStudents] = await Promise.all([
-                    loadClassAssessments(selectedClass),
-                    user?.isAdmin
-                        ? loadClassStudents(selectedClass)
-                        : Promise.resolve([])
-                ]);
+                const assessments = await loadAssignedClassAssessments(
+                    selectedClass,
+                    user.email
+                );
 
                 if (cancelled) return;
 
-                const linkedArchives = await loadLinkedArchives(assessments);
+                let classStudents = [];
+
+                if (user.isAdmin) {
+                    stage = 'administrator student list';
+                    classStudents = await loadClassStudents(selectedClass);
+
+                    if (cancelled) return;
+                }
+
+                stage = 'linked archive documents';
+
+                const linkedIds = new Set();
+
+                const addLink = value => {
+                    if (typeof value === 'string' && value) {
+                        linkedIds.add(value);
+                    }
+                };
+
+                assessments.forEach(assessment => {
+                    addLink(assessment.linkedDocId);
+
+                    (assessment.sectionsConfig || []).forEach(section => {
+                        addLink(section.linkedDocId);
+                    });
+                });
+
+                const linkedArchives = linkedIds.size
+                    ? await loadAccessibleArchives({
+                        effectiveEmail: user.email,
+                        linkedIds: [...linkedIds]
+                    })
+                    : [];
 
                 if (cancelled) return;
 
@@ -458,19 +500,48 @@ export default function StudentDashboard() {
                             student.englishName || student.id;
                     });
 
+                // Build link options only from server-permitted records.
+                // Never split an ID at an arbitrary underscore.
+                const documents = [];
+
+                linkedArchives.forEach(parent => {
+                    if (
+                        user.isAdmin ||
+                        parent.archiveAccess?.full === true
+                    ) {
+                        documents.push({
+                            ...parent,
+                            id: parent.id
+                        });
+                    }
+
+                    (parent.subQuestions || []).forEach(child => {
+                        documents.push({
+                            ...parent,
+                            id: `${parent.id}_${child.id}`,
+                            parentId: parent.id,
+                            childId: child.id,
+                            title: `${parent.title} Q${child.label}`
+                        });
+                    });
+                });
+
                 setStudentMap(names);
                 setArchives(linkedArchives);
-                setLinkableDocs(expandArchiveDocuments(linkedArchives));
+                setLinkableDocs(documents);
                 setAllItems(assessments);
             } catch (error) {
                 if (cancelled) return;
 
-                console.error('Error loading selected class:', error);
+                console.error(
+                    `Dashboard selected-class failure at ${stage}:`,
+                    error
+                );
 
                 setDashboardError(
-                    error.code === 'permission-denied'
-                        ? 'Access to this class was denied. Please check its class access and Firestore rules.'
-                        : error.message || 'This class could not be loaded.'
+                    `Could not load ${stage}.\n` +
+                    `${error.code || 'dashboard-load-error'}: ` +
+                    (error.message || 'Please try again.')
                 );
             } finally {
                 if (!cancelled) {
@@ -1180,11 +1251,24 @@ export default function StudentDashboard() {
 
         const allQuestions = [];
         recommendationArchives.forEach(a => {
-            const docTier = parseInt(a.tier, 10) || 10;
+            const access = a.archiveAccess;
+
+            if (
+                !user?.isAdmin &&
+                (
+                    access?.policyVersion !== 2 ||
+                    access.isDseViewOnly === true
+                )
+            ) {
+                return;
+            }
+
             const parentRating = a.rating || 0;
 
             if (a.paperType === "Paper 1 (DBQ)") {
-                const hasTierAccess = docTier <= maxUnlockedTier || user?.isAdmin || linkedParents.has(a.id) || a.subQuestions?.some(sq => linkedSpecifics.has(`${a.id}_${sq.id}`));
+                // A whole-DBQ recommendation requires whole-record access.
+                const hasTierAccess =
+                    Boolean(user?.isAdmin) || access?.full === true;
                 if (!hasTierAccess) return;
                 if (parentRating === 0) return;
 
@@ -1263,7 +1347,11 @@ export default function StudentDashboard() {
                     if (sqRating === 0) return;
 
                     const id = `${a.id}_${sq.id}`;
-                    const hasTierAccess = docTier <= maxUnlockedTier || user?.isAdmin || linkedParents.has(a.id) || linkedSpecifics.has(id);
+
+                    const hasTierAccess =
+                        Boolean(user?.isAdmin) ||
+                        access?.childIds?.includes(String(sq.id)) === true;
+
                     if (!hasTierAccess) return;
 
                     const linkedInfo = linkedScores[id] || linkedScores[a.id];
@@ -2382,24 +2470,43 @@ export default function StudentDashboard() {
                             <tr><td colSpan="6" className="p-8 text-center text-slate-500">{t("No assignments or quizzes found.")}</td></tr>
                         ) : (
                             items.map((item, index) => {
-                                const linkedDoc = linkableDocs.find(a => a.id === item.linkedDocId);
+                                const linkedDoc = linkableDocs.find(
+                                    archive => archive.id === item.linkedDocId
+                                );
 
-                                let hasLinkedDoc = !!linkedDoc;
-                                let isTierUnlocked = user?.isAdmin;
+                                const linkedSections = (item.sectionsConfig || [])
+                                    .filter(section => section.linkedDocId);
 
-                                if (linkedDoc) {
-                                    const docTier = parseInt(linkedDoc.tier, 10) || 10;
-                                    if (docTier <= maxUnlockedTier) isTierUnlocked = true;
-                                } else if (item.sectionsConfig && item.sectionsConfig.some(sec => sec.linkedDocId)) {
-                                    hasLinkedDoc = true;
-                                    isTierUnlocked = user?.isAdmin || item.sectionsConfig.filter(sec => sec.linkedDocId).every(sec => {
-                                        const lDoc = linkableDocs.find(a => a.id === sec.linkedDocId);
-                                        const dTier = lDoc ? (parseInt(lDoc.tier, 10) || 10) : 10;
-                                        return dTier <= maxUnlockedTier;
-                                    });
+                                const sectionDocuments = linkedSections.map(
+                                    section => linkableDocs.find(
+                                        archive => archive.id === section.linkedDocId
+                                    )
+                                );
+
+                                const hasLinkedDoc =
+                                    Boolean(linkedDoc) ||
+                                    sectionDocuments.some(Boolean);
+
+                                let isTierUnlocked = Boolean(user?.isAdmin);
+
+                                if (!isTierUnlocked && linkedDoc) {
+                                    isTierUnlocked =
+                                        linkedDoc.archiveAccess?.tierUnlocked === true;
+                                } else if (
+                                    !isTierUnlocked &&
+                                    linkedSections.length > 0
+                                ) {
+                                    isTierUnlocked = sectionDocuments.every(
+                                        archive =>
+                                            archive?.archiveAccess?.tierUnlocked === true
+                                    );
                                 }
 
-                                const isEffectivelyDisclosed = item.isDisclosed !== false || (hasLinkedDoc && isTierUnlocked);
+                                // Keep mark disclosure separate from whether
+                                // the server permits an assigned document.
+                                const isEffectivelyDisclosed =
+                                    item.isDisclosed !== false ||
+                                    (hasLinkedDoc && isTierUnlocked);
 
                                 let studentMark = '-';
 
@@ -2580,7 +2687,7 @@ export default function StudentDashboard() {
                                         </td>
                                         <td className="p-1 md:p-4 text-center align-top md:align-middle">
                                             <div className="flex flex-col md:flex-row items-center justify-center gap-1 md:gap-3">
-                                                {!isEffectivelyDisclosed && !user?.isAdmin ? (
+                                                {!isEffectivelyDisclosed && !user?.isAdmin && !hasLinkedDoc ? (
                                                     <span className="text-[8px] md:text-xs text-slate-400 italic">{t("Available after disclosure")}</span>
                                                 ) : item.sectionsConfig && item.sectionsConfig.some(sec => sec.linkedDocId) ? (
                                                     <div className="flex flex-col gap-1 md:gap-2 items-center">
@@ -2759,7 +2866,16 @@ export default function StudentDashboard() {
                                         <option value="">{t("-- No File Attached --")}</option>
                                         {linkableDocs
                                             .filter(a => a.title.toLowerCase().includes(searchTerm.toLowerCase()) || a.year?.toString().includes(searchTerm))
-                                            .map(a => <option key={a.id} value={a.id}>{a.year} - {a.title}</option>)
+                                            .map(a => (
+                                                <option key={a.id} value={a.id}>
+                                                    {a.title}
+                                                    {' — '}
+                                                    {a.versionLabel || a.year || 'Year unknown'}
+                                                    {a.versionFamilyId
+                                                        ? a.versionIsOriginal ? ' (Original)' : ''
+                                                        : ' (Original)'}
+                                                </option>
+                                            ))
                                         }
                                     </select>
                                 </div>

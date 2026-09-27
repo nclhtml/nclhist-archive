@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { PDFDocument } from 'pdf-lib';
 import { storage } from './firebase.js';
+import { saveArchivePdf } from './archiveVersionFiles.js';
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_TEXT_LENGTH = 16000;
@@ -116,33 +117,32 @@ export async function validateDesignatedSampleDrafts(questions) {
   }
 }
 
-async function uploadSample(sample, folder) {
+async function uploadSample(sample, folder, privateArchiveId = '') {
   const result = savedSampleData(sample);
 
   for (const language of ['en', 'zh']) {
     const version = getVersion(sample, language);
-
     if (!version.pendingFile) continue;
 
-    const fileRef = ref(
-      storage,
-      `pdfs/designated_samples/${folder}/${language}-${crypto.randomUUID()}.pdf`
+    result[language].fileUrl = await saveArchivePdf(
+      version.pendingFile,
+      `pdfs/designated_samples/${folder}/${language}-${crypto.randomUUID()}.pdf`,
+      privateArchiveId
     );
-
-    await uploadBytes(fileRef, version.pendingFile, {
-      contentType: 'application/pdf'
-    });
-
-    result[language].fileUrl = await getDownloadURL(fileRef);
   }
 
   return result;
 }
 
-export async function uploadQuestionDesignatedSamples(question, folder) {
+export async function uploadQuestionDesignatedSamples(
+  question,
+  folder,
+  privateArchiveId = ''
+) {
   const designatedSample = await uploadSample(
     question.designatedSample,
-    `${folder}/whole`
+    `${folder}/whole`,
+    privateArchiveId
   );
 
   const subQuestions = [];
@@ -152,7 +152,8 @@ export async function uploadQuestionDesignatedSamples(question, folder) {
       ...sub,
       designatedSample: await uploadSample(
         sub.designatedSample,
-        `${folder}/part-${index}`
+        `${folder}/part-${index}`,
+        privateArchiveId
       )
     });
   }
@@ -443,8 +444,19 @@ export function DesignatedSampleList({
   PdfViewer,
   onDownload
 }) {
-  const [openedPdf, setOpenedPdf] = useState(null);
-  const samples = getDesignatedSamples(previewItem, language, isAdmin);
+  const [openedPdfId, setOpenedPdfId] = useState(null);
+
+  const samples = getDesignatedSamples(
+    previewItem,
+    language,
+    isAdmin
+  );
+
+  // Resolve the selection from the CURRENT permitted sample list.
+  // Never keep displaying a stale sample object after access changes.
+  const openedPdf = samples.find(sample =>
+    sample.id === openedPdfId && Boolean(sample.fileUrl)
+  ) || null;
 
   if (!samples.length) return null;
 
@@ -485,7 +497,7 @@ export function DesignatedSampleList({
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
-                  onClick={() => setOpenedPdf(sample)}
+                  onClick={() => setOpenedPdfId(sample.id)}
                   className="hidden md:inline-flex rounded-lg bg-amber-900 px-3 py-2 text-xs font-bold text-white"
                 >
                   {language === 'zh' ? '檢視指定範例 PDF' : 'View designated PDF'}
@@ -515,7 +527,7 @@ export function DesignatedSampleList({
           onKeyDown={event => {
             if (event.key === 'Escape') {
               event.stopPropagation();
-              setOpenedPdf(null);
+              setOpenedPdfId(null);
             }
           }}
         >
@@ -528,7 +540,7 @@ export function DesignatedSampleList({
             <button
               type="button"
               autoFocus
-              onClick={() => setOpenedPdf(null)}
+              onClick={() => setOpenedPdfId(null)}
               className="rounded bg-white px-3 py-2 text-sm font-bold text-amber-950"
             >
               {language === 'zh' ? '關閉' : 'Close'}

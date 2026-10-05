@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { knowledgeApi } from "./api.js";
 
 export default function useCloudAnswers(attempt) {
+  const { language } = useLanguage();
+
   const [answers, setAnswers] = useState(attempt.answers || {});
   const [saveStatus, setSaveStatus] = useState("Saved to Firebase");
 
@@ -105,11 +107,26 @@ export default function useCloudAnswers(attempt) {
     };
   }, []);
 
+  const translatedSaveStatus = language === "zh"
+    ? (
+      {
+        "Saved to Firebase": "已儲存至雲端",
+        "Changes not yet saved": "修改尚未儲存",
+        "Saving to Firebase…": "正在儲存至雲端…"
+      }[saveStatus] ||
+      (
+        saveStatus.startsWith("Not saved:")
+          ? "尚未儲存：" + saveStatus.slice("Not saved:".length)
+          : saveStatus
+      )
+    )
+    : saveStatus;
+
   return {
     answers,
     updateAnswer,
     save,
-    saveStatus,
+    saveStatus: translatedSaveStatus,
     getRevision: () => revisionRef.current
   };
 }

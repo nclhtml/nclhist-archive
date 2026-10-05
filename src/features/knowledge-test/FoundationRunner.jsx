@@ -124,6 +124,25 @@ export default function FoundationRunner({
                 </button>
             </div>
 
+            <p className="kt-notice">
+                {attempt.assignmentId
+                    ? (
+                        attempt.testAssignment
+                            ? tr(
+                                "TEST ASSIGNMENT: this exercise is linked to your administrator test assignment. No real student assignment is affected.",
+                                "測試功課：此練習已連結至你的管理員測試功課，不會影響任何學生的正式功課。"
+                            )
+                            : tr(
+                                "ASSIGNED PRACTICE: this exercise counts towards your assignment when submitted. Late work also counts, but is labelled late. An ended or completed assignment no longer accepts further answers or submissions.",
+                                "指定練習：提交後會計入功課完成次數。遲交亦會計入，但會標示為遲交。已結束或已完成的功課不再接受新的答案或提交。"
+                            )
+                    )
+                    : tr(
+                        "SELF-PRACTICE: this exercise is not linked to an assignment and will not count towards compulsory assigned work.",
+                        "自行練習：此練習未連結至任何功課，不會計入指定功課。"
+                    )}
+            </p>
+
             <p className="kt-muted">
                 {tr(
                     "New exercises: 14 foundation questions, 3 sequencing questions and 3 year-matching questions.",

@@ -9,7 +9,8 @@ import {
 } from 'lucide-react';
 import {
   collection, getDocs, doc, setDoc, updateDoc,
-  addDoc, deleteDoc, query, where, getDoc
+  addDoc, deleteDoc, query, where, getDoc,
+  getDocsFromServer, getDocFromServer, onSnapshot, runTransaction
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { loadAccessibleArchives } from './archiveAccessClient.js';
@@ -71,6 +72,112 @@ function MarksPdfAttachment({ fileUrl, title }) {
 // Helper to generate unique IDs for sections/subsections
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
+const MARKS_DEFAULT_CATEGORIES = [
+  'Assignments',
+  'Quizzes',
+  'Uniform Test',
+  'Exam',
+  'RAC',
+  'Others'
+];
+
+const MARKS_DEFAULT_MULTI_CATEGORIES = [
+  'Uniform Test',
+  'Exam'
+];
+
+const marksUniqueNames = values =>
+  [...new Set(
+    (Array.isArray(values) ? values : [])
+      .filter(value => typeof value === 'string' && value.trim() !== '')
+  )];
+
+// Do not trim or remove invisible characters from class identities.
+// Your application uses those characters to distinguish different classes.
+const marksClassCategoryKey = className =>
+  `class:${encodeURIComponent(className)}`;
+
+const marksAssessmentBelongsToClass = (assessment, className) =>
+  Array.isArray(assessment.classes)
+    ? assessment.classes.includes(className)
+    : assessment.className === className;
+
+// Read every term for ONE class, supporting both current and legacy records.
+async function readMarksClassAssessments(className) {
+  const [sharedSnapshot, legacySnapshot] = await Promise.all([
+    getDocsFromServer(
+      query(
+        collection(db, 'assessments'),
+        where('classes', 'array-contains', className)
+      )
+    ),
+    getDocsFromServer(
+      query(
+        collection(db, 'assessments'),
+        where('className', '==', className)
+      )
+    )
+  ]);
+
+  const records = new Map();
+
+  [...sharedSnapshot.docs, ...legacySnapshot.docs].forEach(snapshot => {
+    const assessment = {
+      ...snapshot.data(),
+      id: snapshot.id
+    };
+
+    if (marksAssessmentBelongsToClass(assessment, className)) {
+      records.set(snapshot.id, assessment);
+    }
+  });
+
+  return [...records.values()];
+}
+
+function getMarksClassCategoryConfig(
+  settings,
+  className,
+  classAssessments,
+  keepSavedEmptyCategories = true
+) {
+  const saved =
+    settings?.byClass?.[marksClassCategoryKey(className)] || {};
+
+  const usedCategories = marksUniqueNames(
+    classAssessments.map(assessment => assessment.category)
+  );
+
+  // Old per-user category lists are deliberately NOT imported.
+  // Only categories actually used by this class are discovered from old data.
+  const list = marksUniqueNames([
+    ...MARKS_DEFAULT_CATEGORIES,
+    ...(keepSavedEmptyCategories
+      ? marksUniqueNames(saved.list)
+      : []),
+    ...usedCategories
+  ]);
+
+  const savedMulti = Array.isArray(saved.multiSection)
+    ? saved.multiSection
+    : (
+      Array.isArray(settings?.multiSection)
+        ? settings.multiSection
+        : MARKS_DEFAULT_MULTI_CATEGORIES
+    );
+
+  const multiSection = marksUniqueNames([
+    ...MARKS_DEFAULT_MULTI_CATEGORIES,
+    ...savedMulti
+  ]).filter(category => list.includes(category));
+
+  return {
+    className,
+    list,
+    multiSection
+  };
+}
+
 const getDefaultTerms = (className) => {
   if (!className) return ['Term 1', 'Term 2'];
   if (className.includes('HIST EMI') || className.includes('HIST CMI')) {
@@ -90,9 +197,25 @@ export default function Marks() {
   const [classes, setClasses] = useState([]);
   const [archivedClasses, setArchivedClasses] = useState([]);
   const [students, setStudents] = useState([]);
-  const [categories, setCategories] = useState([
-    'Assignments', 'Quizzes', 'Uniform Test', 'Exam', 'RAC', 'Others'
-  ]);
+  const [categorySettingsState, setCategorySettingsState] = useState({
+    identity: '',
+    data: {},
+    ready: false,
+    error: ''
+  });
+
+  const [classCategoryState, setClassCategoryState] = useState({
+    key: '',
+    items: [],
+    ready: false,
+    error: ''
+  });
+
+  const [isCategorySaving, setIsCategorySaving] = useState(false);
+  const categoryOperationLock = React.useRef(false);
+  const selectedCategoryClassRef = React.useRef('');
+
+  const [mobileMarksPanel, setMobileMarksPanel] = useState('filters');
   const [archives, setArchives] = useState([]);
 
   // Terms State
@@ -162,7 +285,224 @@ export default function Marks() {
   const [newCategoryIsMulti, setNewCategoryIsMulti] = useState(false);
   const [editingCategory, setEditingCategory] = useState(null);
   const [editCategoryName, setEditCategoryName] = useState('');
-  const [multiSectionCategories, setMultiSectionCategories] = useState(['Uniform Test', 'Exam']);
+  const categoryIdentity = JSON.stringify([
+    user?.email || '',
+    user?.role || ''
+  ]);
+
+  const categoryRequestKey = JSON.stringify([
+    categoryIdentity,
+    selectedClass
+  ]);
+
+  const categoryStateMatches =
+    categorySettingsState.identity === categoryIdentity &&
+    classCategoryState.key === categoryRequestKey;
+
+  const categoryLoadError =
+    (
+      categorySettingsState.identity === categoryIdentity
+        ? categorySettingsState.error
+        : ''
+    ) ||
+    (
+      classCategoryState.key === categoryRequestKey
+        ? classCategoryState.error
+        : ''
+    );
+
+  const categoriesReady = Boolean(
+    selectedClass &&
+    categoryStateMatches &&
+    categorySettingsState.ready &&
+    classCategoryState.ready &&
+    !categoryLoadError
+  );
+
+  const classCategoryConfig = useMemo(() => {
+    const settings =
+      categorySettingsState.identity === categoryIdentity
+        ? categorySettingsState.data
+        : {};
+
+    const classItems =
+      classCategoryState.key === categoryRequestKey
+        ? classCategoryState.items
+        : [];
+
+    return getMarksClassCategoryConfig(
+      settings,
+      selectedClass,
+      classItems
+    );
+  }, [
+    categorySettingsState,
+    classCategoryState,
+    categoryIdentity,
+    categoryRequestKey,
+    selectedClass
+  ]);
+
+  const categories = classCategoryConfig.list;
+  const multiSectionCategories = classCategoryConfig.multiSection;
+
+  const selectedClassInfo = [...classes, ...archivedClasses].find(
+    classInfo => classInfo.name === selectedClass
+  );
+
+  const canManageClassCategories = Boolean(
+    user?.isAdmin &&
+    selectedClassInfo &&
+    (
+      user.email === 'clng@ktls.edu.hk' ||
+      selectedClassInfo.owner === user.email
+    )
+  );
+
+  // Shared settings: every administrator viewing the same class
+  // reads the same class-specific category configuration.
+  useEffect(() => {
+    if (!user?.email) return;
+
+    setCategorySettingsState({
+      identity: categoryIdentity,
+      data: {},
+      ready: false,
+      error: ''
+    });
+
+    return onSnapshot(
+      doc(db, 'settings', 'categories'),
+      snapshot => {
+        setCategorySettingsState({
+          identity: categoryIdentity,
+          data: snapshot.data() || {},
+          ready: true,
+          error: ''
+        });
+      },
+      error => {
+        console.error('Could not load category settings:', error);
+
+        setCategorySettingsState({
+          identity: categoryIdentity,
+          data: {},
+          ready: false,
+          error: 'Could not load category settings. Check your connection and permissions.'
+        });
+      }
+    );
+  }, [categoryIdentity]);
+
+  // Discover categories from ALL terms in the selected class.
+  // This also discovers categories created by a different administrator.
+  useEffect(() => {
+    let cancelled = false;
+
+    setClassCategoryState({
+      key: categoryRequestKey,
+      items: [],
+      ready: false,
+      error: ''
+    });
+
+    if (!selectedClass || !user?.email) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const results = [null, null];
+    let failed = false;
+
+    const publish = () => {
+      if (
+        cancelled ||
+        failed ||
+        results.some(result => result === null)
+      ) {
+        return;
+      }
+
+      const records = new Map();
+
+      results.flat().forEach(assessment => {
+        if (marksAssessmentBelongsToClass(assessment, selectedClass)) {
+          records.set(assessment.id, assessment);
+        }
+      });
+
+      setClassCategoryState({
+        key: categoryRequestKey,
+        items: [...records.values()],
+        ready: true,
+        error: ''
+      });
+    };
+
+    const handleError = error => {
+      if (cancelled) return;
+
+      failed = true;
+      console.error('Could not discover class categories:', error);
+
+      setClassCategoryState({
+        key: categoryRequestKey,
+        items: [],
+        ready: false,
+        error: 'Could not load this class’s categories. Refresh after checking your connection and permissions.'
+      });
+    };
+
+    const queries = [
+      query(
+        collection(db, 'assessments'),
+        where('classes', 'array-contains', selectedClass)
+      ),
+      query(
+        collection(db, 'assessments'),
+        where('className', '==', selectedClass)
+      )
+    ];
+
+    const unsubscribe = queries.map((classQuery, index) =>
+      onSnapshot(
+        classQuery,
+        snapshot => {
+          if (cancelled) return;
+
+          results[index] = snapshot.docs.map(item => ({
+            ...item.data(),
+            id: item.id
+          }));
+
+          publish();
+        },
+        handleError
+      )
+    );
+
+    return () => {
+      cancelled = true;
+      unsubscribe.forEach(stop => stop());
+    };
+  }, [categoryRequestKey, selectedClass, user?.email]);
+
+  useEffect(() => {
+    selectedCategoryClassRef.current = selectedClass;
+
+    setSelectedCategory('Assignments');
+    setEditingCategory(null);
+    setShowAddCategory(false);
+    setNewCategoryName('');
+    setNewCategoryIsMulti(false);
+  }, [selectedClass]);
+
+  useEffect(() => {
+    if (categoriesReady && !categories.includes(selectedCategory)) {
+      setSelectedCategory('Assignments');
+    }
+  }, [categoriesReady, categories, selectedCategory]);
 
   const [showAddAssessment, setShowAddAssessment] = useState(false);
   const [isEditingAssessment, setIsEditingAssessment] = useState(false);
@@ -333,25 +673,19 @@ export default function Marks() {
         let loadedArchivedClasses = [];
         if (classDocSnap.exists()) {
           const rawList = classDocSnap.data().list || [];
-          let classObjects = rawList.map(c => typeof c === 'string' ? { name: c, owner: 'clng@ktls.edu.hk', isArchived: false } : c);
-
-          // --- AUTO-FIX DUPLICATES WITH INVISIBLE CHARACTERS ---
-          const seenNames = new Set();
-          let needsUpdate = false;
-          classObjects = classObjects.map(c => {
-            let finalName = c.name.replace(/\(\d+\)/g, '').trim();
-            while (seenNames.has(finalName)) {
-              finalName = finalName + '\u200B';
-              needsUpdate = true;
-            }
-            seenNames.add(finalName);
-            return { ...c, name: finalName };
-          });
-
-          if (needsUpdate) {
-            await setDoc(classDocRef, { list: classObjects }, { merge: true });
-          }
-          // ---------------------------
+          // Preserve the exact saved identity of every class.
+          // Opening Marks must never rename database classes.
+          const classObjects = rawList
+            .map(c =>
+              typeof c === 'string'
+                ? {
+                  name: c,
+                  owner: 'clng@ktls.edu.hk',
+                  isArchived: false
+                }
+                : c
+            )
+            .filter(c => c && typeof c.name === 'string');
 
           // Fetch user role if not present on the user object
           let currentUserRole = user?.role;
@@ -424,37 +758,8 @@ export default function Marks() {
         }
         setTermsMap(loadedTermsMap);
 
-        const catDocRef = doc(db, "settings", "categories");
-        const catDocSnap = await getDoc(catDocRef);
-        let loadedCategories = ['Assignments', 'Quizzes', 'Uniform Test', 'Exam', 'RAC', 'Others'];
-        let loadedMultiCat = ['Uniform Test', 'Exam'];
-        if (catDocSnap.exists()) {
-          const data = catDocSnap.data();
-
-          if (user?.email === 'clng@ktls.edu.hk') {
-            // Superadmin: merge all categories from all users so they can see everything
-            let allCats = new Set(loadedCategories);
-            Object.keys(data).forEach(key => {
-              if (key !== 'multiSection' && Array.isArray(data[key])) {
-                data[key].forEach(cat => allCats.add(cat));
-              }
-            });
-            loadedCategories = Array.from(allCats);
-          } else if (user?.email && data[user.email]) {
-            // Normal admin: see their own categories
-            loadedCategories = data[user.email];
-          } else if (data.list) {
-            // Fallback
-            loadedCategories = data.list;
-            if (!loadedCategories.includes('RAC')) loadedCategories.push('RAC');
-          }
-
-          if (data.multiSection) {
-            loadedMultiCat = data.multiSection;
-          }
-        }
-        setCategories(loadedCategories);
-        setMultiSectionCategories(loadedMultiCat);
+        // Categories are loaded separately for the selected class.
+        // Do not load or combine old per-administrator category lists here.
 
         const presetsRef = doc(db, "settings", "presets");
         const presetsSnap = await getDoc(presetsRef);
@@ -753,82 +1058,366 @@ export default function Marks() {
     saveTerms(newTerms);
   };
 
-  const handleAddCategory = async (e) => {
-    e.preventDefault();
-    const catName = newCategoryName.trim();
-    if (catName && !categories.includes(catName)) {
-      try {
-        const updatedCategories = [...categories, catName];
-        await setDoc(doc(db, "settings", "categories"), { [user.email]: updatedCategories }, { merge: true });
-        setCategories(updatedCategories);
+  const validateMarksCategoryName = name => {
+    if (!name) {
+      throw new Error('Enter a category name.');
+    }
 
-        if (newCategoryIsMulti) {
-          const updatedMulti = [...multiSectionCategories, catName];
-          await setDoc(doc(db, "settings", "categories"), { multiSection: updatedMulti }, { merge: true });
-          setMultiSectionCategories(updatedMulti);
+    if (name.length > 80) {
+      throw new Error('Use a category name of 80 characters or fewer.');
+    }
+
+    if (
+      [
+        '__proto__',
+        'prototype',
+        'constructor',
+        'Empty',
+        'Total Term Score'
+      ].includes(name)
+    ) {
+      throw new Error('That name is reserved. Please choose another name.');
+    }
+  };
+
+  const changeCurrentClassCategories = async (transform, onSuccess) => {
+    if (categoryOperationLock.current) return;
+
+    if (!categoriesReady || !canManageClassCategories) {
+      alert('Category settings are not ready, or you cannot edit this class.');
+      return;
+    }
+
+    const targetClass = selectedClass;
+
+    categoryOperationLock.current = true;
+    setIsCategorySaving(true);
+
+    try {
+      // Server read: an assessment in another term still counts as an item.
+      const classItems = await readMarksClassAssessments(targetClass);
+      const settingsRef = doc(db, 'settings', 'categories');
+
+      const nextConfig = await runTransaction(db, async transaction => {
+        const snapshot = await transaction.get(settingsRef);
+        const data = snapshot.data() || {};
+
+        const currentConfig = getMarksClassCategoryConfig(
+          data,
+          targetClass,
+          classItems
+        );
+
+        const transformed = transform(currentConfig, classItems);
+
+        const next = {
+          className: targetClass,
+          list: marksUniqueNames([
+            ...MARKS_DEFAULT_CATEGORIES,
+            ...transformed.list
+          ]),
+          multiSection: marksUniqueNames([
+            ...MARKS_DEFAULT_MULTI_CATEGORIES,
+            ...transformed.multiSection
+          ])
+        };
+
+        next.multiSection = next.multiSection.filter(category =>
+          next.list.includes(category)
+        );
+
+        transaction.set(
+          settingsRef,
+          {
+            schemaVersion: 2,
+            byClass: {
+              [marksClassCategoryKey(targetClass)]: next
+            }
+          },
+          { merge: true }
+        );
+
+        return next;
+      });
+
+      // Immediately reflect the committed class setting locally.
+      // The shared listener also delivers it to other open sessions.
+      setCategorySettingsState(previous => {
+        if (previous.identity !== categoryIdentity) return previous;
+
+        return {
+          ...previous,
+          data: {
+            ...previous.data,
+            byClass: {
+              ...(previous.data.byClass || {}),
+              [marksClassCategoryKey(targetClass)]: nextConfig
+            }
+          }
+        };
+      });
+
+      if (selectedCategoryClassRef.current === targetClass) {
+        onSuccess?.();
+      }
+    } catch (error) {
+      console.error('Category change failed:', error);
+      alert(error.message || 'Could not save category settings.');
+    } finally {
+      categoryOperationLock.current = false;
+      setIsCategorySaving(false);
+    }
+  };
+
+  const handleAddCategory = async event => {
+    event.preventDefault();
+
+    const name = newCategoryName.trim();
+    const useMultiSection = newCategoryIsMulti;
+
+    try {
+      validateMarksCategoryName(name);
+    } catch (error) {
+      alert(error.message);
+      return;
+    }
+
+    await changeCurrentClassCategories(
+      current => {
+        if (current.list.includes(name)) {
+          throw new Error('This class already has that category.');
         }
 
+        return {
+          ...current,
+          list: [...current.list, name],
+          multiSection: useMultiSection
+            ? [...current.multiSection, name]
+            : current.multiSection
+        };
+      },
+      () => {
         setNewCategoryName('');
         setNewCategoryIsMulti(false);
         setShowAddCategory(false);
-        setSelectedCategory(catName);
-      } catch (error) {
-        console.error("Error adding category:", error);
-        alert("Failed to add category.");
+        setSelectedCategory(name);
       }
-    }
+    );
   };
 
-  const handleDeleteCategory = async (catToDelete, e) => {
-    e.stopPropagation();
-    if (!window.confirm(`Are you sure you want to delete the category "${catToDelete}"?`)) return;
+  const handleDeleteCategory = async (name, event) => {
+    event?.stopPropagation();
 
-    try {
-      const updatedCategories = categories.filter(c => c !== catToDelete);
-      await setDoc(doc(db, "settings", "categories"), { [user.email]: updatedCategories }, { merge: true });
-      setCategories(updatedCategories);
-
-      if (multiSectionCategories.includes(catToDelete)) {
-        const updatedMulti = multiSectionCategories.filter(c => c !== catToDelete);
-        await setDoc(doc(db, "settings", "categories"), { multiSection: updatedMulti }, { merge: true });
-        setMultiSectionCategories(updatedMulti);
-      }
-
-      if (selectedCategory === catToDelete) {
-        setSelectedCategory(updatedCategories.length > 0 ? updatedCategories[0] : '');
-      }
-    } catch (error) {
-      console.error("Error deleting category:", error);
-      alert("Failed to delete category.");
+    if (MARKS_DEFAULT_CATEGORIES.includes(name)) {
+      alert('The six default categories are kept in every class.');
+      return;
     }
-  };
 
-  const handleUpdateCategory = async (oldName) => {
-    const catName = editCategoryName.trim();
-    if (catName && catName !== oldName && !categories.includes(catName)) {
-      try {
-        const updatedCategories = categories.map(c => c === oldName ? catName : c);
-        await setDoc(doc(db, "settings", "categories"), { [user.email]: updatedCategories }, { merge: true });
-        setCategories(updatedCategories);
+    if (!window.confirm(
+      `Remove the empty category "${name}" from ` +
+      `${selectedClass.replace(/\u200B/g, '')} only?\n\n` +
+      'A category with assessments in any term cannot be removed.'
+    )) return;
 
-        if (multiSectionCategories.includes(oldName)) {
-          const updatedMulti = multiSectionCategories.map(c => c === oldName ? catName : c);
-          await setDoc(doc(db, "settings", "categories"), { multiSection: updatedMulti }, { merge: true });
-          setMultiSectionCategories(updatedMulti);
+    await changeCurrentClassCategories(
+      (current, classItems) => {
+        if (classItems.some(item => item.category === name)) {
+          throw new Error(
+            'This category contains assessments in this class. ' +
+            'It has been kept, including items in other terms.'
+          );
         }
 
-        const q = query(collection(db, "assessments"), where("category", "==", oldName));
-        const snap = await getDocs(q);
-        const updates = snap.docs.map(d => updateDoc(doc(db, "assessments", d.id), { category: catName }));
-        await Promise.all(updates);
-
-        if (selectedCategory === oldName) setSelectedCategory(catName);
-      } catch (error) {
-        console.error("Error renaming category:", error);
-        alert("Failed to rename category.");
+        return {
+          ...current,
+          list: current.list.filter(category => category !== name),
+          multiSection: current.multiSection.filter(
+            category => category !== name
+          )
+        };
+      },
+      () => {
+        if (selectedCategory === name) {
+          setSelectedCategory('Assignments');
+        }
+        setEditingCategory(null);
       }
+    );
+  };
+
+  const handleUpdateCategory = async oldName => {
+    const name = editCategoryName.trim();
+
+    if (name === oldName) {
+      setEditingCategory(null);
+      return;
     }
-    setEditingCategory(null);
+
+    if (MARKS_DEFAULT_CATEGORIES.includes(oldName)) {
+      alert('The six default categories cannot be renamed.');
+      return;
+    }
+
+    try {
+      validateMarksCategoryName(name);
+    } catch (error) {
+      alert(error.message);
+      return;
+    }
+
+    await changeCurrentClassCategories(
+      (current, classItems) => {
+        if (current.list.includes(name)) {
+          throw new Error('This class already has that category.');
+        }
+
+        if (classItems.some(item => item.category === oldName)) {
+          throw new Error(
+            'Only empty custom categories can be renamed here. ' +
+            'This protects existing assessments, shared classes and calculation presets.'
+          );
+        }
+
+        return {
+          ...current,
+          list: current.list.map(
+            category => category === oldName ? name : category
+          ),
+          multiSection: current.multiSection.map(
+            category => category === oldName ? name : category
+          )
+        };
+      },
+      () => {
+        if (selectedCategory === oldName) {
+          setSelectedCategory(name);
+        }
+        setEditingCategory(null);
+      }
+    );
+  };
+
+  const handleCleanClassCategories = async () => {
+    if (!window.confirm(
+      `Remove empty custom categories from ` +
+      `${selectedClass.replace(/\u200B/g, '')}?\n\n` +
+      'The six defaults and every category with an assessment in ANY term will remain.\n' +
+      'No assessments or marks will be deleted.'
+    )) return;
+
+    await changeCurrentClassCategories(
+      (current, classItems) => {
+        const used = new Set(classItems.map(item => item.category));
+
+        return {
+          ...current,
+          list: current.list.filter(category =>
+            MARKS_DEFAULT_CATEGORIES.includes(category) ||
+            used.has(category)
+          ),
+          multiSection: current.multiSection.filter(category =>
+            MARKS_DEFAULT_CATEGORIES.includes(category) ||
+            used.has(category)
+          )
+        };
+      },
+      () => {
+        setEditingCategory(null);
+        alert('Empty custom categories removed from this class.');
+      }
+    );
+  };
+
+  const handleCleanAllClassCategories = async () => {
+    if (user?.email !== 'clng@ktls.edu.hk') return;
+    if (categoryOperationLock.current) return;
+
+    if (!window.confirm(
+      'Clean category settings for ALL saved classes, including archived classes?\n\n' +
+      'Keep: the six default categories and custom categories with assessments in any term.\n' +
+      'Remove: empty custom category settings.\n\n' +
+      'No assessments, marks or calculation presets will be deleted.\n' +
+      'Ask other administrators to finish category editing before continuing.'
+    )) return;
+
+    categoryOperationLock.current = true;
+    setIsCategorySaving(true);
+
+    try {
+      const [classesSnapshot, assessmentsSnapshot] = await Promise.all([
+        getDocFromServer(doc(db, 'settings', 'classes')),
+        getDocsFromServer(collection(db, 'assessments'))
+      ]);
+
+      const classNames = marksUniqueNames(
+        (classesSnapshot.data()?.list || []).map(classInfo =>
+          typeof classInfo === 'string'
+            ? classInfo
+            : classInfo?.name
+        )
+      );
+
+      const itemsByClass = new Map(
+        classNames.map(className => [className, []])
+      );
+
+      assessmentsSnapshot.docs.forEach(snapshot => {
+        const item = snapshot.data();
+
+        const linkedClasses = Array.isArray(item.classes)
+          ? item.classes
+          : [item.className];
+
+        [...new Set(linkedClasses)].forEach(className => {
+          itemsByClass.get(className)?.push(item);
+        });
+      });
+
+      const settingsRef = doc(db, 'settings', 'categories');
+
+      await runTransaction(db, async transaction => {
+        const snapshot = await transaction.get(settingsRef);
+        const settings = snapshot.data() || {};
+
+        const byClass = { ...(settings.byClass || {}) };
+
+        classNames.forEach(className => {
+          byClass[marksClassCategoryKey(className)] =
+            getMarksClassCategoryConfig(
+              settings,
+              className,
+              itemsByClass.get(className) || [],
+              false
+            );
+        });
+
+        // Preserve old legacy fields as an unused backup.
+        // This version of Marks never reads their per-user category lists.
+        transaction.set(settingsRef, {
+          ...settings,
+          schemaVersion: 2,
+          byClass
+        });
+      });
+
+      setEditingCategory(null);
+
+      alert(
+        `Category cleanup completed for ${classNames.length} classes.\n\n` +
+        'The six defaults and used custom categories were kept.\n' +
+        'No assessments or marks were deleted.'
+      );
+    } catch (error) {
+      console.error('All-class category cleanup failed:', error);
+
+      alert(
+        'Could not complete category cleanup.\n\n' +
+        (error.message || 'Check your connection and permissions.')
+      );
+    } finally {
+      categoryOperationLock.current = false;
+      setIsCategorySaving(false);
+    }
   };
 
   // ============================================================================
@@ -1907,7 +2496,19 @@ export default function Marks() {
       const sumAssessments = (assessments, student) => {
         let totalRaw = 0;
         let totalFull = 0;
+
         assessments.forEach(assessment => {
+          // When multiple classes are selected, do not count another
+          // class's assessments in this student's full-mark denominator.
+          if (
+            !marksAssessmentBelongsToClass(
+              assessment,
+              student.className
+            )
+          ) {
+            return;
+          }
+
           const marks = assessment.marks || {};
           const studentMark = marks[student.id];
           const deduction = parseFloat(marks[`${student.id}_deduction`]) || 0;
@@ -2023,8 +2624,8 @@ export default function Marks() {
           let overallScore = 0;
           let categoryScores = {};
 
-          categories.forEach(cat => {
-            const weight = preset.weights[cat] || 0;
+          Object.keys(preset.weights || {}).forEach(cat => {
+            const weight = Number(preset.weights?.[cat]) || 0;
             if (weight === 0) return;
 
             const catAssessments = allTermAssessments.filter(a => a.category === cat);
@@ -2222,17 +2823,25 @@ export default function Marks() {
     // Sort oldest to newest by default so they appear top-to-bottom in the modal (left-to-right in Excel)
     allTermAssessments.sort((a, b) => new Date(a.date) - new Date(b.date));
 
-    // Group by category
-    const grouped = {
-      'Assignments': [], 'Quizzes': [], 'Others': [], 'Uniform Test': [], 'Exam': []
-    };
+    // Include all default categories and this class's custom categories.
+    const exportCategories = marksUniqueNames([
+      ...MARKS_DEFAULT_CATEGORIES,
+      ...categories,
+      ...allTermAssessments.map(assessment => assessment.category)
+    ]);
 
-    allTermAssessments.forEach(a => {
-      if (grouped[a.category]) {
-        grouped[a.category].push(a);
-      } else if (a.category === 'Others') {
-        grouped['Others'].push(a);
+    const grouped = Object.fromEntries(
+      exportCategories.map(category => [category, []])
+    );
+
+    allTermAssessments.forEach(assessment => {
+      const category = assessment.category || 'Others';
+
+      if (!Object.prototype.hasOwnProperty.call(grouped, category)) {
+        grouped[category] = [];
       }
+
+      grouped[category].push(assessment);
     });
 
     setExportAssessmentsMap(grouped);
@@ -2267,8 +2876,22 @@ export default function Marks() {
       return (preset.weights?.[cat] || 0) > 0;
     };
 
-    const baseCategories = ['Assignments', 'Quizzes', 'Others', 'Uniform Test'];
-    const activeCalcCategories = baseCategories.filter(cat => inCalc(cat));
+    const baseCategories = marksUniqueNames([
+      'Assignments',
+      'Quizzes',
+      'Others',
+      'Uniform Test',
+      'RAC',
+      ...Object.keys(exportAssessmentsMap),
+      ...Object.keys(preset.weights || {})
+    ]).filter(category => category !== 'Exam');
+
+    // Include categories with items even if their term-score weight is zero.
+    const activeCalcCategories = baseCategories.filter(category =>
+      inCalc(category) ||
+      (exportAssessmentsMap[category] || []).length > 0
+    );
+
     const examInCalc = inCalc('Exam');
     const hasExamItems = (exportAssessmentsMap['Exam'] || []).length > 0;
 
@@ -2592,7 +3215,43 @@ export default function Marks() {
   }
 
   return (
-    <div className="marks-page bg-gray-50 min-h-screen font-sans flex flex-col xl:flex-row w-full min-w-0 p-3 sm:p-4 xl:p-6 gap-4 xl:gap-6">
+    <div
+      className="marks-page marks-workspace bg-gray-50 font-sans w-full min-w-0"
+      data-mobile-panel={mobileMarksPanel}
+    >
+      <div
+        className="marks-mobile-tabs"
+        role="group"
+        aria-label="Marks workspace panels"
+      >
+        <button
+          type="button"
+          aria-pressed={mobileMarksPanel === 'filters'}
+          onClick={() => setMobileMarksPanel('filters')}
+          className={
+            mobileMarksPanel === 'filters'
+              ? 'is-active'
+              : ''
+          }
+        >
+          <Settings size={15} />
+          Class / Categories / Items
+        </button>
+
+        <button
+          type="button"
+          aria-pressed={mobileMarksPanel === 'marks'}
+          onClick={() => setMobileMarksPanel('marks')}
+          className={
+            mobileMarksPanel === 'marks'
+              ? 'is-active'
+              : ''
+          }
+        >
+          <BookOpen size={15} />
+          Marks
+        </button>
+      </div>
 
       <style>{`
         .marks-page {
@@ -2828,20 +3487,305 @@ export default function Marks() {
             font-size: 1.75rem;
           }
         }
+`}</style>
+
+      <style>{`
+        .marks-page.marks-workspace {
+          flex: 1 1 0%;
+          display: grid;
+          grid-template-columns: 280px minmax(0, 1fr);
+          grid-template-rows: minmax(0, 1fr);
+          gap: 12px;
+          min-height: 0;
+          height: 100%;
+          max-height: 100%;
+          overflow: hidden;
+          padding: 12px;
+        }
+
+        .marks-page.marks-workspace .marks-mobile-tabs {
+          display: none;
+        }
+
+        .marks-page.marks-workspace .marks-sidebar {
+          position: static;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr);
+          grid-template-rows:
+            auto
+            minmax(0, 1.35fr)
+            minmax(0, 1fr)
+            minmax(0, 1.2fr);
+          align-items: stretch;
+          gap: 8px;
+          width: 100%;
+          height: 100%;
+          min-height: 0;
+          max-height: none;
+          padding: 0;
+          overflow: hidden;
+        }
+
+        .marks-page.marks-workspace .marks-sidebar > * {
+          grid-column: auto;
+          min-height: 0;
+          min-width: 0;
+          margin: 0;
+        }
+
+        .marks-page.marks-workspace .marks-sidebar-heading h1 {
+          font-size: 16px;
+          line-height: 1.25;
+          margin: 0;
+        }
+
+        .marks-page.marks-workspace .marks-sidebar-heading svg {
+          width: 20px;
+          height: 20px;
+          margin-right: 7px;
+        }
+
+        .marks-page.marks-workspace .marks-controls-scroll {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          align-content: start;
+          gap: 8px;
+          overflow: auto;
+          overscroll-behavior: contain;
+          padding: 10px;
+          scrollbar-gutter: stable;
+        }
+
+        .marks-page.marks-workspace .marks-controls-scroll > * {
+          margin: 0;
+          min-width: 0;
+        }
+
+        .marks-page.marks-workspace .marks-controls-scroll > :first-child,
+        .marks-page.marks-workspace .marks-controls-scroll > :nth-child(2) {
+          grid-column: 1 / -1;
+        }
+
+        .marks-page.marks-workspace .marks-controls-scroll > .pt-3 {
+          padding-top: 0;
+          border-top: 0;
+        }
+
+        .marks-page.marks-workspace .marks-controls-scroll label {
+          font-size: 11px;
+          margin-bottom: 3px;
+        }
+
+        .marks-page.marks-workspace .marks-controls-scroll select {
+          padding: 5px 7px;
+          font-size: 12px;
+          min-height: 30px;
+        }
+
+        .marks-page.marks-workspace .marks-controls-scroll button {
+          padding: 6px;
+          min-width: 28px;
+          min-height: 30px;
+          font-size: 11px;
+          line-height: 1.25;
+          box-shadow: none;
+          white-space: normal;
+        }
+
+        .marks-page.marks-workspace .marks-controls-scroll button svg {
+          width: 14px;
+          height: 14px;
+          margin-right: 4px;
+        }
+
+        .marks-page.marks-workspace .marks-categories {
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+        }
+
+        .marks-page.marks-workspace .marks-category-header {
+          flex: 0 0 auto;
+          padding: 7px 9px;
+          border-bottom: 1px solid #e5e7eb;
+          background: #f3f4f6;
+        }
+
+        .marks-page.marks-workspace .marks-category-body {
+          flex: 1 1 0%;
+          min-height: 0;
+          overflow: auto;
+          overscroll-behavior: contain;
+        }
+
+        .marks-page.marks-workspace .marks-category-body button {
+          min-width: 28px;
+          min-height: 28px;
+        }
+
+        .marks-page.marks-workspace .marks-category-row {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          padding: 3px 6px;
+        }
+
+        .marks-page.marks-workspace .marks-category-select {
+          flex: 1 1 0%;
+          min-width: 0;
+          text-align: left;
+          padding: 4px 3px;
+          font-size: 12px;
+          font-weight: 600;
+          overflow-wrap: anywhere;
+        }
+
+        .marks-page.marks-workspace .marks-items {
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+        }
+
+        .marks-page.marks-workspace .marks-items > :first-child {
+          flex: 0 0 auto;
+          padding: 6px 9px;
+        }
+
+        .marks-page.marks-workspace .marks-items > button {
+          flex: 0 0 auto;
+          padding: 7px 10px;
+          min-height: 32px;
+          font-size: 12px;
+        }
+
+        .marks-page.marks-workspace .marks-items-scroll {
+          flex: 1 1 0%;
+          min-height: 0;
+          max-height: none;
+          overflow: auto;
+          overscroll-behavior: contain;
+        }
+
+        .marks-page.marks-workspace .marks-items-scroll li > button {
+          padding: 7px 10px 4px;
+        }
+
+        .marks-page.marks-workspace .marks-items-scroll li > button > span:first-child {
+          font-size: 12px;
+        }
+
+        .marks-page.marks-workspace .marks-items-scroll li > .flex {
+          padding-bottom: 4px;
+        }
+
+        .marks-page.marks-workspace .marks-items-scroll li > .flex > button {
+          padding: 4px;
+          min-width: 28px;
+          min-height: 28px;
+        }
+
+        .marks-page.marks-workspace .marks-main-scroll {
+          min-height: 0;
+          min-width: 0;
+          height: 100%;
+          overflow: auto;
+          overscroll-behavior: contain;
+          scrollbar-gutter: stable;
+          padding-bottom: 8px;
+        }
+
+        .marks-page.marks-workspace .marks-main-scroll > * {
+          flex-shrink: 0;
+        }
+
+        @media (min-width: 768px) and (max-width: 1100px) {
+          .marks-page.marks-workspace {
+            grid-template-columns: 245px minmax(0, 1fr);
+            padding: 8px;
+            gap: 8px;
+          }
+        }
+
+        @media (max-width: 767px) {
+          .marks-page.marks-workspace {
+            grid-template-columns: minmax(0, 1fr);
+            grid-template-rows: auto minmax(0, 1fr);
+            padding: 6px;
+            gap: 6px;
+          }
+
+          .marks-page.marks-workspace .marks-mobile-tabs {
+            display: flex;
+            gap: 6px;
+          }
+
+          .marks-page.marks-workspace .marks-mobile-tabs button {
+            flex: 1 1 0%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            min-height: 40px;
+            padding: 7px;
+            border: 1px solid #cbd5e1;
+            border-radius: 7px;
+            background: white;
+            color: #475569;
+            font-size: 12px;
+            font-weight: 600;
+          }
+
+          .marks-page.marks-workspace .marks-mobile-tabs .is-active {
+            background: #eff6ff;
+            border-color: #60a5fa;
+            color: #1d4ed8;
+          }
+
+          .marks-page.marks-workspace[data-mobile-panel="filters"] .marks-main-scroll {
+            display: none;
+          }
+
+          .marks-page.marks-workspace[data-mobile-panel="marks"] .marks-sidebar {
+            display: none;
+          }
+
+          .marks-page.marks-workspace .marks-sidebar {
+            grid-template-rows:
+              auto
+              minmax(0, 1.25fr)
+              minmax(0, 1fr)
+              minmax(0, 1.1fr);
+          }
+
+          .marks-page.marks-workspace .marks-controls-scroll select,
+          .marks-page.marks-workspace .marks-category-body input {
+            font-size: 16px;
+          }
+
+          .marks-page.marks-workspace .marks-controls-scroll button,
+          .marks-page.marks-workspace .marks-category-body button,
+          .marks-page.marks-workspace .marks-items button {
+            min-height: 36px;
+          }
+
+          .marks-page.marks-workspace .marks-category-header button {
+            min-height: 32px;
+          }
+        }
       `}</style>
 
       {/* Left Sidebar */}
-      <div className="marks-sidebar w-full xl:w-72 flex-shrink-0 xl:sticky xl:top-6 space-y-4 h-max xl:max-h-[calc(100dvh-3rem)] xl:overflow-y-auto xl:pr-1">
+      <div className="marks-sidebar">
 
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-gray-800 flex items-center">
-            <BookOpen className="w-8 h-8 mr-3 text-blue-600" />
+        <div className="marks-sidebar-heading">
+          <h1 className="font-bold text-gray-800 flex items-center">
+            <BookOpen className="text-blue-600 shrink-0" />
             Marks Management
           </h1>
         </div>
 
-        {/* Selection Controls */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 space-y-4">
+        {/* Selection Controls — only this box may scroll */}
+        <div className="marks-controls-scroll bg-white rounded-lg shadow-sm border border-gray-200">
           <div>
             <label className="font-semibold text-gray-700 flex items-center mb-1.5 text-sm">
               <Users className="w-4 h-4 mr-2" /> Class
@@ -2944,9 +3888,10 @@ export default function Marks() {
                 setShowTermScoreModal(true);
               }}
               className="w-full flex items-center justify-center px-4 py-2 text-sm font-bold rounded-md transition-colors border shadow-sm bg-purple-50 text-purple-700 hover:bg-purple-100 border-purple-200"
+              title="Open the calculator to calculate weighted overall scores for a term"
             >
               <Calculator className="w-4 h-4 mr-2" />
-              Term Overall Score
+              Term Score Calculator
             </button>
           </div>
 
@@ -2957,7 +3902,8 @@ export default function Marks() {
                 ? 'bg-amber-100 text-amber-800 border-amber-300'
                 : 'bg-gray-50 text-gray-700 hover:bg-gray-100 border-gray-200'
                 }`}
-              title="Toggle Student View (Hide individual marks)"
+              title="Hide or show individual marks on this screen. This does not change saved student disclosure settings."
+              aria-pressed={studentView}
             >
               {studentView ? <EyeOff className="w-4 h-4 mr-2" /> : <Eye className="w-4 h-4 mr-2" />}
               {studentView ? 'Student View: ON' : 'Student View: OFF'}
@@ -2988,7 +3934,7 @@ export default function Marks() {
               title="Instantly reveal all hidden items to students globally"
             >
               <Eye className="w-4 h-4 mr-2" />
-              Globally Disclose All
+              Reveal All Classes
             </button>
           </div>
 
@@ -3004,83 +3950,219 @@ export default function Marks() {
           </div>
         </div>
 
-        {/* Categories */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-          <div className="bg-gray-100 p-3 border-b border-gray-200 flex justify-between items-center">
-            <h2 className="font-semibold text-gray-800 text-sm">Categories</h2>
-            <button
-              onClick={() => setShowAddCategory(!showAddCategory)}
-              className="text-blue-600 hover:text-blue-800"
-              title="Add Category"
-            >
-              <PlusCircle className="w-4 h-4" />
-            </button>
+        {/* Categories — shared settings for this exact class */}
+        <div className="marks-categories bg-white rounded-lg shadow-sm border border-gray-200">
+          <div className="marks-category-header">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="font-semibold text-gray-800 text-xs">
+                Categories · This Class
+              </h2>
+
+              <button
+                type="button"
+                disabled={
+                  !categoriesReady ||
+                  !canManageClassCategories ||
+                  isCategorySaving
+                }
+                onClick={() => setShowAddCategory(previous => !previous)}
+                className="flex items-center gap-1 text-xs text-blue-700 disabled:opacity-40"
+                title="Add a category to this class only"
+              >
+                <PlusCircle size={14} />
+                Add
+              </button>
+            </div>
+
+            <div className="flex flex-wrap gap-2 mt-1">
+              {canManageClassCategories && (
+                <button
+                  type="button"
+                  onClick={handleCleanClassCategories}
+                  disabled={!categoriesReady || isCategorySaving}
+                  className="text-[11px] text-slate-600 underline disabled:opacity-40"
+                  title="Remove empty custom categories from this class; check all terms"
+                >
+                  Clean empty categories
+                </button>
+              )}
+
+              {user?.email === 'clng@ktls.edu.hk' && (
+                <button
+                  type="button"
+                  onClick={handleCleanAllClassCategories}
+                  disabled={!categoriesReady || isCategorySaving}
+                  className="text-[11px] text-orange-700 underline disabled:opacity-40"
+                  title="Clean empty custom categories across all active and archived classes"
+                >
+                  Clean ALL classes
+                </button>
+              )}
+            </div>
           </div>
 
-          {showAddCategory && (
-            <form onSubmit={handleAddCategory} className="p-3 bg-blue-50 border-b border-gray-200 flex flex-col space-y-2">
-              <div className="flex space-x-2">
-                <input
-                  type="text"
-                  value={newCategoryName}
-                  onChange={(e) => setNewCategoryName(e.target.value)}
-                  placeholder="New category..."
-                  className="flex-1 border border-gray-300 rounded p-1 text-sm outline-none w-full"
-                  data-gramm="false" data-gramm_editor="false"
-                  autoFocus
-                />
-                <button type="submit" className="bg-blue-600 text-white px-2 rounded text-sm">Add</button>
-              </div>
-              <label className="flex items-center text-xs text-gray-700 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={newCategoryIsMulti}
-                  onChange={(e) => setNewCategoryIsMulti(e.target.checked)}
-                  className="mr-1.5 rounded text-blue-600 focus:ring-blue-500"
-                />
-                Enable Multi-Section Layout (Like UT/Exam)
-              </label>
-            </form>
-          )}
-
-          <ul className="divide-y divide-gray-100 max-h-64 overflow-y-auto">
-            {categories.map(cat => (
-              <li key={cat}>
-                {editingCategory === cat ? (
-                  <div className="flex items-center px-4 py-2 space-x-2 bg-blue-50">
-                    <input
-                      type="text"
-                      value={editCategoryName}
-                      onChange={(e) => setEditCategoryName(e.target.value)}
-                      className="flex-1 border border-gray-300 rounded p-1 text-sm outline-none"
-                      autoFocus
-                    />
-                    <button onClick={() => handleUpdateCategory(cat)} className="text-green-600 hover:text-green-800"><CheckCircle className="w-4 h-4" /></button>
-                    <button onClick={() => setEditingCategory(null)} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
-                  </div>
-                ) : (
-                  <div
-                    onDoubleClick={() => { setEditingCategory(cat); setEditCategoryName(cat); }}
-                    onClick={() => { setSelectedCategory(cat); setSelectedAssessment(null); }}
-                    className={`w-full text-left px-4 py-3 text-sm font-medium transition-colors flex items-center justify-between cursor-pointer ${selectedCategory === cat ? 'bg-blue-50 text-blue-700 border-l-4 border-blue-600' : 'text-gray-600 hover:bg-gray-50'
-                      }`}
-                  >
-                    <span className="truncate mr-2" title="Double-click to rename">{cat}</span>
-                    <div className="flex items-center space-x-2 flex-shrink-0">
-                      <button
-                        onClick={(e) => handleDeleteCategory(cat, e)}
-                        className="text-gray-400 hover:text-red-500 transition-colors"
-                        title="Delete Category"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                      {selectedCategory === cat && <ChevronRight className="w-4 h-4" />}
-                    </div>
-                  </div>
+          <div className="marks-category-body">
+            {categoryLoadError ? (
+              <p className="p-3 text-xs text-red-700" role="alert">
+                {categoryLoadError}
+              </p>
+            ) : !categoriesReady ? (
+              <p className="p-3 text-xs text-gray-500 flex items-center gap-2">
+                {selectedClass && <Loader2 size={14} className="animate-spin" />}
+                {selectedClass ? 'Loading class categories...' : 'Select a class.'}
+              </p>
+            ) : (
+              <>
+                {isCategorySaving && (
+                  <p className="px-3 py-2 text-xs text-blue-700" role="status">
+                    Saving category settings...
+                  </p>
                 )}
-              </li>
-            ))}
-          </ul>
+
+                {showAddCategory && canManageClassCategories && (
+                  <form
+                    onSubmit={handleAddCategory}
+                    className="p-2 bg-blue-50 border-b border-gray-200 space-y-2"
+                  >
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={newCategoryName}
+                        onChange={event => setNewCategoryName(event.target.value)}
+                        placeholder="Category for this class"
+                        maxLength={80}
+                        disabled={isCategorySaving}
+                        className="flex-1 w-full min-w-0 border rounded p-1 text-sm"
+                        autoFocus
+                      />
+
+                      <button
+                        type="submit"
+                        disabled={isCategorySaving || !newCategoryName.trim()}
+                        className="rounded bg-blue-600 px-2 text-xs text-white disabled:opacity-40"
+                      >
+                        Add
+                      </button>
+                    </div>
+
+                    <label className="flex items-start gap-2 text-xs text-gray-700">
+                      <input
+                        type="checkbox"
+                        checked={newCategoryIsMulti}
+                        onChange={event => setNewCategoryIsMulti(event.target.checked)}
+                        disabled={isCategorySaving}
+                        className="mt-0.5"
+                      />
+                      New items use multi-section layout
+                    </label>
+                  </form>
+                )}
+
+                <ul className="divide-y divide-gray-100">
+                  {categories.map(cat => {
+                    const isDefault = MARKS_DEFAULT_CATEGORIES.includes(cat);
+
+                    return (
+                      <li key={cat}>
+                        {editingCategory === cat ? (
+                          <div className="flex items-center gap-1 p-2 bg-blue-50">
+                            <input
+                              type="text"
+                              value={editCategoryName}
+                              onChange={event => setEditCategoryName(event.target.value)}
+                              onKeyDown={event => {
+                                if (event.key === 'Enter') handleUpdateCategory(cat);
+                                if (event.key === 'Escape') setEditingCategory(null);
+                              }}
+                              disabled={isCategorySaving}
+                              className="flex-1 min-w-0 border rounded p-1 text-sm"
+                              autoFocus
+                            />
+
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateCategory(cat)}
+                              disabled={isCategorySaving}
+                              className="text-green-700"
+                              aria-label="Save category name"
+                            >
+                              <CheckCircle size={15} />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setEditingCategory(null)}
+                              disabled={isCategorySaving}
+                              className="text-gray-500"
+                              aria-label="Cancel category rename"
+                            >
+                              <X size={15} />
+                            </button>
+                          </div>
+                        ) : (
+                          <div
+                            className={`marks-category-row ${selectedCategory === cat
+                                ? 'bg-blue-50 text-blue-700'
+                                : 'text-gray-600 hover:bg-gray-50'
+                              }`}
+                          >
+                            <button
+                              type="button"
+                              className="marks-category-select"
+                              aria-pressed={selectedCategory === cat}
+                              onClick={() => {
+                                setSelectedCategory(cat);
+                                setSelectedAssessment(null);
+                              }}
+                            >
+                              {cat}
+                            </button>
+
+                            {isDefault ? (
+                              <span className="text-[9px] text-gray-400 shrink-0">
+                                Default
+                              </span>
+                            ) : canManageClassCategories ? (
+                              <>
+                                <button
+                                  type="button"
+                                  disabled={isCategorySaving}
+                                  onClick={() => {
+                                    setEditingCategory(cat);
+                                    setEditCategoryName(cat);
+                                  }}
+                                  className="text-gray-400 hover:text-blue-600"
+                                  title="Rename this custom category if it is empty"
+                                  aria-label={`Rename ${cat}`}
+                                >
+                                  <Edit2 size={13} />
+                                </button>
+
+                                <button
+                                  type="button"
+                                  disabled={isCategorySaving}
+                                  onClick={event => handleDeleteCategory(cat, event)}
+                                  className="text-gray-400 hover:text-red-600"
+                                  title="Remove this custom category if it is empty in every term"
+                                  aria-label={`Remove ${cat}`}
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </>
+                            ) : null}
+
+                            {selectedCategory === cat && (
+                              <ChevronRight size={13} className="shrink-0" />
+                            )}
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Assessment Items List — always available for every category */}
@@ -3108,7 +4190,10 @@ export default function Marks() {
 
           <button
             type="button"
-            onClick={() => setSelectedAssessment(null)}
+            onClick={() => {
+              setSelectedAssessment(null);
+              setMobileMarksPanel('marks');
+            }}
             aria-pressed={!selectedAssessment}
             className={`w-full text-left px-4 py-3 border-b border-gray-200 flex items-center gap-2 transition-colors ${!selectedAssessment
               ? 'bg-blue-50 text-blue-700 font-bold'
@@ -3119,7 +4204,7 @@ export default function Marks() {
             Overall
           </button>
 
-          <div className="max-h-96 overflow-y-auto">
+          <div className="marks-items-scroll">
             {isAssessmentsLoading ? (
               <div className="p-4 flex items-center justify-center gap-2 text-sm text-gray-500">
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -3149,7 +4234,10 @@ export default function Marks() {
                     >
                       <button
                         type="button"
-                        onClick={() => setSelectedAssessment(item)}
+                        onClick={() => {
+                          setSelectedAssessment(item);
+                          setMobileMarksPanel('marks');
+                        }}
                         aria-pressed={itemIsSelected}
                         className="w-full min-w-0 text-left px-4 pt-3 pb-2 hover:bg-blue-50 transition-colors"
                       >
@@ -3213,8 +4301,8 @@ export default function Marks() {
         </div>
       </div>
 
-      {/* Right Main Area */}
-      <div className="flex-1 flex flex-col min-w-0 w-full">
+      {/* Right Main Area — the main workspace scrolling region */}
+      <div className="marks-main-scroll flex flex-col min-w-0 w-full">
         {isAssessmentsLoading ? (
           <div
             className="bg-white rounded-lg shadow-sm border border-gray-200 p-10 flex items-center justify-center gap-3 text-gray-500"
@@ -5305,8 +6393,8 @@ export default function Marks() {
               {!viewingAnswer && (
                 <div
                   className={`${previewPdfUrl
-                      ? 'md:w-1/3 lg:w-1/4 md:border-r border-slate-200 shrink-0'
-                      : 'w-full'
+                    ? 'md:w-1/3 lg:w-1/4 md:border-r border-slate-200 shrink-0'
+                    : 'w-full'
                     } p-4 md:p-6 overflow-y-auto bg-slate-50`}
                 >
                   <div className="space-y-4">
@@ -5530,7 +6618,7 @@ export default function Marks() {
 
               <label className="block text-sm font-bold text-gray-800 mb-2">2. Arrange Column Order (Top to Bottom = Left to Right)</label>
               <div className="space-y-6">
-                {['Assignments', 'Quizzes', 'Others', 'Uniform Test', 'Exam'].map(cat => (
+                {Object.keys(exportAssessmentsMap).map(cat => (
                   <div key={cat} className="border border-gray-200 rounded-lg overflow-hidden">
                     <div className="bg-gray-100 px-4 py-2 font-bold text-sm text-gray-700 border-b border-gray-200">
                       {cat}

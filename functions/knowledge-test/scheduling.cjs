@@ -67,6 +67,12 @@ module.exports = function makeScheduling({
     const catalogRef = root.collection("state").doc("catalog");
     const presets = root.collection("presets");
 
+    const assignmentLifecycle = require("./assignment-lifecycle.cjs")({
+        db,
+        root,
+        requireValue
+    });
+
     function scheduleId(value) {
         requireValue(
             typeof value === "string" &&
@@ -292,26 +298,53 @@ module.exports = function makeScheduling({
     async function list(actor) {
         requireAdmin(actor);
 
-        const snap = actor.superadmin
+        const initial = actor.superadmin
             ? await schedules.get()
             : await schedules.where("creator", "==", actor.email).get();
 
-        return snap.docs.map(doc => {
-            const s = doc.data();
+        // Reconcile older schedules using their already-recorded totals.
+        // Process a few at a time to avoid launching every transaction at once.
+        const candidates = initial.docs.filter(document => {
+            const schedule = document.data();
 
-            // Do not expose stored recipient snapshots through this endpoint.
+            return !schedule.cancelled &&
+                !schedule.closed &&
+                !schedule.ended;
+        });
+
+        for (let index = 0; index < candidates.length; index += 5) {
+            await Promise.all(
+                candidates.slice(index, index + 5).map(document =>
+                    assignmentLifecycle.reconcileSchedule(document.id)
+                )
+            );
+        }
+
+        const snapshot = actor.superadmin
+            ? await schedules.get()
+            : await schedules.where("creator", "==", actor.email).get();
+
+        return snapshot.docs.map(document => {
+            const schedule = document.data();
+
+            // Recipient names/details are supplied by the separately
+            // authorised overview roster, not creation-time snapshots.
             return {
-                id: s.id,
-                creator: s.creator,
-                title: s.title,
-                startsAt: s.startsAt,
-                reminderAt: s.reminderAt,
-                dueAt: s.dueAt,
-                target: s.target,
-                recipientCount: s.recipients.length,
-                cancelled: s.cancelled,
-                notifications: s.notifications || {},
-                createdAt: s.createdAt
+                id: document.id,
+                creator: schedule.creator,
+                title: schedule.title,
+                startsAt: schedule.startsAt,
+                reminderAt: schedule.reminderAt,
+                dueAt: schedule.dueAt,
+                target: schedule.target,
+                recipientCount: (schedule.recipients || []).length,
+                cancelled: schedule.cancelled === true,
+                ended: schedule.ended === true,
+                closed: schedule.closed === true,
+                closeReason: schedule.closeReason || "",
+                closedAt: schedule.closedAt || null,
+                notifications: schedule.notifications || {},
+                createdAt: schedule.createdAt
             };
         }).sort((a, b) => b.createdAt - a.createdAt);
     }
@@ -418,6 +451,8 @@ module.exports = function makeScheduling({
 
             if (
                 s.cancelled ||
+                s.ended ||
+                s.closed ||
                 !s.notificationsEnabled ||
                 !context ||
                 !STAGES.includes(job.stage)
@@ -429,7 +464,7 @@ module.exports = function makeScheduling({
                         [`notifications.${job.stage}`]: {
                             checkedAt: now,
                             queued: 0,
-                            status: "Skipped: cancelled, disabled or access removed"
+                            status: "Skipped: assignment closed, cancelled, disabled or access removed"
                         }
                     });
                 }
@@ -449,6 +484,7 @@ module.exports = function makeScheduling({
                 .map(record => record.data())
                 .filter(a =>
                     !a.cancelled &&
+                    !a.ended &&
                     context.byEmail.has(a.email)
                 );
 

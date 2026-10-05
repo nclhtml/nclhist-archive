@@ -15,7 +15,14 @@ export default function PdfTool() {
   const [processing, setProcessing] = useState(false);
   const [processingMsg, setProcessingMsg] = useState("");
 
+  const [editingNameFileId, setEditingNameFileId] = useState(null);
+  const [editName, setEditName] = useState("");
+  const [extractDialog, setExtractDialog] = useState(null);
+
   const fileInputRef = useRef(null);
+
+  // Prevent finishing a drag from also opening a page preview.
+  const suppressPreviewUntilRef = useRef(0);
 
   // Keep track of all generated blob URLs to prevent memory leaks
   // without prematurely breaking them during drag-and-drop re-renders
@@ -200,53 +207,212 @@ export default function PdfTool() {
     setFiles(prev => prev.filter(f => f.id !== fileId));
   };
 
-  // --- INDIVIDUAL FILE COMPONENT ---
-  const FileWorkspace = ({ file, setFiles, setActivePreviewUrl }) => {
-    const [isEditingName, setIsEditingName] = useState(false);
+  // --- INDIVIDUAL FILE RENDERING ---
+  // This is a rendering helper, not a nested React component.
+  // Do not put useState or other hooks inside this function.
+  const renderFileWorkspace = (file) => {
+    const isEditingName = editingNameFileId === file.id;
+
+    const setIsEditingName = (editing) => {
+      if (editing) {
+        setEditName(file.name);
+        setEditingNameFileId(file.id);
+      } else {
+        setEditingNameFileId(null);
+      }
+    };
+
+    // Keep the actual iframe elements in a stable DOM order.
+    // The grid below uses CSS order to display the current page order.
+    const stablePages = file.pages
+      .map((page, index) => ({ page, index }))
+      .sort((a, b) => a.page.id.localeCompare(b.page.id));
     // 1. Extract specific pages to a new document
-    const handleExtractPages = async () => {
-      const input = prompt("Enter pages to extract (e.g., 1, 3-5):");
-      if (!input) return;
+    const handleExtractPages = () => {
+      if (processing) return;
 
-      setProcessing(true);
+      if (file.pages.length === 0) {
+        alert("There are no pages to extract.");
+        return;
+      }
+
+      setExtractDialog({
+        fileId: file.id,
+        range: "",
+        deleteFromOriginal: false,
+        error: ""
+      });
+    };
+
+    const submitExtraction = async (event) => {
+      event.preventDefault();
+
+      if (processing) return;
+      if (!extractDialog || extractDialog.fileId !== file.id) {
+        return;
+      }
+
+      const input = extractDialog.range.trim();
+      const deleteFromOriginal = extractDialog.deleteFromOriginal;
+      const selectedPositions = new Set();
+
+      // Validate the complete input before changing any documents.
       try {
-        const sourcePdf = await PDFDocument.load(file.fileBytes);
-        const newPdf = await PDFDocument.create();
-
-        // Basic parser for "1, 3-5"
-        const pagesToExtract = new Set();
-        input.split(',').forEach(part => {
-          if (part.includes('-')) {
-            const [start, end] = part.split('-').map(Number);
-            for (let i = start; i <= end; i++) pagesToExtract.add(i - 1);
-          } else {
-            pagesToExtract.add(Number(part) - 1);
-          }
-        });
-
-        const validPages = Array.from(pagesToExtract).filter(p => p >= 0 && p < file.pages.length).sort((a, b) => a - b);
-        const copiedPages = await newPdf.copyPages(sourcePdf, validPages);
-        copiedPages.forEach(p => newPdf.addPage(p));
-
-        const newBytes = await newPdf.save();
-        const newFileId = Math.random().toString(36).substring(2, 9);
-
-        // Generate previews for the new file
-        const newPages = [];
-        for (let i = 0; i < validPages.length; i++) {
-          const singlePagePdf = await PDFDocument.create();
-          const [copiedPage] = await singlePagePdf.copyPages(newPdf, [i]);
-          singlePagePdf.addPage(copiedPage);
-          const blob = new Blob([await singlePagePdf.save()], { type: 'application/pdf' });
-          newPages.push({ id: `${newFileId}-page-${i}`, originalIndex: i, previewUrl: URL.createObjectURL(blob) });
+        if (!input) {
+          throw new Error("Enter pages to extract, for example: 1, 3-5.");
         }
 
-        setFiles(prev => [...prev, { id: newFileId, name: `Extracted_${file.name}`, fileBytes: newBytes, pages: newPages }]);
-      } catch (err) {
-        console.error(err);
-        alert("Error extracting pages.");
+        for (const part of input.split(',')) {
+          const match = part.trim().match(
+            /^(\d+)(?:\s*-\s*(\d+))?$/
+          );
+
+          if (!match) {
+            throw new Error(
+              "Use page numbers or ranges separated by commas, for example: 1, 3-5."
+            );
+          }
+
+          const start = Number(match[1]);
+          const end = match[2] ? Number(match[2]) : start;
+
+          if (
+            !Number.isSafeInteger(start) ||
+            !Number.isSafeInteger(end) ||
+            start < 1 ||
+            end > file.pages.length ||
+            start > end
+          ) {
+            throw new Error(
+              `Enter valid pages between 1 and ${file.pages.length}. Ranges must run from smaller to larger numbers.`
+            );
+          }
+
+          for (let number = start; number <= end; number++) {
+            selectedPositions.add(number - 1);
+          }
+        }
+      } catch (error) {
+        setExtractDialog(prev =>
+          prev ? { ...prev, error: error.message } : prev
+        );
+        return;
       }
-      setProcessing(false);
+
+      // These are positions in the CURRENT displayed document.
+      const positions = [...selectedPositions].sort((a, b) => a - b);
+      const selectedPages = positions.map(
+        position => file.pages[position]
+      );
+
+      const remainingPages = file.pages.filter(
+        (_, position) => !selectedPositions.has(position)
+      );
+
+      setProcessing(true);
+      setProcessingMsg(
+        deleteFromOriginal
+          ? "Extracting pages and updating the original document..."
+          : "Extracting pages..."
+      );
+
+      setExtractDialog(prev =>
+        prev ? { ...prev, error: "" } : prev
+      );
+
+      try {
+        const sourcePdf = await PDFDocument.load(file.fileBytes);
+        const extractedPdf = await PDFDocument.create();
+
+        // Map displayed positions to their real source-PDF indices.
+        const copiedPages = await extractedPdf.copyPages(
+          sourcePdf,
+          selectedPages.map(page => page.originalIndex)
+        );
+
+        copiedPages.forEach(page => extractedPdf.addPage(page));
+
+        const extractedBytes = await extractedPdf.save();
+        const newFileId =
+          `extracted-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+        const extractedFile = {
+          id: newFileId,
+          name: `Extracted_${file.name}`,
+          fileBytes: extractedBytes,
+          pages: selectedPages.map((page, index) => ({
+            id: `${newFileId}-page-${index}`,
+            originalIndex: index,
+
+            // Reuse the existing preview instead of regenerating it.
+            previewUrl: page.previewUrl
+          }))
+        };
+
+        let updatedOriginal = null;
+
+        if (deleteFromOriginal && remainingPages.length > 0) {
+          const remainingPdf = await PDFDocument.create();
+
+          const copiedRemainingPages = await remainingPdf.copyPages(
+            sourcePdf,
+            remainingPages.map(page => page.originalIndex)
+          );
+
+          copiedRemainingPages.forEach(page =>
+            remainingPdf.addPage(page)
+          );
+
+          const remainingBytes = await remainingPdf.save();
+
+          updatedOriginal = {
+            ...file,
+            fileBytes: remainingBytes,
+            pages: remainingPages.map((page, index) => ({
+              ...page,
+
+              // Preserve IDs and preview URLs to keep previews mounted.
+              // Only the source indices change in the rebuilt PDF.
+              originalIndex: index
+            }))
+          };
+        }
+
+        // Commit both documents together only after everything succeeds.
+        setFiles(prev => {
+          if (!prev.some(item => item.id === file.id)) {
+            return prev;
+          }
+
+          let nextFiles = prev;
+
+          if (deleteFromOriginal) {
+            nextFiles = updatedOriginal
+              ? prev.map(item =>
+                item.id === file.id ? updatedOriginal : item
+              )
+              : prev.filter(item => item.id !== file.id);
+          }
+
+          return [...nextFiles, extractedFile];
+        });
+
+        setExtractDialog(null);
+      } catch (error) {
+        console.error("Error extracting pages:", error);
+
+        setExtractDialog(prev =>
+          prev
+            ? {
+              ...prev,
+              error: "Could not extract these pages. No documents were changed."
+            }
+            : prev
+        );
+      } finally {
+        setProcessing(false);
+        setProcessingMsg("");
+      }
     };
 
     // 2. Split pages (A3 to A4 / Vertical or Horizontal)
@@ -312,11 +478,16 @@ export default function PdfTool() {
       setProcessing(false);
     };
 
-    const [editName, setEditName] = useState(file.name);
-
     const saveName = () => {
-      setIsEditingName(false);
-      setFiles(prev => prev.map(f => f.id === file.id ? { ...f, name: editName } : f));
+      const nextName = editName.trim() || file.name;
+
+      setFiles(prev =>
+        prev.map(f =>
+          f.id === file.id ? { ...f, name: nextName } : f
+        )
+      );
+
+      setEditingNameFileId(null);
     };
 
     const deletePage = (pageIdToRemove) => {
@@ -327,31 +498,63 @@ export default function PdfTool() {
     };
 
     // Drag and Drop Reordering Logic
-    const handleDragStart = (e, index) => {
-      // Store both the file ID and the page index to prevent cross-file dragging errors
-      e.dataTransfer.setData('application/json', JSON.stringify({ fileId: file.id, pageIndex: index }));
+    const handleDragStart = (e, pageId) => {
+      e.stopPropagation();
+
+      suppressPreviewUntilRef.current = Infinity;
+      e.dataTransfer.effectAllowed = 'move';
+
+      e.dataTransfer.setData(
+        'application/json',
+        JSON.stringify({
+          fileId: file.id,
+          pageId
+        })
+      );
     };
 
-    const handleDropPage = (e, dropIndex) => {
+    const handleDragEnd = () => {
+      suppressPreviewUntilRef.current = Date.now() + 300;
+    };
+
+    const handleDropPage = (e, targetPageId) => {
       e.preventDefault();
+      e.stopPropagation();
+
+      suppressPreviewUntilRef.current = Date.now() + 300;
+
       try {
-        const data = JSON.parse(e.dataTransfer.getData('application/json'));
+        const data = JSON.parse(
+          e.dataTransfer.getData('application/json')
+        );
 
-        // Ignore drops if they came from a different file
         if (data.fileId !== file.id) return;
+        if (data.pageId === targetPageId) return;
 
-        const dragIndex = data.pageIndex;
-        if (dragIndex === dropIndex) return;
+        setFiles(prev =>
+          prev.map(f => {
+            if (f.id !== file.id) return f;
 
-        setFiles(prev => prev.map(f => {
-          if (f.id !== file.id) return f;
-          const newPages = [...f.pages];
-          const [draggedPage] = newPages.splice(dragIndex, 1);
-          newPages.splice(dropIndex, 0, draggedPage);
-          return { ...f, pages: newPages };
-        }));
-      } catch (err) {
-        // Ignore invalid drag data
+            const dragIndex = f.pages.findIndex(
+              page => page.id === data.pageId
+            );
+
+            const dropIndex = f.pages.findIndex(
+              page => page.id === targetPageId
+            );
+
+            if (dragIndex < 0 || dropIndex < 0) return f;
+            if (dragIndex === dropIndex) return f;
+
+            const newPages = [...f.pages];
+            const [draggedPage] = newPages.splice(dragIndex, 1);
+            newPages.splice(dropIndex, 0, draggedPage);
+
+            return { ...f, pages: newPages };
+          })
+        );
+      } catch {
+        // Ignore external files or invalid drag data.
       }
     };
 
@@ -424,41 +627,227 @@ export default function PdfTool() {
           </div>
         </div>
 
+        {/* Extract Pages Dialog */}
+        {extractDialog?.fileId === file.id && (
+          <div
+            className="fixed inset-0 z-40 bg-slate-900/60 flex items-center justify-center p-4"
+            onClick={(event) => {
+              if (
+                event.target === event.currentTarget &&
+                !processing
+              ) {
+                setExtractDialog(null);
+              }
+            }}
+          >
+            <form
+              onSubmit={submitExtraction}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape' && !processing) {
+                  event.preventDefault();
+                  setExtractDialog(null);
+                }
+              }}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={`extract-title-${file.id}`}
+              className="w-full max-w-lg rounded-xl bg-white p-6 shadow-2xl"
+            >
+              <div className="flex items-center justify-between gap-4 mb-4">
+                <h3
+                  id={`extract-title-${file.id}`}
+                  className="text-lg font-bold text-slate-800"
+                >
+                  Extract Pages
+                </h3>
+
+                <button
+                  type="button"
+                  disabled={processing}
+                  onClick={() => setExtractDialog(null)}
+                  className="p-1 rounded text-slate-500 hover:bg-slate-100"
+                  aria-label="Close extraction dialog"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <p className="text-sm text-slate-600 mb-4 break-words">
+                From <strong>{file.name}</strong>
+              </p>
+
+              <label className="block">
+                <span className="block text-sm font-medium text-slate-700 mb-2">
+                  Pages to extract
+                </span>
+
+                <input
+                  type="text"
+                  value={extractDialog.range}
+                  disabled={processing}
+                  onChange={(event) => {
+                    const range = event.target.value;
+
+                    setExtractDialog(prev =>
+                      prev ? { ...prev, range, error: "" } : prev
+                    );
+                  }}
+                  placeholder="For example: 1, 3-5"
+                  autoFocus
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </label>
+
+              <p className="text-xs text-slate-500 mt-2">
+                Use the page numbers currently displayed in the grid
+                (1–{file.pages.length}). Extracted pages keep that order.
+              </p>
+
+              <label className="mt-5 flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={extractDialog.deleteFromOriginal}
+                  disabled={processing}
+                  onChange={(event) => {
+                    const deleteFromOriginal = event.target.checked;
+
+                    setExtractDialog(prev =>
+                      prev
+                        ? { ...prev, deleteFromOriginal }
+                        : prev
+                    );
+                  }}
+                  className="mt-1 h-4 w-4 accent-blue-600"
+                />
+
+                <span>
+                  <span className="block text-sm font-medium text-slate-800">
+                    Delete extracted pages from the original document
+                  </span>
+
+                  <span className="block text-xs text-slate-500 mt-1">
+                    Checked: move the pages into the new document.
+                    Unchecked: copy them and leave the original unchanged.
+                  </span>
+                </span>
+              </label>
+
+              {extractDialog.deleteFromOriginal && (
+                <p className="mt-3 text-xs text-amber-700">
+                  If you extract all pages, the empty original document
+                  will be removed from the workspace.
+                </p>
+              )}
+
+              {extractDialog.error && (
+                <p
+                  role="alert"
+                  className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700"
+                >
+                  {extractDialog.error}
+                </p>
+              )}
+
+              <div className="mt-6 flex justify-end gap-3">
+                <button
+                  type="button"
+                  disabled={processing}
+                  onClick={() => setExtractDialog(null)}
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={
+                    processing || !extractDialog.range.trim()
+                  }
+                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {extractDialog.deleteFromOriginal
+                    ? "Extract and Delete"
+                    : "Extract Copy"}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
         {/* Pages Grid */}
         {file.pages.length === 0 ? (
-          <div className="text-center py-8 text-slate-400 text-sm">No pages left. You can remove this file.</div>
+          <div className="text-center py-8 text-slate-400 text-sm">
+            No pages left. You can remove this file.
+          </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-            {file.pages.map((page, index) => (
+            {stablePages.map(({ page, index }) => (
               <div
                 key={page.id}
-                draggable
-                onDragStart={(e) => handleDragStart(e, index)}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => handleDropPage(e, index)}
-                onClick={() => setActivePreviewUrl(page.previewUrl)}
-                style={{ aspectRatio: '1 / 1.4' }}
-                className="group relative rounded-lg border-2 border-slate-200 bg-slate-50 overflow-hidden hover:border-blue-400 transition-all cursor-pointer shadow-sm hover:shadow-md"
+                draggable={!processing}
+                onDragStart={(e) => handleDragStart(e, page.id)}
+                onDragEnd={handleDragEnd}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  e.dataTransfer.dropEffect = 'move';
+                }}
+                onDrop={(e) => handleDropPage(e, page.id)}
+                onClick={() => {
+                  if (processing) return;
+
+                  if (
+                    Date.now() < suppressPreviewUntilRef.current
+                  ) {
+                    return;
+                  }
+
+                  setActivePreviewUrl(page.previewUrl);
+                }}
+                style={{
+                  aspectRatio: '1 / 1.4',
+                  order: index
+                }}
+                className="group relative rounded-lg border-2 border-slate-200 bg-slate-50 overflow-hidden hover:border-blue-400 transition-colors cursor-pointer shadow-sm hover:shadow-md"
               >
-                {/* PDF Preview Iframe */}
+                {/* Keep this iframe mounted with the same URL. */}
                 <iframe
                   src={`${page.previewUrl}#toolbar=0&navpanes=0&scrollbar=0&view=Fit`}
                   className="w-full h-full pointer-events-none"
                   title={`Page ${index + 1}`}
+                  tabIndex={-1}
                 />
 
                 {/* Overlay Controls */}
                 <div className="absolute inset-0 bg-slate-900/0 group-hover:bg-slate-900/10 transition-colors flex flex-col justify-between p-2">
                   <div className="flex justify-between items-start">
                     <div className="bg-white/90 backdrop-blur text-slate-700 text-xs font-bold px-2 py-1 rounded shadow-sm flex items-center gap-1">
-                      <GripHorizontal size={12} className="text-slate-400" />
+                      <GripHorizontal
+                        size={12}
+                        className="text-slate-400"
+                      />
                       {index + 1}
                     </div>
 
                     <button
-                      onClick={() => deletePage(page.id)}
-                      className="bg-white/90 backdrop-blur text-red-500 hover:text-white hover:bg-red-500 p-1.5 rounded shadow-sm opacity-0 group-hover:opacity-100 transition-all"
+                      type="button"
+                      draggable={false}
+                      disabled={processing}
+                      onPointerDown={(e) => {
+                        e.stopPropagation();
+                      }}
+                      onDragStart={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        deletePage(page.id);
+                      }}
+                      className="bg-white/90 backdrop-blur text-red-500 hover:text-white hover:bg-red-500 p-1.5 rounded shadow-sm opacity-0 group-hover:opacity-100 focus:opacity-100 transition-colors disabled:opacity-50"
                       title="Delete Page"
+                      aria-label={`Delete page ${index + 1}`}
                     >
                       <Trash2 size={14} />
                     </button>
@@ -532,7 +921,9 @@ export default function PdfTool() {
       {files.length > 0 && (
         <div className="space-y-6">
           {files.map(file => (
-            <FileWorkspace key={file.id} file={file} setFiles={setFiles} setActivePreviewUrl={setActivePreviewUrl} />
+            <React.Fragment key={file.id}>
+              {renderFileWorkspace(file)}
+            </React.Fragment>
           ))}
         </div>
       )}

@@ -626,6 +626,151 @@
     border: 0;
 }
 
+/* Assignment-first interface */
+
+.kt .kt-assignment-priority {
+    border: 2px solid #83aaa7;
+    background: #fbfefd;
+}
+
+.kt .kt-assignment-copy {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.kt .kt-assignment-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    flex-shrink: 0;
+    max-width: 280px;
+}
+
+.kt .kt-assignment-dialog {
+    width: min(760px, calc(100vw - 24px));
+    max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 32px);
+    max-height: calc(100dvh - 32px);
+    margin: auto;
+    padding: 24px;
+    border: 1px solid var(--kt-border);
+    border-radius: 18px;
+    background: #fff;
+    color: var(--kt-ink);
+    box-shadow: 0 18px 70px #152b4655;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+}
+
+.kt .kt-assignment-dialog::backdrop {
+    background: rgb(17 34 51 / 65%);
+}
+
+.kt .kt-assignment-dialog .kt-assignment {
+    align-items: flex-start;
+}
+
+.kt .kt-private-groups {
+    margin: 18px 0 24px;
+    padding: 18px;
+    border: 1px solid var(--kt-border);
+    border-radius: 12px;
+    background: #f5f9fb;
+}
+
+/* Avoid long labels or native controls widening a mobile layout. */
+
+.kt .kt-field,
+.kt .kt-check,
+.kt .kt-form-grid>*,
+.kt .kt-topic-picker>* {
+    min-width: 0;
+}
+
+.kt .kt-check {
+    overflow-wrap: anywhere;
+}
+
+.kt input,
+.kt select,
+.kt textarea {
+    max-width: 100%;
+}
+
+.kt button {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    min-height: 44px;
+}
+
+.kt .kt-question-nav button {
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+}
+
+.kt .kt-sequence li>span,
+.kt .kt-options label>span:last-child,
+.kt .kt-matching label>span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+    .kt .kt-form-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .kt .kt-field input,
+    .kt .kt-field select,
+    .kt .kt-matching select,
+    .kt textarea {
+        font-size: 16px;
+        min-width: 0;
+    }
+
+    .kt .kt-assignment-dialog .kt-assignment {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .kt .kt-assignment-dialog .kt-assignment-actions {
+        max-width: none;
+        width: 100%;
+    }
+}
+
+@media (max-width: 700px) {
+    .kt .kt-assignment-dialog {
+        padding: 18px 14px;
+        border-radius: 14px;
+    }
+
+    .kt .kt-assignment-actions {
+        max-width: none;
+        width: 100%;
+    }
+
+    .kt .kt-assignment-actions button {
+        width: 100%;
+    }
+
+    .kt .kt-private-groups {
+        padding: 14px;
+    }
+
+    .kt .kt-private-groups .kt-row {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .kt .kt-private-groups .kt-row button {
+        width: 100%;
+    }
+}
+
 @media (max-width: 700px) {
     .kt {
         padding: 20px 12px 50px;
@@ -683,5 +828,82 @@
     .kt-tabs button {
         font-size: 12px;
         padding: 9px 11px;
+    }
+}
+
+/* Split assignment totals: on-time + late */
+
+.kt .kt-assignment-count {
+    font-weight: 750;
+    font-variant-numeric: tabular-nums;
+}
+
+.kt .kt-late-count,
+.kt td small.kt-late-count {
+    color: #b42318;
+    font-weight: 750;
+}
+
+/* Progress is collapsed by default through native details. */
+
+.kt .kt-progress-panel > summary {
+    cursor: pointer;
+    font-size: 18px;
+    font-weight: 750;
+    color: var(--kt-blue);
+}
+
+.kt .kt-progress-panel[open] > summary {
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--kt-border);
+}
+
+/* Saved schedules contain their own recipient tables. */
+
+.kt .kt-saved-schedule {
+    margin: 14px 0;
+    padding: 16px;
+    border: 1px solid var(--kt-border);
+    border-radius: 12px;
+    background: #f8fafb;
+}
+
+.kt .kt-saved-schedule > summary {
+    cursor: pointer;
+    overflow-wrap: anywhere;
+    font-size: 14px;
+    color: var(--kt-ink);
+}
+
+.kt .kt-saved-schedule > summary .kt-tag {
+    margin: 5px 8px;
+}
+
+.kt .kt-saved-schedule > summary small {
+    display: block;
+    margin-top: 7px;
+    color: var(--kt-muted);
+}
+
+.kt .kt-recipient-scroll {
+    max-height: 480px;
+    overflow: auto;
+    overscroll-behavior: contain;
+}
+
+.kt .kt-recipient-scroll th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: #f4f7f9;
+}
+
+@media (max-width: 700px) {
+    .kt .kt-saved-schedule {
+        padding: 12px;
+    }
+
+    .kt .kt-recipient-scroll {
+        max-height: 380px;
     }
 }

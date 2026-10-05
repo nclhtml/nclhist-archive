@@ -1,4 +1,5 @@
 const { createHash, randomInt } = require("node:crypto");
+const spacing = require("./spacing.cjs");
 
 module.exports = function makeFoundation({
     db,
@@ -21,6 +22,12 @@ module.exports = function makeFoundation({
     const presets = root.collection("presets");
     const assignments = root.collection("assignments");
     const catalogRef = root.collection("state").doc("catalog");
+
+    const assignmentLifecycle = require("./assignment-lifecycle.cjs")({
+        db,
+        root,
+        requireValue
+    });
 
     const MAX_BANK = 2500;
     const REGULAR_TYPES = new Set(["mc", "blank", "matching"]);
@@ -687,20 +694,29 @@ module.exports = function makeFoundation({
         let assignmentId = null;
 
         if (data.assignmentId) {
-            requireValue(!actor.admin, "Assignments are completed by students.");
-
             assignmentId = idOf(data.assignmentId);
             const snap = await assignments.doc(assignmentId).get();
 
             requireValue(snap.exists, "Assignment not found.", "not-found");
+
+            const assigned = snap.data();
+
+            const permitted = assigned.email === actor.email &&
+                (
+                    actor.admin
+                        ? assigned.testOnly === true &&
+                        assigned.ownerUid === actor.uid
+                        : assigned.testOnly !== true
+                );
+
             requireValue(
-                snap.data().email === actor.email,
-                "This assignment belongs to another student.",
+                permitted,
+                "You cannot open this assignment. Administrators can only complete their own test assignments.",
                 "permission-denied"
             );
 
-            topics = cleanTopics(snap.data().topics);
-            title = snap.data().title;
+            topics = cleanTopics(assigned.topics);
+            title = assigned.title;
         } else if (data.presetId) {
             const snap = await presets.doc(idOf(data.presetId)).get();
             requireValue(snap.exists, "Preset not found.", "not-found");
@@ -733,7 +749,33 @@ module.exports = function makeFoundation({
                 );
 
                 if (active.exists && active.data().status === "active") {
-                    return publicAttempt(active.data());
+                    const existing = active.data();
+
+                    requireValue(
+                        (existing.assignmentId || null) ===
+                        (assignmentId || null),
+                        "You already have an unfinished exercise belonging to a different practice or assignment. Use “Resume exercise” to finish it, or “Abandon” to discard it, then press the required assignment button again. The requested assignment has NOT been started.",
+                        "failed-precondition"
+                    );
+
+                    if (assignmentId) {
+                        const assignedSnapshot = await tx.get(
+                            assignments.doc(assignmentId)
+                        );
+
+                        const assigned = assignedSnapshot.data();
+
+                        requireValue(
+                            assignedSnapshot.exists &&
+                            assigned.email === actor.email,
+                            "This assignment is unavailable.",
+                            "failed-precondition"
+                        );
+
+                        assignmentLifecycle.assertOpen(assigned);
+                    }
+
+                    return publicAttempt(existing);
                 }
             }
 
@@ -746,10 +788,18 @@ module.exports = function makeFoundation({
                 requireValue(
                     assignment &&
                     assignment.email === actor.email &&
-                    !assignment.cancelled,
+                    !assignment.cancelled &&
+                    (
+                        actor.admin
+                            ? assignment.testOnly === true &&
+                            assignment.ownerUid === actor.uid
+                            : assignment.testOnly !== true
+                    ),
                     "This assignment is no longer available.",
                     "failed-precondition"
                 );
+
+                assignmentLifecycle.assertOpen(assignment);
 
                 requireValue(
                     Date.now() >= assignment.startsAt,
@@ -770,9 +820,38 @@ module.exports = function makeFoundation({
                 "failed-precondition"
             );
 
-            const entries = stateSnap.data()?.entries || {};
-            const regular = selectRegular(items, topics, entries);
-            const plans = makePlans(items, topics, entries);
+            const now = Date.now();
+            const spacingDay = spacing.hkDay(now);
+
+            const entries = {
+                ...(stateSnap.data()?.entries || {})
+            };
+
+            // Normal administrator previews remain untracked.
+            // Test assignments track progress only on the administrator's
+            // own account, never on a student's account.
+            const trackProgress =
+                !actor.admin || assignment?.testOnly === true;
+
+            const eligible = trackProgress
+                ? spacing.eligibleItems(
+                    items,
+                    entries,
+                    summary,
+                    spacingDay
+                )
+                : items;
+
+            const eligibleAvailability = readiness(eligible, topics);
+
+            requireValue(
+                eligibleAvailability.ready,
+                "Some unresolved questions or timeline events have already appeared in two exercises today and are resting until another Hong Kong calendar day. There are not enough remaining eligible records to build this 20-question exercise. Try a different topic or a wider topic mix, or return another day. Teachers can also expand the question bank. The limit is lifted after six fully completed 20-question reports today.",
+                "failed-precondition"
+            );
+
+            const regular = selectRegular(eligible, topics, entries);
+            const plans = makePlans(eligible, topics, entries);
 
             const ids = [...new Set([
                 ...regular.map(q => q.id),
@@ -805,9 +884,11 @@ module.exports = function makeFoundation({
                 title,
                 topics,
                 assignmentId: assignment?.id || null,
+                testAssignment: assignment?.testOnly === true,
                 preview: actor.admin,
                 formatVersion: 2,
-                createdAt: Date.now(),
+                spacingDay,
+                createdAt: now,
                 status: "active",
                 questions: questionList,
                 answers: {},
@@ -818,6 +899,15 @@ module.exports = function makeFoundation({
                 Buffer.byteLength(JSON.stringify(attempt), "utf8") < 800000,
                 "This exercise is too large. Shorten bank explanations."
             );
+
+            if (trackProgress) {
+                spacing.reserveAppearances(entries, ids, spacingDay);
+
+                tx.set(stateRef(actor.email), {
+                    ...(stateSnap.data() || {}),
+                    entries
+                });
+            }
 
             tx.create(ref, attempt);
             tx.set(userRef(actor.email), {
@@ -965,9 +1055,12 @@ module.exports = function makeFoundation({
                 correct: correctAnswer(q, answers[q.id])
             }));
 
-            const updates = attempt.preview
-                ? []
-                : collectProgress(attempt, answers);
+            const trackProgress =
+                !attempt.preview || attempt.testAssignment === true;
+
+            const updates = trackProgress
+                ? collectProgress(attempt, answers)
+                : [];
 
             const progressSnaps = updates.length
                 ? await tx.getAll(
@@ -979,37 +1072,49 @@ module.exports = function makeFoundation({
 
             let assignmentSnap = null;
 
-            if (attempt.assignmentId && !attempt.preview) {
+            if (attempt.assignmentId && trackProgress) {
                 assignmentSnap = await tx.get(
                     assignments.doc(attempt.assignmentId)
                 );
             }
 
-            // All transaction reads are complete.
             const now = Date.now();
+
+            const preparedCredit = await assignmentLifecycle.prepareCredit(
+                tx,
+                assignmentSnap,
+                attempt,
+                now
+            );
+
+            // All transaction reads, including schedule recipients,
+            // are now complete.
             const correct = results.filter(result => result.correct).length;
-            let credit = null;
+            let credit = preparedCredit.credit;
 
             if (assignmentSnap?.exists) {
                 const assignment = assignmentSnap.data();
 
-                if (assignment.cancelled) {
-                    credit = "cancelled";
-                } else if (
+                requireValue(
                     assignment.email === actor.email &&
-                    attempt.questions.length === 20 &&
-                    attempt.createdAt >= assignment.startsAt
-                ) {
-                    credit = now <= assignment.dueAt ? "on-time" : "late";
+                    Boolean(assignment.testOnly) ===
+                    Boolean(attempt.testAssignment) &&
+                    (
+                        !assignment.testOnly ||
+                        (
+                            actor.admin &&
+                            assignment.ownerUid === actor.uid
+                        )
+                    ),
+                    "Assignment ownership no longer matches this exercise.",
+                    "permission-denied"
+                );
 
-                    tx.update(assignmentSnap.ref, {
-                        completed: (assignment.completed || 0) +
-                            (credit === "on-time" ? 1 : 0),
-                        late: (assignment.late || 0) +
-                            (credit === "late" ? 1 : 0),
-                        lastSubmissionAt: now
-                    });
-                }
+                assignmentLifecycle.applyCredit(
+                    tx,
+                    assignmentSnap,
+                    preparedCredit
+                );
             }
 
             const finished = {
@@ -1032,10 +1137,22 @@ module.exports = function makeFoundation({
                 summary.activeAttemptId = null;
             }
 
-            if (!attempt.preview) {
+            if (trackProgress) {
                 const entries = { ...(stateSnap.data()?.entries || {}) };
                 const stats = { ...(summary.stats || {}) };
                 const usedTopics = new Set();
+                const spacingDay = spacing.hkDay(now);
+
+                // Older attempts have no spacingDay.
+                // An exercise submitted on a later day is also counted
+                // as an inclusion on its submission day.
+                if (attempt.spacingDay !== spacingDay) {
+                    spacing.reserveAppearances(
+                        entries,
+                        spacing.recordIdsForAttempt(attempt),
+                        spacingDay
+                    );
+                }
 
                 updates.forEach((update, index) => {
                     const record = update.record;
@@ -1095,12 +1212,20 @@ module.exports = function makeFoundation({
                     }
 
                     entries[record.id] = {
+                        ...(entries[record.id] || {}),
                         seen: progress.seen,
                         needsRevision,
                         streak,
                         wrongCount: progress.wrongCount,
                         revision: record.revision,
-                        kind: progress.kind
+                        kind: progress.kind,
+                        reviewDay: (
+                            !update.correct ||
+                            old.needsRevision ||
+                            needsRevision
+                        )
+                            ? spacingDay
+                            : entries[record.id]?.reviewDay || null
                     };
 
                     tx.set(
@@ -1140,10 +1265,17 @@ module.exports = function makeFoundation({
                     unresolved: Object.values(entries)
                         .filter(entry => entry.needsRevision).length,
                     stats,
-                    lastActivity: now
+                    lastActivity: now,
+                    practiceDay: spacingDay,
+                    completedToday:
+                        spacing.completedToday(summary, spacingDay) +
+                        (attempt.questions.length === 20 ? 1 : 0)
                 });
 
-                tx.set(stateRef(actor.email), { entries });
+                tx.set(stateRef(actor.email), {
+                    ...(stateSnap.data() || {}),
+                    entries
+                });
             }
 
             tx.set(userRef(actor.email), summary);

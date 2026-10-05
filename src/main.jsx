@@ -587,8 +587,17 @@ const Layout = ({ children }) => {
     <div
       className="site-shell min-h-screen bg-slate-50 flex flex-col font-sans relative"
       data-phone-layout={isPhoneLayout ? 'true' : 'false'}
+      style={
+        isMarks
+          ? {
+            height: '100dvh',
+            minHeight: 0,
+            overflow: 'hidden'
+          }
+          : undefined
+      }
     >
-      {currentClass && !hideNavBar && !isPhoneLayout && (
+      {currentClass && !hideNavBar && !isPhoneLayout && !isMarks && (
         <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-white/95 backdrop-blur-md shadow-2xl border border-blue-200 px-6 py-3 rounded-full z-[100] flex items-center gap-6">
           <div className="flex flex-col items-end border-r border-gray-200 pr-4">
             <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Ongoing Lesson</span>
@@ -609,7 +618,7 @@ const Layout = ({ children }) => {
         </div>
       )}
       {!hideNavBar && (
-        <div className="site-header bg-white border-b border-slate-200 sticky top-0 z-50 px-4 md:px-8 pt-4 shadow-sm">
+        <div className="site-header bg-white border-b border-slate-200 sticky top-0 z-50 px-4 md:px-8 pt-4 shadow-sm shrink-0">
           <div className="max-w-7xl mx-auto">
             <div className="site-header-row flex justify-between items-center mb-4">
               <div className="site-brand flex min-w-0 items-center gap-2 md:gap-4">
@@ -880,7 +889,8 @@ const Layout = ({ children }) => {
           user?.role || '',
           Boolean(impersonatedEmail)
         ])}
-        className="flex-1 flex flex-col min-w-0"
+        className="flex-1 flex flex-col min-w-0 min-h-0"
+        style={isMarks ? { overflow: 'hidden' } : undefined}
       >
         <React.Suspense
           fallback={
@@ -928,10 +938,24 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               {/* PROTECTED ROUTE FOR MARKS (ADMIN ONLY) */}
               <Route path="/marks" element={
                 <ProtectedAdminRoute>
-                  <>
-                    <ArchiveVersionAssignments />
+                  <div className="flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden">
+                    <details
+                      className="shrink-0 border-b border-slate-200 bg-white"
+                      style={{
+                        maxHeight: '30%',
+                        overflow: 'auto',
+                        overscrollBehavior: 'contain'
+                      }}
+                    >
+                      <summary className="cursor-pointer px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50">
+                        Archive version assignments — expand to manage
+                      </summary>
+
+                      <ArchiveVersionAssignments />
+                    </details>
+
                     <Marks />
-                  </>
+                  </div>
                 </ProtectedAdminRoute>
               } />
               <Route path="/lottery" element={

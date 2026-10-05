@@ -30,19 +30,57 @@ export function accuracy(correct, total) {
   return total ? `${Math.round(correct / total * 100)}%` : "—";
 }
 
-export function hkTime(value) {
+export function hkTime(value, language = "en") {
   if (!value) return "—";
-  return new Date(value).toLocaleString("en-GB", {
-    timeZone: "Asia/Hong_Kong",
-    dateStyle: "medium",
-    timeStyle: "short"
-  });
+
+  return new Date(value).toLocaleString(
+    language === "zh" ? "zh-HK" : "en-GB",
+    {
+      timeZone: "Asia/Hong_Kong",
+      dateStyle: "medium",
+      timeStyle: "short"
+    }
+  );
 }
 
-export function assignmentStatus(a) {
-  if (a.cancelled) return "Cancelled";
-  if (a.completed >= a.target) return "Completed";
-  if (Date.now() < a.startsAt) return "Upcoming";
-  if (Date.now() > a.dueAt) return "Overdue";
-  return "In progress";
+function safeCount(value) {
+  const number = Number(value);
+
+  return Number.isFinite(number) && number >= 0
+    ? Math.floor(number)
+    : 0;
+}
+
+export function assignmentDone(a) {
+  return safeCount(a.completed) + safeCount(a.late);
+}
+
+export function assignmentClosed(a) {
+  return Boolean(
+    a.cancelled ||
+    a.ended ||
+    a.closed ||
+    assignmentDone(a) >= Number(a.target || 1)
+  );
+}
+
+export function assignmentStatus(a, language = "en") {
+  const tr = (en, zh) => language === "zh" ? zh : en;
+
+  if (a.cancelled) return tr("Cancelled", "已取消");
+
+  if (assignmentDone(a) >= Number(a.target || 1)) {
+    return safeCount(a.late) > 0
+      ? tr("Completed with late work", "已完成（包括遲交）")
+      : tr("Completed", "已完成");
+  }
+
+  if (a.ended || a.closed) {
+    return tr("Ended by teacher", "老師已結束功課");
+  }
+
+  if (Date.now() < a.startsAt) return tr("Upcoming", "尚未開始");
+  if (Date.now() > a.dueAt) return tr("Overdue", "逾期未完成");
+
+  return tr("In progress", "進行中");
 }

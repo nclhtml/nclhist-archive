@@ -182,7 +182,7 @@ export default function PoeImportPanel({
     onInvalidate,
     onBusyChange,
 }) {
-const { realUser, impersonatedEmail, authLoading } = useAuth();
+    const { realUser, impersonatedEmail, authLoading } = useAuth();
 
     const [extraFiles, setExtraFiles] = useState({});
     const [consent, setConsent] = useState(false);
@@ -227,7 +227,7 @@ const { realUser, impersonatedEmail, authLoading } = useAuth();
         }
     });
 
-const signedInEmail =
+    const signedInEmail =
         auth.currentUser?.email?.trim().toLowerCase() || '';
 
     const allowed = Boolean(
@@ -254,12 +254,12 @@ const signedInEmail =
 
         const actualUser = auth.currentUser;
 
-if (
+        if (
             !allowed ||
             !actualUser ||
             !actualUser.emailVerified ||
             actualUser.email?.trim().toLowerCase() !==
-                realUser?.email?.trim().toLowerCase()
+            realUser?.email?.trim().toLowerCase()
         ) {
             setMessage(
                 'Sign in with your real verified administrator account. ' +
@@ -296,6 +296,11 @@ if (
         const selected = files.map(entry => ({ ...entry }));
         const jobId = crypto.randomUUID();
         const uploadedReferences = [];
+
+        // Once the callable request is dispatched, it may still be
+        // running even if this browser loses the response.
+        // Leave cleanup to the backend and its scheduled backstop.
+        let backendOwnsCleanup = false;
 
         running.current = true;
         setBusy(true);
@@ -398,6 +403,10 @@ if (
                 { timeout: 25 * 60 * 1000 }
             );
 
+            // Set this before awaiting the request. A timeout or lost
+            // connection does not prove that the backend stopped.
+            backendOwnsCleanup = true;
+
             const response = await callPoe({
                 mode,
                 jobId,
@@ -451,17 +460,28 @@ if (
                 'No automatic retry was performed.'
             );
         } finally {
-            updateMessageCleanup();
-
-            function updateMessageCleanup() {
-                // Cleanup is performed below without replacing the useful result/error.
+            // Only clean up here if the callable was never dispatched.
+            // After dispatch, the backend owns cleanup, with the
+            // existing scheduled cleanup as a backstop.
+            if (!backendOwnsCleanup) {
+                await Promise.allSettled(
+                    uploadedReferences.map(async storageReference => {
+                        try {
+                            await deleteObject(storageReference);
+                        } catch (cleanupError) {
+                            if (
+                                cleanupError.code !==
+                                'storage/object-not-found'
+                            ) {
+                                console.warn(
+                                    'A temporary Poe upload could not be removed.',
+                                    cleanupError.code || 'cleanup-error'
+                                );
+                            }
+                        }
+                    })
+                );
             }
-
-            await Promise.allSettled(
-                uploadedReferences.map(storageReference =>
-                    deleteObject(storageReference)
-                )
-            );
 
             running.current = false;
 
@@ -476,7 +496,7 @@ if (
                 Generate with Poe — through your backend
             </h3>
 
-{!allowed && (
+            {!allowed && (
                 <p className="text-xs text-amber-900">
                     Paid Poe generation requires a real verified administrator
                     account and is unavailable during impersonation.

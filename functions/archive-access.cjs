@@ -301,10 +301,16 @@ function tierPermission(archive, state) {
 // Read all siblings even when the caller requests only one old ID:
 // requesting a specific ID must not bypass newest-version selection.
 async function loadPolicy(account) {
-    const [archiveSnapshot, links, configSnapshot] = await Promise.all([
+    const [
+        archiveSnapshot,
+        links,
+        configSnapshot,
+        versionSettingsSnapshot
+    ] = await Promise.all([
         db.collection("archives").get(),
         readAssignedLinks(account),
-        db.collection("system_settings").doc("config").get()
+        db.collection("system_settings").doc("config").get(),
+        db.collection("archive_version_settings").get()
     ]);
 
     const records = archiveSnapshot.docs.map(snapshot => ({
@@ -314,6 +320,13 @@ async function loadPolicy(account) {
         },
         createdAt: snapshot.createTime?.toMillis() || 0
     }));
+
+    const searchSettings = new Map(
+        versionSettingsSnapshot.docs.map(snapshot => [
+            snapshot.id,
+            snapshot.data()
+        ])
+    );
 
     const now = hongKongNow();
     const roleRules =
@@ -350,12 +363,28 @@ async function loadPolicy(account) {
         if (!validVersion(archive)) return;
 
         const key = documentGroupKey(archive);
-        const previous = newest.get(key);
+        const setting = archive.versionFamilyId
+            ? searchSettings.get(archive.versionFamilyId)
+            : null;
 
-        if (!previous || newerThan(record, previous)) {
-            newest.set(key, record);
+        // A pinned version replaces automatic newest-year selection.
+        //
+        // Fail closed if a pinned version no longer exists:
+        // do not silently make a different version searchable.
+        const eligibleForDefaultSearch =
+            !setting ||
+            setting.mode !== "only" ||
+            archive.versionId === setting.versionId;
+
+        if (eligibleForDefaultSearch) {
+            const previous = newest.get(key);
+
+            if (!previous || newerThan(record, previous)) {
+                newest.set(key, record);
+            }
         }
 
+        // Existing explicit assessment assignments remain independent.
         const hasAssignment = links.has(archive.id) ||
             childrenOf(archive).some(child =>
                 links.has(`${archive.id}_${child.id}`)
@@ -376,6 +405,7 @@ async function loadPolicy(account) {
         links,
         newest,
         assignedGroups,
+        searchSettings,
         now,
         maxUnlockedTier,
         dseViewUnlocked: ruleUnlocked(roleRules.dse_view, now)
@@ -600,7 +630,18 @@ exports.archiveCatalogue = functions
                 const access = permissionFor(archive, state);
                 if (!access) return;
 
-                archives.push(projectArchive(archive, access));
+                archives.push({
+                    ...projectArchive(archive, access),
+
+                    // Administrators can search every version.
+                    // Students can still open an explicitly assigned old
+                    // version, but it does not become a normal search result.
+                    archiveSearchable:
+                        account.isAdmin ||
+                        !isVersionManaged(archive) ||
+                        state.newest.get(documentGroupKey(archive))
+                            ?.data.id === archive.id
+                });
             });
 
             return {
@@ -881,3 +922,604 @@ exports.archiveClassAssessments = functions
             );
         }
     });
+// ------------------------------------------------------------
+// Archive maintenance, reports and version-search configuration
+// ------------------------------------------------------------
+
+const { randomUUID: archiveToolUUID } = require("node:crypto");
+
+const REPORT_REASONS = new Set([
+    "Wrong deployment of files",
+    "Missing/wrong pages",
+    "Difficult to view",
+    "Spelling mistakes of questions",
+    "No answer attached",
+    "Wrong tags",
+    "Others (Please specify)"
+]);
+
+function toolError(code, message) {
+    throw new functions.https.HttpsError(code, message);
+}
+
+function escapeReportHtml(value) {
+    return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;")
+        .replace(/\r?\n/g, "<br/>");
+}
+
+function canHaveArchiveVersions(archive) {
+    const origin = String(archive?.origin || "")
+        .normalize("NFKC")
+        .trim()
+        .toLowerCase();
+
+    return Boolean(origin) && !(
+        origin.includes("dse") ||
+        origin.includes("mock") ||
+        origin.includes("internal assessment") ||
+        origin.includes("internal school exam")
+    );
+}
+
+function reportAccountRef(uid) {
+    return db.collection("report_private").doc(uid);
+}
+
+function resolutionRef(reportId) {
+    return db.collection("report_private")
+        .doc("_resolutions")
+        .collection("items")
+        .doc(reportId);
+}
+
+async function actualToolAccount(context) {
+    // No effectiveEmail / impersonation parameter is accepted here.
+    // Reports and notifications always belong to the actual login.
+    return resolveAccount({}, context);
+}
+
+function requireToolAdmin(account) {
+    if (!account.isAdmin) {
+        toolError("permission-denied", "Administrator access is required.");
+    }
+}
+
+async function submitArchiveReport(data, context, account) {
+    const requestId = data.requestId;
+    const archiveId = data.archiveId;
+    const childId = String(data.childId ?? "");
+    const sampleId = String(data.sampleId || "");
+    const sampleTag = String(data.sampleTag || "");
+
+    if (
+        typeof requestId !== "string" ||
+        !/^[a-f0-9-]{36}$/.test(requestId) ||
+        !validDocumentId(archiveId) ||
+        childId.length > 1500 ||
+        childId.includes("/") ||
+        (sampleId && !validDocumentId(sampleId)) ||
+        sampleTag.length > 500
+    ) {
+        toolError("invalid-argument", "Invalid report target.");
+    }
+
+    const reason = String(data.reason || "").trim();
+    const details = String(data.details || "").trim();
+
+    if (
+        !REPORT_REASONS.has(reason) ||
+        !details ||
+        details.length > 8000
+    ) {
+        toolError(
+            "invalid-argument",
+            "Select a report reason and enter details of at most 8,000 characters."
+        );
+    }
+
+    const uid = context.auth.uid;
+    const accountRef = reportAccountRef(uid);
+    const submissionRef = accountRef
+        .collection("submissions")
+        .doc(requestId);
+
+    // Recognize a successful retry before rechecking a potentially
+    // changed document. The receipt belongs only to this actual UID.
+    const previousSubmission = await submissionRef.get();
+
+    if (previousSubmission.exists) {
+        return {
+            ok: true,
+            reportId: previousSubmission.data().reportId
+        };
+    }
+
+    const state = await loadPolicy(account);
+    const archive = state.records.find(
+        record => record.data.id === archiveId
+    )?.data;
+
+    if (!archive) {
+        toolError("not-found", "The reported archive no longer exists.");
+    }
+
+    const access = permissionFor(archive, state);
+
+    if (!access) {
+        toolError("permission-denied", "This document is unavailable.");
+    }
+
+    const child = childId
+        ? childrenOf(archive).find(
+            item => String(item.id) === childId
+        )
+        : null;
+
+    if (
+        childId &&
+        (!child || !access.childIds.includes(childId))
+    ) {
+        toolError("permission-denied", "This question is unavailable.");
+    }
+
+    if (data.answer === true && (
+        !access.full ||
+        access.isDseViewOnly
+    )) {
+        toolError("permission-denied", "The answer is unavailable.");
+    }
+
+    if (sampleId) {
+        if (access.isDseViewOnly || (
+            isVersionManaged(archive) &&
+            archive.versionIsOriginal !== true
+        ) || (
+                isVersionManaged(archive) &&
+                !account.isAdmin &&
+                !access.full
+            )) {
+            toolError(
+                "permission-denied",
+                "This legacy student sample is unavailable."
+            );
+        }
+
+        const sampleSnapshot = await db
+            .collection("student_samples")
+            .doc(sampleId)
+            .get();
+
+        const sample = sampleSnapshot.data();
+
+        if (!sample || !sampleTag || !sample.scoresData?.[sampleTag]) {
+            toolError("not-found", "The reported sample is unavailable.");
+        }
+
+        // Check the same archive/title association used by the
+        // application's legacy sample reader.
+        const possibleTags = new Set([archive.title]);
+
+        if (archive.paperType === "Paper 1 (DBQ)") {
+            possibleTags.add(`${archive.title} Q1`);
+        }
+
+        const targetChildren = child
+            ? [child]
+            : childrenOf(archive).filter(item =>
+                access.childIds.includes(String(item.id))
+            );
+
+        for (const item of targetChildren) {
+            const label = String(item.label || "");
+
+            if (archive.paperType === "Paper 2 (Essay)") {
+                possibleTags.add(`${archive.title} Q${label}`);
+                possibleTags.add(
+                    `${archive.title} Q${label.replace(/[a-z]/gi, "")}`
+                );
+                possibleTags.add(`${archive.title}${label}`);
+            } else {
+                possibleTags.add(`${archive.title} Q1${label}`);
+                possibleTags.add(`${archive.title}${label}`);
+            }
+        }
+
+        const permittedTag = possibleTags.has(sampleTag) || (
+            access.full &&
+            sampleTag.startsWith(archive.title)
+        );
+
+        if (!permittedTag) {
+            toolError(
+                "permission-denied",
+                "This sample is not associated with the reported document."
+            );
+        }
+    }
+
+    const targetViewId = child
+        ? `${archive.id}_${child.id}`
+        : archive.id;
+
+    const documentName = sampleId
+        ? `Student Sample — ${sampleTag}`
+        : `${data.answer === true ? "Answer Key: " : ""}` +
+        archive.title +
+        (child ? ` Q${child.label}` : "");
+
+    // Retain the existing administrator sample-management link.
+    const adminViewId = sampleId
+        ? `sample_${sampleId}`
+        : targetViewId;
+
+    const logRef = db.collection("admin_logs").doc(requestId);
+    const now = Date.now();
+    const timestamp = new Date(now).toISOString();
+
+    await db.runTransaction(async transaction => {
+        const [receiptSnapshot, rateSnapshot, logSnapshot] =
+            await Promise.all([
+                transaction.get(submissionRef),
+                transaction.get(accountRef),
+                transaction.get(logRef)
+            ]);
+
+        if (receiptSnapshot.exists) return;
+
+        if (logSnapshot.exists) {
+            toolError(
+                "already-exists",
+                "The report request ID is already in use."
+            );
+        }
+
+        const lastSubmittedAt =
+            Number(rateSnapshot.data()?.lastSubmittedAt) || 0;
+
+        if (now - lastSubmittedAt < 5000) {
+            toolError(
+                "resource-exhausted",
+                "Please wait a few seconds before submitting another report."
+            );
+        }
+
+        transaction.set(logRef, {
+            type: "USER_REPORT",
+            reportSchemaVersion: 2,
+            reporterUid: uid,
+            reporterEmail: account.email,
+            documentName,
+            reason,
+            details,
+            archiveId,
+            childId,
+            sampleId,
+            sampleTag,
+            answer: data.answer === true && !sampleId,
+            targetViewId,
+            viewId: adminViewId,
+            timestamp,
+            viewed: false,
+            message:
+                `<b>Report from ${escapeReportHtml(account.email)}</b>` +
+                `<br/><b>Document:</b> ${escapeReportHtml(documentName)}` +
+                `<br/><b>Reason:</b> ${escapeReportHtml(reason)}` +
+                `<br/><b>Details:</b> ${escapeReportHtml(details)}`
+        });
+
+        transaction.set(submissionRef, {
+            reportId: logRef.id,
+            createdAt: timestamp
+        });
+
+        transaction.set(accountRef, {
+            lastSubmittedAt: now
+        }, { merge: true });
+    });
+
+    return { ok: true, reportId: logRef.id };
+}
+
+async function resolveArchiveReport(data, account) {
+    requireToolAdmin(account);
+
+    const reportId = data.reportId;
+
+    if (!validDocumentId(reportId)) {
+        toolError("invalid-argument", "Invalid report ID.");
+    }
+
+    const logRef = db.collection("admin_logs").doc(reportId);
+    const receiptRef = resolutionRef(reportId);
+    const resolvedAt = new Date().toISOString();
+
+    return db.runTransaction(async transaction => {
+        const [logSnapshot, receiptSnapshot] = await Promise.all([
+            transaction.get(logRef),
+            transaction.get(receiptRef)
+        ]);
+
+        if (receiptSnapshot.exists) {
+            return {
+                ok: true,
+                legacy: receiptSnapshot.data().legacy === true
+            };
+        }
+
+        if (!logSnapshot.exists) {
+            toolError("not-found", "This report was already removed.");
+        }
+
+        const report = logSnapshot.data();
+
+        if (report.type !== "USER_REPORT") {
+            toolError("invalid-argument", "This entry is not a user report.");
+        }
+
+        const verifiedReporter =
+            report.reportSchemaVersion === 2 &&
+            typeof report.reporterUid === "string" &&
+            report.reporterUid.length > 0 &&
+            !report.reporterUid.includes("/") &&
+            typeof report.reporterEmail === "string";
+
+        transaction.set(receiptRef, {
+            reportId,
+            legacy: !verifiedReporter,
+            resolvedAt,
+            resolvedBy: account.email,
+            report
+        });
+
+        if (verifiedReporter) {
+            const notificationRef = reportAccountRef(report.reporterUid)
+                .collection("notifications")
+                .doc(reportId);
+
+            // A deterministic ID prevents duplicate resolution notices.
+            transaction.set(notificationRef, {
+                reportId,
+                reporterEmail: report.reporterEmail,
+                documentName: report.documentName || "Reported document",
+                archiveId: report.archiveId,
+                targetViewId: report.targetViewId,
+                sampleId: report.sampleId || "",
+                sampleTag: report.sampleTag || "",
+                answer: report.answer === true,
+                resolvedAt,
+                claimedAt: null
+            });
+        }
+
+        // Removal and notification creation happen in one transaction.
+        transaction.delete(logRef);
+
+        return { ok: true, legacy: !verifiedReporter };
+    });
+}
+
+async function claimReportNotification(context, account) {
+    const uid = context.auth.uid;
+    const notifications = reportAccountRef(uid)
+        .collection("notifications");
+
+    return db.runTransaction(async transaction => {
+        const snapshot = await transaction.get(
+            notifications
+                .where("claimedAt", "==", null)
+                .limit(1)
+        );
+
+        if (snapshot.empty) return { notification: null };
+
+        const document = snapshot.docs[0];
+        const notification = document.data();
+
+        // Do not disclose a notification if the login email changed.
+        if (cleanEmail(notification.reporterEmail) !== account.email) {
+            transaction.update(document.ref, {
+                claimedAt: new Date().toISOString(),
+                unavailable: true
+            });
+
+            return { notification: null };
+        }
+
+        transaction.update(document.ref, {
+            claimedAt: new Date().toISOString()
+        });
+
+        return {
+            notification: {
+                id: document.id,
+                documentName: notification.documentName,
+                archiveId: notification.archiveId,
+                targetViewId: notification.targetViewId,
+                sampleId: notification.sampleId || "",
+                sampleTag: notification.sampleTag || "",
+                answer: notification.answer === true,
+                resolvedAt: notification.resolvedAt
+            }
+        };
+    });
+}
+
+async function readVersionSearchSetting(data, account) {
+    requireToolAdmin(account);
+
+    const familyId = data.familyId;
+
+    if (!validDocumentId(familyId)) {
+        toolError("invalid-argument", "Invalid version family.");
+    }
+
+    const snapshot = await db
+        .collection("archive_version_settings")
+        .doc(familyId)
+        .get();
+
+    return {
+        setting: snapshot.exists
+            ? snapshot.data()
+            : { mode: "auto", versionId: "" }
+    };
+}
+
+async function saveVersionSearchSetting(data, account) {
+    requireToolAdmin(account);
+
+    const familyId = data.familyId;
+    const mode = data.mode;
+    const versionId = String(data.versionId || "");
+
+    if (
+        !validDocumentId(familyId) ||
+        !["auto", "only"].includes(mode) ||
+        (mode === "only" && !validDocumentId(versionId))
+    ) {
+        toolError("invalid-argument", "Invalid search-version setting.");
+    }
+
+    const settingRef = db
+        .collection("archive_version_settings")
+        .doc(familyId);
+
+    const guardRef = db
+        .collection("system_settings")
+        .doc("archive_write_guard");
+
+    const revision = archiveToolUUID();
+    const now = new Date().toISOString();
+
+    return db.runTransaction(async transaction => {
+        const [familySnapshot] = await Promise.all([
+            transaction.get(
+                db.collection("archives")
+                    .where("versionFamilyId", "==", familyId)
+            ),
+            transaction.get(guardRef),
+            transaction.get(settingRef)
+        ]);
+
+        const records = familySnapshot.docs.map(snapshot => ({
+            ...snapshot.data(),
+            id: snapshot.id
+        }));
+
+        if (!records.length || !records.every(canHaveArchiveVersions)) {
+            toolError(
+                "failed-precondition",
+                "This document family is not eligible for versions."
+            );
+        }
+
+        if (
+            mode === "only" &&
+            !records.some(record => record.versionId === versionId)
+        ) {
+            toolError(
+                "failed-precondition",
+                "The selected version no longer exists in this family."
+            );
+        }
+
+        const setting = {
+            mode,
+            versionId: mode === "only" ? versionId : "",
+            updatedAt: now,
+            updatedBy: account.email
+        };
+
+        transaction.set(settingRef, setting);
+
+        // Participate in the existing archive-write concurrency guard.
+        transaction.set(guardRef, {
+            version: revision,
+            updatedAt: now,
+            updatedBy: account.email
+        });
+
+        return { ok: true, setting };
+    });
+}
+
+exports.archiveTools = functions
+    .region("us-central1")
+    .runWith({
+        timeoutSeconds: 120,
+        memory: "512MB"
+    })
+    .https.onCall(async (data, context) => {
+        try {
+            if (!data || typeof data !== "object" || Array.isArray(data)) {
+                toolError("invalid-argument", "Invalid archive tools request.");
+            }
+
+            const account = await actualToolAccount(context);
+
+            switch (data.action) {
+                case "submitReport":
+                    return await submitArchiveReport(data, context, account);
+
+                case "resolveReport":
+                    return await resolveArchiveReport(data, account);
+
+                case "claimNotification":
+                    return await claimReportNotification(context, account);
+
+                case "readVersionSearch":
+                    return await readVersionSearchSetting(data, account);
+
+                case "saveVersionSearch":
+                    return await saveVersionSearchSetting(data, account);
+
+                default:
+                    toolError("invalid-argument", "Unknown archive tools action.");
+            }
+        } catch (error) {
+            if (error instanceof functions.https.HttpsError) throw error;
+
+            console.error("Archive tools failed:", error);
+
+            throw new functions.https.HttpsError(
+                "internal",
+                "The archive operation failed. Please retry or check archiveTools logs."
+            );
+        }
+    });
+
+// Used by Skill Recall. Reading an archive with the Admin SDK must
+// not bypass the user's saved archive/version/assignment permissions.
+exports.assertArchiveChildAccess = async (
+    email,
+    archiveId,
+    childIds
+) => {
+    const account = await readAccount(cleanEmail(email));
+    const state = await loadPolicy(account);
+
+    const archive = state.records.find(
+        record => record.data.id === archiveId
+    )?.data;
+
+    const access = archive ? permissionFor(archive, state) : null;
+
+    if (
+        !access ||
+        childIds.some(id =>
+            !access.childIds.includes(String(id))
+        )
+    ) {
+        toolError(
+            "permission-denied",
+            "These questions are not available to your account."
+        );
+    }
+
+    return true;
+};

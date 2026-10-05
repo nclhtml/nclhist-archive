@@ -3,9 +3,17 @@ import { useAuth } from "../../main.jsx";
 import useCloudAnswers from "./useCloudAnswers.js";
 import QuestionPrompt from "./QuestionPrompt.jsx";
 import SchedulePlanner from "./SchedulePlanner.jsx";
+import AssignmentPriority from "./AssignmentPriority.jsx";
+import AdminAssignmentTest from "./AdminAssignmentTest.jsx";
 import { rememberKnowledgeLoginReturn } from "./loginReturn.js";
 import { useLanguage } from "../../LanguageContext.jsx";
 import FoundationRunner from "./FoundationRunner.jsx";
+
+import {
+    StudentPracticeHome,
+    StudentProfile,
+    StudentReport
+} from "./KnowledgeStudentViews.jsx";
 import { localizeQuestion, localizedTopic } from "./quizLanguage.js";
 
 import {
@@ -218,7 +226,11 @@ function Report({ attempt, onBack }) {
             <p className="kt-muted">Submitted: {hkTime(attempt.submittedAt)} HKT</p>
 
             {attempt.preview && (
-                <p className="kt-notice">Preview only. No student progress or assignments were changed.</p>
+                <p className="kt-notice">
+                    {attempt.testAssignment
+                        ? "Administrator assignment test. Only your own test progress and test assignment were updated. No student progress or real student assignments were changed."
+                        : "Preview only. No student progress or assignments were changed."}
+                </p>
             )}
 
             {attempt.assignmentCredit && (
@@ -529,7 +541,21 @@ function PracticeHome({ home, busy, run, start, refresh }) {
 
     return (
         <>
-            {!home.actor.admin && <section className="kt-card"><Stats summary={home.summary} /></section>}
+            {!home.actor.admin && (
+                <AssignmentPriority
+                    home={home}
+                    busy={busy}
+                    run={run}
+                    start={start}
+                    refresh={refresh}
+                />
+            )}
+
+            {!home.actor.admin && (
+                <section className="kt-card">
+                    <Stats summary={home.summary} />
+                </section>
+            )}
 
             {home.summary.activeAttemptId && (
                 <section className="kt-card kt-resume">
@@ -675,40 +701,7 @@ function PracticeHome({ home, busy, run, start, refresh }) {
                 </section>
             )}
 
-            {!home.actor.admin && (
-                <section className="kt-card">
-                    <h2>My assignments</h2>
-                    {!home.assignments.length && <p className="kt-muted">No assignments yet.</p>}
-
-                    {home.assignments.map(a => (
-                        <article className="kt-assignment" key={a.id}>
-                            <div>
-                                <h3>{a.title}</h3>
-                                <p>{a.topics.map(topicName).join(" • ")}</p>
-                                <p>
-                                    {a.compulsory ? "Compulsory" : "Optional"} · {assignmentStatus(a)}
-                                    {" · "}{a.completed}/{a.target} on-time exercises
-                                </p>
-                                {!!a.late && <p>{a.late} late submission(s)</p>}
-                                <p className="kt-muted">
-                                    {hkTime(a.startsAt)} – {hkTime(a.dueAt)} HKT
-                                </p>
-                                <p className="kt-muted">Assigned by {a.creator}</p>
-                            </div>
-                            {!a.cancelled && (
-                                <button
-                                    disabled={busy || Date.now() < a.startsAt}
-                                    onClick={() => run(async () => start(
-                                        await knowledgeApi("start", { assignmentId: a.id })
-                                    ))}
-                                >
-                                    {Date.now() > a.dueAt ? "Complete late work" : "Start assignment"}
-                                </button>
-                            )}
-                        </article>
-                    ))}
-                </section>
-            )}
+            {/* Assignments are displayed first by AssignmentPriority. */}
         </>
     );
 }
@@ -848,167 +841,217 @@ function AdminPanel({ home, busy, run, onProfile }) {
     const [search, setSearch] = useState("");
     const [selected, setSelected] = useState([]);
 
-    const load = async () => setOverview(await knowledgeApi("overview"));
+    const load = async () => {
+        setOverview(await knowledgeApi("overview"));
+    };
 
     useEffect(() => {
         run(load);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    if (!overview) return <section className="kt-card">Loading administrator overview…</section>;
+    if (!overview) {
+        return (
+            <section className="kt-card">
+                Loading administrator overview…
+            </section>
+        );
+    }
 
-    const visible = overview.students.filter(s =>
-        `${s.name} ${s.email} ${s.className}`.toLowerCase().includes(search.toLowerCase())
+    const visible = overview.students.filter(student =>
+        `${student.name} ${student.email} ${student.className}`
+            .toLowerCase()
+            .includes(search.toLowerCase())
     );
 
     return (
         <>
-            <section className="kt-card">
-                <div className="kt-row kt-between">
-                    <div>
-                        <p className="kt-eyebrow">Administrator overview</p>
+            <details className="kt-card kt-progress-panel">
+                <summary>
+                    Student progress — click to expand
+                    {" "}
+                    ({overview.students.length} permitted students)
+                </summary>
+
+                <div className="kt-spaced">
+                    <div className="kt-row kt-between">
                         <h2>Student progress</h2>
+
+                        <button
+                            type="button"
+                            className="kt-secondary"
+                            disabled={busy}
+                            onClick={() => run(load)}
+                        >
+                            Refresh
+                        </button>
                     </div>
-                    <button className="kt-secondary" disabled={busy} onClick={() => run(load)}>Refresh</button>
-                </div>
 
-                {!home.actor.superadmin && (
-                    <p className="kt-notice">
-                        Only students in your current superadmin-assigned classes are shown.
-                    </p>
-                )}
+                    {!home.actor.superadmin && (
+                        <p className="kt-notice">
+                            Only students in your current superadmin-assigned
+                            classes are shown.
+                        </p>
+                    )}
 
-                <label className="kt-field">
-                    Search name, email or class
-                    <input value={search} onChange={e => setSearch(e.target.value)} />
-                </label>
+                    <label className="kt-field">
+                        Search name, email or class
+                        <input
+                            value={search}
+                            onChange={event => setSearch(event.target.value)}
+                        />
+                    </label>
 
-                <div className="kt-table-wrap">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Select</th><th>Student</th><th>Class</th>
-                                <th>Completed</th><th>Accuracy</th><th>Unresolved</th><th>Last activity</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {visible.map(s => (
-                                <tr key={s.email}>
-                                    <td>
-                                        <input
-                                            type="checkbox"
-                                            aria-label={`Select ${s.name}`}
-                                            checked={selected.includes(s.email)}
-                                            onChange={e => setSelected(old =>
-                                                e.target.checked ? [...old, s.email] : old.filter(email => email !== s.email)
-                                            )}
-                                        />
-                                    </td>
-                                    <td>
-                                        <button className="kt-link" onClick={() => onProfile(s.email)}>{s.name}</button>
-                                        <small>{s.email}</small>
-                                    </td>
-                                    <td>{s.className || "—"}</td>
-                                    <td>{s.summary.completed || 0}</td>
-                                    <td>{accuracy(s.summary.totalCorrect, s.summary.totalAnswered)}</td>
-                                    <td>{s.summary.unresolved || 0}</td>
-                                    <td>{hkTime(s.summary.lastActivity)}</td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-
-                {!visible.length && <p className="kt-muted">No matching students.</p>}
-
-                <div className="kt-row kt-spaced">
-                    <button
-                        className="kt-secondary"
-                        onClick={() => setSelected(visible.slice(0, 100).map(s => s.email))}
-                    >Select visible students, up to 100</button>
-                    <button className="kt-secondary" onClick={() => setSelected([])}>Clear selection</button>
-                    <span>{selected.length} selected</span>
-                </div>
-
-                <details className="kt-details">
-                    <summary>Topic-by-topic overview</summary>
-                    <div className="kt-table-wrap">
+                    <div className="kt-table-wrap kt-recipient-scroll">
                         <table>
                             <thead>
                                 <tr>
+                                    <th>Select</th>
                                     <th>Student</th>
-                                    {TOPICS.map(t => <th key={t.id}>{t.label}</th>)}
+                                    <th>Class</th>
+                                    <th>Completed</th>
+                                    <th>Accuracy</th>
+                                    <th>Unresolved</th>
+                                    <th>Last activity</th>
                                 </tr>
                             </thead>
+
                             <tbody>
-                                {visible.map(s => (
-                                    <tr key={s.email}>
-                                        <td>{s.name}</td>
-                                        {TOPICS.map(t => {
-                                            const stat = s.summary.stats?.[t.id] || {};
-                                            return (
-                                                <td key={t.id}>
-                                                    {stat.runs || 0} exercises
-                                                    <small>{accuracy(stat.correct, stat.answered)} accuracy</small>
-                                                </td>
-                                            );
-                                        })}
+                                {visible.map(student => (
+                                    <tr key={student.email}>
+                                        <td>
+                                            <input
+                                                type="checkbox"
+                                                aria-label={`Select ${student.name}`}
+                                                checked={selected.includes(student.email)}
+                                                onChange={event => setSelected(old =>
+                                                    event.target.checked
+                                                        ? [...new Set([
+                                                            ...old,
+                                                            student.email
+                                                        ])]
+                                                        : old.filter(email =>
+                                                            email !== student.email
+                                                        )
+                                                )}
+                                            />
+                                        </td>
+
+                                        <td>
+                                            <button
+                                                type="button"
+                                                className="kt-link"
+                                                onClick={() => onProfile(student.email)}
+                                            >
+                                                {student.name}
+                                            </button>
+
+                                            <small>{student.email}</small>
+                                        </td>
+
+                                        <td>{student.className || "—"}</td>
+                                        <td>{student.summary.completed || 0}</td>
+
+                                        <td>
+                                            {accuracy(
+                                                student.summary.totalCorrect,
+                                                student.summary.totalAnswered
+                                            )}
+                                        </td>
+
+                                        <td>{student.summary.unresolved || 0}</td>
+
+                                        <td>
+                                            {hkTime(student.summary.lastActivity)}
+                                        </td>
                                     </tr>
                                 ))}
                             </tbody>
                         </table>
                     </div>
-                </details>
-            </section>
+
+                    <div className="kt-row">
+                        <button
+                            type="button"
+                            className="kt-secondary"
+                            disabled={busy}
+                            onClick={() => setSelected(
+                                visible.slice(0, 100).map(student =>
+                                    student.email
+                                )
+                            )}
+                        >
+                            Select visible students, up to 100
+                        </button>
+
+                        <button
+                            type="button"
+                            className="kt-secondary"
+                            disabled={busy}
+                            onClick={() => setSelected([])}
+                        >
+                            Clear selection
+                        </button>
+
+                        <span>{selected.length} selected</span>
+                    </div>
+
+                    <details className="kt-details">
+                        <summary>Topic-by-topic overview</summary>
+
+                        <div className="kt-table-wrap kt-recipient-scroll">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Student</th>
+                                        {TOPICS.map(topic => (
+                                            <th key={topic.id}>{topic.label}</th>
+                                        ))}
+                                    </tr>
+                                </thead>
+
+                                <tbody>
+                                    {visible.map(student => (
+                                        <tr key={student.email}>
+                                            <td>{student.name}</td>
+
+                                            {TOPICS.map(topic => {
+                                                const stat =
+                                                    student.summary.stats?.[topic.id] ||
+                                                    {};
+
+                                                return (
+                                                    <td key={topic.id}>
+                                                        {stat.runs || 0} exercises
+                                                        <small>
+                                                            {accuracy(
+                                                                stat.correct,
+                                                                stat.answered
+                                                            )} accuracy
+                                                        </small>
+                                                    </td>
+                                                );
+                                            })}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </details>
+                </div>
+            </details>
 
             <SchedulePlanner
                 students={overview.students}
+                assignments={overview.assignments}
                 presets={home.presets}
                 busy={busy}
                 run={run}
                 onSaved={load}
+                onProfile={onProfile}
+                selected={selected}
+                setSelected={setSelected}
             />
-
-            <section className="kt-card">
-                <h2>{home.actor.superadmin ? "All permitted assignments" : "Assignments I created"}</h2>
-                <p className="kt-muted">
-                    Assignments created through the new planner include scheduled emails.
-                    Older assignments remain available but have no retroactive email schedule.
-                </p>
-                <div className="kt-table-wrap">
-                    <table>
-                        <thead>
-                            <tr><th>Student / group</th><th>Progress</th><th>Deadline HKT</th><th>Status</th><th>Assigned by</th><th /></tr>
-                        </thead>
-                        <tbody>
-                            {overview.assignments.map(a => (
-                                <tr key={a.id}>
-                                    <td>{a.email}<small>{a.title}</small></td>
-                                    <td>{a.completed}/{a.target}<small>{a.late || 0} late</small></td>
-                                    <td>{hkTime(a.dueAt)}</td>
-                                    <td>{assignmentStatus(a)}<small>{a.compulsory ? "Compulsory" : "Optional"}</small></td>
-                                    <td>{a.creator}</td>
-                                    <td>
-                                        {!a.cancelled && (
-                                            <button
-                                                className="kt-secondary"
-                                                disabled={busy}
-                                                onClick={() => {
-                                                    if (!window.confirm("Cancel this assignment? Existing results will be retained.")) return;
-                                                    run(async () => {
-                                                        await knowledgeApi("cancelAssignment", { id: a.id });
-                                                        await load();
-                                                    });
-                                                }}
-                                            >Cancel</button>
-                                        )}
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            </section>
         </>
     );
 }
@@ -1409,6 +1452,9 @@ function Bank({ busy, run, refreshHome }) {
 
 export default function KnowledgeTest() {
     const { user, realUser, authLoading, loginWithGoogle } = useAuth();
+    const { language } = useLanguage();
+
+    const tr = (en, zh) => language === "zh" ? zh : en;
 
     const [home, setHome] = useState(null);
     const [tab, setTab] = useState("practice");
@@ -1421,10 +1467,11 @@ export default function KnowledgeTest() {
     const run = async job => {
         setBusy(true);
         setError("");
+
         try {
             return await job();
-        } catch (err) {
-            setError(err.message || "The request failed.");
+        } catch (problem) {
+            setError(problem.message || "The request failed.");
             return null;
         } finally {
             setBusy(false);
@@ -1437,23 +1484,48 @@ export default function KnowledgeTest() {
     };
 
     useEffect(() => {
-        if (authLoading || !realUser?.isAuthorized || user?.isImpersonating) return;
-        let active = true;
-
         setHome(null);
+        setAttempt(null);
+        setReport(null);
+        setProfileEmail(null);
+        setTab("practice");
+
+        if (
+            authLoading ||
+            !realUser?.isAuthorized ||
+            user?.isImpersonating
+        ) return undefined;
+
+        let active = true;
 
         run(async () => {
             const result = await knowledgeApi("home");
+
             if (active) setHome(result);
         });
 
-        return () => { active = false; };
+        return () => {
+            active = false;
+        };
+
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [authLoading, realUser?.email, realUser?.isAuthorized, user?.isImpersonating]);
+    }, [
+        authLoading,
+        realUser?.email,
+        realUser?.isAuthorized,
+        user?.isImpersonating
+    ]);
 
     const start = result => {
-        if (result.status === "submitted") setReport(result);
-        else setAttempt(result);
+        if (!result) return;
+
+        if (result.status === "submitted") {
+            setAttempt(null);
+            setReport(result);
+        } else {
+            setReport(null);
+            setAttempt(result);
+        }
     };
 
     const exit = async () => {
@@ -1462,36 +1534,54 @@ export default function KnowledgeTest() {
     };
 
     const body = () => {
-        if (authLoading) return <section className="kt-card">Checking access…</section>;
+        if (authLoading) {
+            return (
+                <section className="kt-card">
+                    {tr("Checking access…", "正在核對使用權限…")}
+                </section>
+            );
+        }
 
         if (!realUser) {
             return (
                 <section className="kt-card">
-                    <h2>Sign in to practise</h2>
+                    <h2>{tr("Sign in to practise", "登入後開始練習")}</h2>
+
                     <button
+                        type="button"
                         onClick={() => {
                             rememberKnowledgeLoginReturn();
                             loginWithGoogle();
                         }}
                     >
-                        Sign in
+                        {tr("Sign in", "登入")}
                     </button>
                 </section>
             );
         }
 
         if (!realUser.isAuthorized) {
-            return <section className="kt-card">Your account does not have access to this feature.</section>;
+            return (
+                <section className="kt-card">
+                    {tr(
+                        "Your account does not have access to this feature.",
+                        "你的帳戶未獲授權使用此功能。"
+                    )}
+                </section>
+            );
         }
 
         if (report) {
             return (
-                <Report
+                <StudentReport
                     key={report.id}
                     attempt={report}
                     onBack={() => run(async () => {
                         setReport(null);
-                        if (!user?.isImpersonating) await refreshHome();
+
+                        if (!user?.isImpersonating) {
+                            await refreshHome();
+                        }
                     })}
                 />
             );
@@ -1501,10 +1591,13 @@ export default function KnowledgeTest() {
             return (
                 <>
                     <p className="kt-notice">
-                        Read-only student inspection. Exercise starts, submissions and administrator changes
-                        are disabled while impersonating. Stop debugging to use administrator preview.
+                        {tr(
+                            "Read-only student inspection. Starting exercises, submitting answers and administrator changes are disabled while impersonating.",
+                            "目前為唯讀學生檢視模式，不能開始練習、提交答案或進行管理員修改。"
+                        )}
                     </p>
-                    <Profile
+
+                    <StudentProfile
                         key={user.email}
                         email={user.email}
                         busy={busy}
@@ -1534,9 +1627,19 @@ export default function KnowledgeTest() {
         if (!home) {
             return (
                 <section className="kt-card">
-                    {busy ? "Loading Knowledge Test…" : (
-                        <button onClick={() => run(refreshHome)}>Retry loading</button>
-                    )}
+                    {busy
+                        ? tr(
+                            "Loading Knowledge Test…",
+                            "正在載入歷史知識測驗…"
+                        )
+                        : (
+                            <button
+                                type="button"
+                                onClick={() => run(refreshHome)}
+                            >
+                                {tr("Retry loading", "重新載入")}
+                            </button>
+                        )}
                 </section>
             );
         }
@@ -1544,43 +1647,131 @@ export default function KnowledgeTest() {
         if (profileEmail) {
             return (
                 <>
-                    <button className="kt-secondary" onClick={() => setProfileEmail(null)}>← Back to overview</button>
-                    <Profile email={profileEmail} busy={busy} run={run} onReport={setReport} />
+                    <button
+                        type="button"
+                        className="kt-secondary"
+                        onClick={() => setProfileEmail(null)}
+                    >
+                        ← {tr("Back to overview", "返回總覽")}
+                    </button>
+
+                    <StudentProfile
+                        key={profileEmail}
+                        email={profileEmail}
+                        busy={busy}
+                        run={run}
+                        onReport={setReport}
+                    />
                 </>
             );
         }
 
         return (
             <>
-                <div className="kt-tabs" aria-label="Knowledge Test sections">
-                    <button className={tab === "practice" ? "active" : ""} onClick={() => setTab("practice")}>
-                        {home.actor.admin ? "Preview & presets" : "Practice"}
+                <div
+                    className="kt-tabs"
+                    aria-label={tr(
+                        "Knowledge Test sections",
+                        "歷史知識測驗功能"
+                    )}
+                >
+                    <button
+                        type="button"
+                        className={tab === "practice" ? "active" : ""}
+                        onClick={() => setTab("practice")}
+                    >
+                        {home.actor.admin
+                            ? tr("Preview & presets", "預覽及預設")
+                            : tr("Practice", "練習")}
                     </button>
-                    <button className={tab === "progress" ? "active" : ""} onClick={() => setTab("progress")}>
-                        {home.actor.admin ? "My preview history" : "My progress"}
+
+                    <button
+                        type="button"
+                        className={tab === "progress" ? "active" : ""}
+                        onClick={() => setTab("progress")}
+                    >
+                        {home.actor.admin
+                            ? tr("My preview history", "我的預覽紀錄")
+                            : tr("My progress", "我的進度")}
                     </button>
+
                     {home.actor.admin && (
                         <>
-                            <button className={tab === "admin" ? "active" : ""} onClick={() => setTab("admin")}>Students & assignments</button>
-                            <button className={tab === "bank" ? "active" : ""} onClick={() => setTab("bank")}>Question bank</button>
+                            <button
+                                type="button"
+                                className={tab === "admin" ? "active" : ""}
+                                onClick={() => setTab("admin")}
+                            >
+                                {tr("Students & assignments", "學生及功課")}
+                            </button>
+
+                            <button
+                                type="button"
+                                className={
+                                    tab === "assignment-test" ? "active" : ""
+                                }
+                                onClick={() => setTab("assignment-test")}
+                            >
+                                {tr("Test assigned practice", "測試指定練習")}
+                            </button>
+
+                            <button
+                                type="button"
+                                className={tab === "bank" ? "active" : ""}
+                                onClick={() => setTab("bank")}
+                            >
+                                {tr("Question bank", "題庫")}
+                            </button>
                         </>
                     )}
                 </div>
 
                 {tab === "practice" && (
-                    <PracticeHome home={home} busy={busy} run={run} start={start} refresh={refreshHome} />
+                    <StudentPracticeHome
+                        home={home}
+                        busy={busy}
+                        run={run}
+                        start={start}
+                        refresh={refreshHome}
+                    />
                 )}
 
                 {tab === "progress" && (
-                    <Profile email={realUser.email} busy={busy} run={run} onReport={setReport} />
+                    <StudentProfile
+                        key={realUser.email}
+                        email={realUser.email}
+                        busy={busy}
+                        run={run}
+                        onReport={setReport}
+                    />
                 )}
 
                 {tab === "admin" && home.actor.admin && (
-                    <AdminPanel home={home} busy={busy} run={run} onProfile={setProfileEmail} />
+                    <AdminPanel
+                        home={home}
+                        busy={busy}
+                        run={run}
+                        onProfile={setProfileEmail}
+                    />
+                )}
+
+                {tab === "assignment-test" && home.actor.admin && (
+                    <AdminAssignmentTest
+                        home={home}
+                        busy={busy}
+                        run={run}
+                        start={start}
+                        refresh={refreshHome}
+                        PracticeHomeComponent={StudentPracticeHome}
+                    />
                 )}
 
                 {tab === "bank" && home.actor.admin && (
-                    <Bank busy={busy} run={run} refreshHome={refreshHome} />
+                    <Bank
+                        busy={busy}
+                        run={run}
+                        refreshHome={refreshHome}
+                    />
                 )}
             </>
         );
@@ -1589,13 +1780,66 @@ export default function KnowledgeTest() {
     return (
         <main className="kt">
             <header className="kt-page-header">
-                <p className="kt-eyebrow">DSE-related · History</p>
-                <h1>Knowledge Test</h1>
-                <p>Build understanding. Revisit mistakes. Make steady progress.</p>
+                <p className="kt-eyebrow">
+                    {tr("DSE-related · History", "香港中學文憑試 · 歷史")}
+                </p>
+
+                <h1>{tr("Knowledge Test", "歷史知識測驗")}</h1>
+
+                <p>
+                    {tr(
+                        "Build understanding. Revisit mistakes. Make steady progress.",
+                        "鞏固理解，重溫錯誤，循序漸進。"
+                    )}
+                </p>
             </header>
 
-            {error && <div className="kt-error" role="alert">{error}</div>}
-            {busy && <div className="kt-working" role="status">Working…</div>}
+            {error && (
+                <div className="kt-error" role="alert">
+                    {language === "zh" && (
+                        <p>
+                            操作未能完成。如功課已結束或已完成，請返回功課列表。
+                            未完成的練習可使用「放棄練習」清除。
+                        </p>
+                    )}
+
+                    <div>{error}</div>
+
+                    {attempt && (
+                        <button
+                            type="button"
+                            className="kt-secondary kt-spaced"
+                            disabled={busy}
+                            onClick={() => {
+                                if (!window.confirm(tr(
+                                    "Abandon this unfinished exercise? Submitted reports are not deleted.",
+                                    "放棄這份未完成練習？已提交的報告不會被刪除。"
+                                ))) return;
+
+                                run(async () => {
+                                    await knowledgeApi("abandon", {
+                                        id: attempt.id
+                                    });
+
+                                    setAttempt(null);
+                                    await refreshHome();
+                                });
+                            }}
+                        >
+                            {tr(
+                                "Abandon unfinished exercise and return",
+                                "放棄未完成練習並返回"
+                            )}
+                        </button>
+                    )}
+                </div>
+            )}
+
+            {busy && (
+                <div className="kt-working" role="status">
+                    {tr("Working…", "處理中…")}
+                </div>
+            )}
 
             {body()}
         </main>

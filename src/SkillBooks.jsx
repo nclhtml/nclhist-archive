@@ -694,12 +694,13 @@ function SkillsManager({
                                             [kind]: [
                                                 ...previous.sections[kind],
                                                 {
-                                                    id: crypto.randomUUID(),
+id: crypto.randomUUID(),
                                                     titleEn: 'New skill',
                                                     titleZh: '新技巧',
                                                     en: '',
                                                     zh: '',
-                                                    tags: []
+                                                    tags: [],
+                                                    markBand: 'any'
                                                 }
                                             ]
                                         }
@@ -826,6 +827,62 @@ function SkillsManager({
                                             );
                                         })}
                                     </div>
+
+{kind === 'dbq' && (
+                                        <label className="block space-y-1 text-xs font-bold text-slate-700">
+                                            <span>
+                                                {zh
+                                                    ? '題型標籤的分數配對規則'
+                                                    : 'Mark rule for these linked labels'}
+                                            </span>
+
+                                            <select
+                                                disabled={busy}
+                                                className={inputStyle}
+                                                value={
+                                                    section.markBand ||
+                                                    (
+                                                        section.id.startsWith('short-')
+                                                            ? 'short'
+                                                            : section.id.startsWith('long-')
+                                                                ? 'long'
+                                                                : 'any'
+                                                    )
+                                                }
+                                                onChange={event =>
+                                                    updateSection(
+                                                        section.id,
+                                                        'markBand',
+                                                        event.target.value
+                                                    )
+                                                }
+                                            >
+                                                <option value="any">
+                                                    {zh
+                                                        ? '任何分數 — 只按標籤配對'
+                                                        : 'Any marks — match by label only'}
+                                                </option>
+
+                                                <option value="short">
+                                                    {zh
+                                                        ? '短答 — 0 至 4 分'
+                                                        : 'Short — 0 to 4 marks'}
+                                                </option>
+
+                                                <option value="long">
+                                                    {zh
+                                                        ? '長答 — 5 分或以上'
+                                                        : 'Long — 5 marks or above'}
+                                                </option>
+                                            </select>
+
+                                            <p className="font-normal text-slate-500">
+                                                {zh
+                                                    ? '此規則適用於本章節的全部連結標籤。分數專用配對優先於「任何分數」。缺漏或無效分數不會被猜測。'
+                                                    : 'Applies to every label linked to this section. A mark-specific match takes priority over Any marks. Missing or invalid marks are not guessed.'}
+                                            </p>
+                                        </label>
+                                    )}
 
                                     <details className="rounded-lg bg-slate-50 p-3">
                                         <summary className="cursor-pointer text-sm font-bold text-indigo-800">

@@ -13,6 +13,12 @@ const catalogRef = root.collection("state").doc("catalog");
 
 const SUPER_ADMIN = "clng@ktls.edu.hk";
 
+const assignmentLifecycle = require("./assignment-lifecycle.cjs")({
+    db,
+    root,
+    requireValue
+});
+
 const TOPICS = [
     { id: "japan", label: "Japan", theme: "A" },
     { id: "china", label: "China", theme: "A" },
@@ -272,6 +278,9 @@ async function rosterFor(actor) {
 
     studentSnap.forEach(doc => {
         const p = doc.data();
+
+        if (p.isDeleted || p.isDummy) return;
+
         const email = String(p.email || "").toLowerCase().trim();
         if (!email) return;
         if (!profiles.has(email)) profiles.set(email, []);
@@ -427,6 +436,7 @@ function publicAttempt(a) {
         topics: a.topics,
         createdAt: a.createdAt,
         assignmentId: a.assignmentId,
+        testAssignment: a.testAssignment === true,
         questions: a.questions.map(publicQuestion),
         answers: a.answers || {},
         answerRevision: a.answerRevision || 0
@@ -657,7 +667,11 @@ async function homeFor(actor) {
         presets: presetSnap.docs.map(d => d.data()).sort((a, b) =>
             a.name.localeCompare(b.name)
         ),
-        assignments: assignmentSnap.docs.map(d => d.data())
+        assignments: assignmentSnap.docs
+            .map(d => assignmentLifecycle.project({
+                ...d.data(),
+                id: d.id
+            }))
             .sort((a, b) => b.createdAt - a.createdAt)
     };
 }
@@ -817,6 +831,23 @@ async function saveAttempt(actor, data, abandon = false) {
             }
 
             return { ok: true };
+        }
+
+        if (a.assignmentId) {
+            const assignmentSnapshot = await tx.get(
+                assignments.doc(a.assignmentId)
+            );
+
+            const assignment = assignmentSnapshot.data();
+
+            requireValue(
+                assignmentSnapshot.exists &&
+                assignment.email === actor.email,
+                "This assignment is unavailable.",
+                "failed-precondition"
+            );
+
+            assignmentLifecycle.assertOpen(assignment);
         }
 
         const saveId = idOf(data.saveId);
@@ -1088,10 +1119,27 @@ async function adminOverview(actor) {
 
     const allowedEmails = new Set(roster.map(s => s.email));
 
+    const studentByEmail = new Map(
+        records.map(student => [student.email, student])
+    );
+
     return {
         students: records,
-        assignments: assignmentSnap.docs.map(d => d.data())
-            .filter(a => allowedEmails.has(a.email))
+        assignments: assignmentSnap.docs
+            .map(document => ({
+                ...document.data(),
+                id: document.id
+            }))
+            .filter(assignment => allowedEmails.has(assignment.email))
+            .map(assignment => {
+                const student = studentByEmail.get(assignment.email);
+
+                return {
+                    ...assignmentLifecycle.project(assignment),
+                    studentName: student?.name || assignment.email,
+                    studentClass: student?.className || ""
+                };
+            })
             .sort((a, b) => b.createdAt - a.createdAt)
     };
 }
@@ -1505,6 +1553,21 @@ const scheduling = require("./scheduling.cjs")({
     bankReadiness: foundation.readiness
 });
 
+const assignmentTools = require("./assignment-tools.cjs")({
+    db,
+    root,
+    TOPICS,
+    requireValue,
+    requireAdmin,
+    rosterFor,
+    cleanTopics,
+    idOf,
+    emailOf,
+    text,
+    integer,
+    bankReadiness: foundation.readiness
+});
+
 exports.knowledgeNotifications = functions
     .region("us-central1")
     .runWith({
@@ -1523,6 +1586,18 @@ exports.knowledgeApi = functions
             const actor = await actorFor(context);
 
             switch (data.action) {
+                case "studentGroupList":
+                    return await assignmentTools.listGroups(actor);
+
+                case "studentGroupSave":
+                    return await assignmentTools.saveGroup(actor, data);
+
+                case "studentGroupDelete":
+                    return await assignmentTools.deleteGroup(actor, data);
+
+                case "testAssignment":
+                    return await assignmentTools.createTestAssignment(actor, data);
+
                 case "schedule":
                     return await scheduling.create(actor, data);
 
@@ -1531,6 +1606,15 @@ exports.knowledgeApi = functions
 
                 case "cancelSchedule":
                     return await scheduling.cancel(actor, data);
+
+                case "endSchedule":
+                    requireAdmin(actor);
+                    return await assignmentLifecycle.endSchedule(actor, data);
+
+                case "endAssignment":
+                    requireAdmin(actor);
+                    return await assignmentLifecycle.endAssignment(actor, data);
+
                 case "home":
                     return await homeFor(actor);
 
@@ -1548,9 +1632,43 @@ exports.knowledgeApi = functions
 
                 case "attempt": {
                     const email = await authorizeTarget(actor, data.email);
-                    const snap = await attemptsRef(email).doc(idOf(data.id)).get();
-                    requireValue(snap.exists, "Exercise not found.", "not-found");
-                    return publicAttempt(snap.data());
+                    const snap = await attemptsRef(email)
+                        .doc(idOf(data.id))
+                        .get();
+
+                    requireValue(
+                        snap.exists,
+                        "Exercise not found.",
+                        "not-found"
+                    );
+
+                    const attempt = snap.data();
+
+                    // Submitted reports remain readable after closure.
+                    // Administrators inspecting another student's active
+                    // record remain read-only in the existing interface.
+                    if (
+                        email === actor.email &&
+                        attempt.status === "active" &&
+                        attempt.assignmentId
+                    ) {
+                        const assignmentSnapshot = await assignments
+                            .doc(attempt.assignmentId)
+                            .get();
+
+                        const assignment = assignmentSnapshot.data();
+
+                        requireValue(
+                            assignmentSnapshot.exists &&
+                            assignment.email === actor.email,
+                            "This assignment is unavailable.",
+                            "failed-precondition"
+                        );
+
+                        assignmentLifecycle.assertOpen(assignment);
+                    }
+
+                    return publicAttempt(attempt);
                 }
 
                 case "profile":

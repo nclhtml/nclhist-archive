@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
-import { knowledgeApi, TOPICS, hkTime } from "./api.js";
+import { knowledgeApi, TOPICS } from "./api.js";
+import StudentGroups from "./StudentGroups.jsx";
+import SavedAssignmentSchedules from "./SavedAssignmentSchedules.jsx";
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -42,12 +44,15 @@ function defaultRow(previous) {
 
 export default function SchedulePlanner({
   students,
+  assignments,
   presets,
   busy,
   run,
-  onSaved
+  onSaved,
+  onProfile,
+  selected,
+  setSelected
 }) {
-  const [selected, setSelected] = useState([]);
   const [className, setClassName] = useState("");
   const [rows, setRows] = useState(() => [defaultRow()]);
   const [savedSchedules, setSavedSchedules] = useState([]);
@@ -155,6 +160,13 @@ export default function SchedulePlanner({
           disabled={busy || Boolean(pendingPlan)}
           style={{ border: 0, padding: 0, minWidth: 0 }}
         >
+          <StudentGroups
+            selected={selected}
+            setSelected={setSelected}
+            busy={busy || Boolean(pendingPlan)}
+            run={run}
+          />
+
           <label className="kt-field">
             Class filter
             <select value={className} onChange={e => setClassName(e.target.value)}>
@@ -240,7 +252,7 @@ export default function SchedulePlanner({
               </div>
 
               <label className="kt-field">
-                Saved practice group
+                Saved topic preset
                 <select
                   value={row.presetId}
                   onChange={e => {
@@ -383,96 +395,17 @@ export default function SchedulePlanner({
         {message && <p className="kt-notice kt-spaced" role="status">{message}</p>}
       </section>
 
-      <section className="kt-card">
-        <div className="kt-row kt-between">
-          <h2>Saved email schedules</h2>
-          <button
-            className="kt-secondary"
-            disabled={busy}
-            onClick={() => run(loadSchedules)}
-          >
-            Refresh
-          </button>
-        </div>
-
-        <p className="kt-muted">
-          “Queued” means handed to the email extension, not confirmed inbox delivery.
-          Cancellation cannot recall messages already queued or sent.
-        </p>
-
-        <div className="kt-table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Assignment</th>
-                <th>Students / target</th>
-                <th>Times — HKT</th>
-                <th>Email processing</th>
-                <th />
-              </tr>
-            </thead>
-
-            <tbody>
-              {savedSchedules.map(s => (
-                <tr key={s.id}>
-                  <td>
-                    {s.title}
-                    <small>{s.creator}</small>
-                    {s.cancelled && <small>Cancelled</small>}
-                  </td>
-
-                  <td>
-                    {s.recipientCount} students
-                    <small>{s.target} exercises each</small>
-                  </td>
-
-                  <td>
-                    Start: {hkTime(s.startsAt)}
-                    <small>Reminder: {hkTime(s.reminderAt)}</small>
-                    <small>Deadline: {hkTime(s.dueAt)}</small>
-                  </td>
-
-                  <td>
-                    {["start", "reminder", "report"].map(stage => {
-                      const status = s.notifications?.[stage];
-
-                      return (
-                        <small key={stage}>
-                          {stage}: {status
-                            ? `${status.status}; ${status.queued} queued`
-                            : s.cancelled ? "Cancelled" : "Pending"}
-                        </small>
-                      );
-                    })}
-                  </td>
-
-                  <td>
-                    {!s.cancelled && (
-                      <button
-                        className="kt-secondary"
-                        disabled={busy}
-                        onClick={() => {
-                          if (!window.confirm(
-                            "Cancel this schedule and its student assignments?"
-                          )) return;
-
-                          run(async () => {
-                            await knowledgeApi("cancelSchedule", { id: s.id });
-                            await loadSchedules();
-                            await onSaved();
-                          });
-                        }}
-                      >
-                        Cancel schedule
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <SavedAssignmentSchedules
+        schedules={savedSchedules}
+        assignments={assignments || []}
+        busy={busy}
+        run={run}
+        onProfile={onProfile}
+        refresh={async () => {
+          await loadSchedules();
+          await onSaved();
+        }}
+      />
     </>
   );
 }

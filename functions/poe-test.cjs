@@ -1,8 +1,8 @@
 "use strict";
 
 const readline = require("node:readline/promises");
-const {stdin, stdout} = require("node:process");
-const {PDFDocument, StandardFonts, rgb} = require("pdf-lib");
+const { stdin, stdout } = require("node:process");
+const { PDFDocument, StandardFonts, rgb } = require("pdf-lib");
 
 const MODEL = "Gemini-3.1-Pro";
 const ENDPOINT = "https://api.poe.com/v1/chat/completions";
@@ -142,15 +142,15 @@ async function createVisualTestPdf() {
   });
 
   pageOne.drawLine({
-    start: {x: 110, y: 280},
-    end: {x: 155, y: 230},
+    start: { x: 110, y: 280 },
+    end: { x: 155, y: 230 },
     thickness: 8,
     color: rgb(1, 0, 0),
   });
 
   pageOne.drawLine({
-    start: {x: 155, y: 230},
-    end: {x: 270, y: 370},
+    start: { x: 155, y: 230 },
+    end: { x: 270, y: 370 },
     thickness: 8,
     color: rgb(1, 0, 0),
   });
@@ -179,6 +179,102 @@ async function createVisualTestPdf() {
   return document.save();
 }
 
+async function testOriginalPdf(apiKey) {
+  const { readFile, stat } = require("node:fs/promises");
+
+  console.log("");
+  console.log("TEST THE ORIGINAL PDF");
+  console.log("This sends one original PDF directly to Poe.");
+  console.log("It bypasses Firebase and does not modify the PDF.");
+  console.log("One request may consume points. No automatic retries.");
+  console.log("");
+
+  const enteredPath = await terminal.question(
+    "Paste the full path of the PDF that failed, then press Enter: "
+  );
+
+  let filePath = enteredPath.trim();
+
+  // Windows 'Copy as path' may surround the path with quotation marks.
+  if (
+    (filePath.startsWith('"') && filePath.endsWith('"')) ||
+    (filePath.startsWith("'") && filePath.endsWith("'"))
+  ) {
+    filePath = filePath.slice(1, -1);
+  }
+
+  if (!filePath) {
+    console.log("Cancelled. No request sent.");
+    return;
+  }
+
+  const info = await stat(filePath);
+
+  if (!info.isFile()) {
+    throw new Error("The selected path is not a file.");
+  }
+
+  if (info.size < 1 || info.size > 100 * 1024 * 1024) {
+    throw new Error(
+      "The PDF must be non-empty and no larger than 100 MiB. " +
+      "No request was sent."
+    );
+  }
+
+  const bytes = await readFile(filePath);
+
+  // Check locally, without rewriting or re-saving the PDF.
+  const pdf = await PDFDocument.load(bytes);
+
+  console.log(`PDF pages: ${pdf.getPageCount()}`);
+  console.log(`PDF size: ${(bytes.length / 1024 / 1024).toFixed(2)} MiB`);
+  console.log(
+    "Standard PDF header at byte zero:",
+    bytes.subarray(0, 5).toString("ascii") === "%PDF-"
+  );
+  console.log("The original PDF bytes will be sent unchanged.");
+  console.log("");
+
+  const approval = await terminal.question(
+    "Send this original PDF to Poe? Type YES and press Enter: "
+  );
+
+  if (approval.trim() !== "YES") {
+    console.log("Cancelled. No request sent.");
+    return;
+  }
+
+  const reply = await askPoe(apiKey, [
+    {
+      type: "text",
+      text:
+        "Check whether you can read the attached PDF. " +
+        "Do not reproduce student names or other personal details. " +
+        "Return only one JSON object with these fields: " +
+        '{"canRead":false,"documentKind":"","limitations":""}. ' +
+        "Set canRead true only if you can actually read its contents. " +
+        "Describe the document kind briefly and report limitations honestly.",
+    },
+    {
+      type: "file",
+      file: {
+        filename: "sample.pdf",
+        file_data:
+          `data:application/pdf;base64,${bytes.toString("base64")}`,
+      },
+    },
+  ]);
+
+  console.log("");
+  console.log("POE REPLIED TO THE ORIGINAL-PDF REQUEST:");
+  console.log(reply);
+  console.log("");
+  console.log(
+    "A reply means this request was accepted. It does not prove " +
+    "complete page inspection or successful website extraction."
+  );
+}
+
 async function main() {
   const apiKey = String(process.env.POE_TEST_API_KEY || "").trim();
 
@@ -194,6 +290,11 @@ async function main() {
       "This test needs a recent Node.js runtime. " +
       "Run node --version and send back the version shown."
     );
+  }
+
+  if (process.argv.includes("--real-pdf")) {
+    await testOriginalPdf(apiKey);
+    return;
   }
 
   console.log("");
@@ -315,7 +416,7 @@ main()
 
     console.error("");
     console.error("TEST STOPPED:");
-console.error(
+    console.error(
       key ? safeErrorMessage(error.message, key) : error.message
     );
 

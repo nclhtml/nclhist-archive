@@ -89,6 +89,15 @@ import {
 import { saveArchivePdf } from './archiveVersionFiles.js';
 import { VersionPdfInline } from './VersionPdf.jsx';
 
+import { archiveTool } from './archiveToolsClient.js';
+
+import ArchiveLabelAudit, {
+  removeQuestionTypeEverywhere
+} from './ArchiveLabelAudit.jsx';
+
+import ReportResolutionNotice from './ReportResolutionNotice.jsx';
+import ArchiveVersionSearchControl from './ArchiveVersionSearchControl.jsx';
+
 const createEmptyFilters = () => ({
   origin: [],
   year: [],
@@ -1816,10 +1825,15 @@ export default function AdvancedHistoryArchive() {
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [downloadHistory, setDownloadHistory] = useState([]);
 
-  // State for submitting reports (Missing lines)
+  // State for submitting reports.
   const [showReportModal, setShowReportModal] = useState(false);
   const [reportForm, setReportForm] = useState({ reason: '', details: '' });
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
+
+  // Retain the ID after a network failure so retrying cannot
+  // create the same report twice.
+  const reportRequestIdRef = useRef('');
+  const reportSubmitLockRef = useRef(false);
 
   // State for viewing reports
   const [activeReports, setActiveReports] = useState([]);
@@ -2170,6 +2184,7 @@ export default function AdvancedHistoryArchive() {
 
     const clearIncomingViewId = () => {
       params.delete('viewId');
+      params.delete('resolvedAnswer');
       const nextSearch = params.toString();
 
       navigate(
@@ -2282,7 +2297,13 @@ export default function AdvancedHistoryArchive() {
 
     if (!access.allowed) return;
 
-    setViewingAnswer(false);
+    setViewingAnswer(
+      params.get('resolvedAnswer') === '1' &&
+      access.hasFullAccess &&
+      !access.isDseViewOnly &&
+      Boolean(parentDoc.hasAnswer)
+    );
+
     setActiveSample(null);
     setCompareSample(null);
 
@@ -2340,18 +2361,42 @@ export default function AdvancedHistoryArchive() {
   }, [user, authLoading]);
 
   const handleClearReport = async (reportId) => {
-    if (!window.confirm("Confirm to clear this specific report? (This means the problem is fixed)")) return;
-    try {
-      await deleteDoc(doc(db, "admin_logs", reportId));
-      setActiveReports(prev => prev.filter(r => r.id !== reportId));
-      setSelectedReports(prev => prev.filter(r => r.id !== reportId));
+    if (!user?.isAdmin || impersonatedEmail) return;
 
-      // Close modal if that was the last report for this document
+    if (!window.confirm(
+      'Confirm that this reported problem has been resolved?\n\n' +
+      'The verified reporter will receive a one-time notification.\n' +
+      'Older reports without a verified reporter ID cannot be notified automatically.'
+    )) return;
+
+    try {
+      const result = await archiveTool({
+        action: 'resolveReport',
+        reportId
+      });
+
+      setActiveReports(previous =>
+        previous.filter(report => report.id !== reportId)
+      );
+
+      setSelectedReports(previous =>
+        previous.filter(report => report.id !== reportId)
+      );
+
       if (selectedReports.length <= 1) {
         setShowReportViewModal(false);
       }
+
+      if (result.legacy) {
+        alert(
+          'This older report was cleared.\n\n' +
+          'It has no verified reporter UID, so no automatic notification was sent. ' +
+          'New reports submitted after this update support reporter notifications.'
+        );
+      }
     } catch (error) {
-      console.error("Error clearing report:", error);
+      console.error('Error resolving report:', error);
+      alert('The report was not cleared.\n\n' + error.message);
     }
   };
 
@@ -3452,6 +3497,10 @@ export default function AdvancedHistoryArchive() {
 
     let results = [];
     archives.forEach(parent => {
+      // Keep old assigned records available for direct/dashboard opening,
+      // but not as ordinary student search results.
+      if (!user.isAdmin && parent.archiveSearchable === false) return;
+
       const parentTierStr = parent.tier || '10';
       const parentTierNum = parseInt(parentTierStr, 10) || 10;
 
@@ -3891,18 +3940,122 @@ export default function AdvancedHistoryArchive() {
     }
   };
 
-  // --- ADMIN: DELETE FILTER TAGS ---
-  const handleDeleteFilterTag = (type, value) => {
-    if (!user?.isAdmin) return;
+  const refreshArchiveAfterMaintenance = async () => {
+    const result = await loadArchiveAccess({
+      effectiveEmail: user.email
+    });
 
+    archiveReadVersionRef.current += 1;
+
+    setArchives(result.archives);
+    setAllowedViewIds(result.accessContext.linkedDocIds || []);
+
+    setArchiveReadStatus({
+      loading: false,
+      error: '',
+      context: result.accessContext
+    });
+
+    return result;
+  };
+
+  // --- ADMIN: DELETE FILTER TAGS ---
+  const handleDeleteFilterTag = async (type, value) => {
+    if (!user?.isAdmin || impersonatedEmail) return;
+
+    // Preserve existing session-only behaviour for other tag categories.
     if (type === 'topic') {
-      setAvailableTopics(prev => prev.filter(t => t !== value));
-    } else if (type === 'sourceType') {
-      setAvailableSourceTypes(prev => prev.filter(t => t !== value));
-    } else if (type === 'qTypeDBQ') {
-      setAvailableQuestionTypes(prev => ({ ...prev, "Paper 1 (DBQ)": prev["Paper 1 (DBQ)"].filter(t => t !== value) }));
-    } else if (type === 'qTypeEssay') {
-      setAvailableQuestionTypes(prev => ({ ...prev, "Paper 2 (Essay)": prev["Paper 2 (Essay)"].filter(t => t !== value) }));
+      setAvailableTopics(previous =>
+        previous.filter(tag => tag !== value)
+      );
+      return;
+    }
+
+    if (type === 'sourceType') {
+      setAvailableSourceTypes(previous =>
+        previous.filter(tag => tag !== value)
+      );
+      return;
+    }
+
+    if (!['qTypeDBQ', 'qTypeEssay'].includes(type)) return;
+
+    if (
+      archiveWriteBusyRef.current ||
+      isLoading ||
+      poeBusy
+    ) return;
+
+    const paperType = type === 'qTypeDBQ'
+      ? 'Paper 1 (DBQ)'
+      : 'Paper 2 (Essay)';
+
+    archiveWriteBusyRef.current = true;
+    archiveReadVersionRef.current += 1;
+    setArchiveSaving(true);
+
+    try {
+      const result = await removeQuestionTypeEverywhere({
+        paperType,
+        tag: value,
+        email: user.email
+      });
+
+      if (result.cancelled) return;
+
+      setArchives(result.records);
+      setPreviewItem(null);
+
+      const types = {
+        'Paper 1 (DBQ)': new Set(),
+        'Paper 2 (Essay)': new Set()
+      };
+
+      result.records.forEach(parent => {
+        (parent.subQuestions || []).forEach(child => {
+          ensureArray(child.questionType).forEach(tag => {
+            if (
+              typeof tag === 'string' &&
+              tag.trim() &&
+              types[parent.paperType]
+            ) {
+              types[parent.paperType].add(tag);
+            }
+          });
+        });
+      });
+
+      setAvailableQuestionTypes({
+        'Paper 1 (DBQ)': [...types['Paper 1 (DBQ)']].sort(),
+        'Paper 2 (Essay)': [...types['Paper 2 (Essay)']].sort()
+      });
+
+      setFilters(previous => ({
+        ...previous,
+        questionType: previous.questionType.filter(
+          tag => tag !== value
+        )
+      }));
+
+      alert(
+        `Question-type label "${value}" removed.\n\n` +
+        `Archive records changed: ${result.changed}\n\n` +
+        'Use the temporary missing-label audit to find questions needing replacement labels.'
+      );
+    } catch (error) {
+      console.error('Permanent label deletion failed:', error);
+
+      alert(error.message);
+
+      try {
+        await refreshArchiveAfterMaintenance();
+      } catch (refreshError) {
+        console.error('Could not refresh archive:', refreshError);
+      }
+    } finally {
+      archiveWriteBusyRef.current = false;
+      archiveReadVersionRef.current += 1;
+      setArchiveSaving(false);
     }
   };
 
@@ -5359,35 +5512,67 @@ export default function AdvancedHistoryArchive() {
 
   const handleReportSubmit = async (e) => {
     e.preventDefault();
+
+    if (
+      !previewItem ||
+      !user?.isAuthorized ||
+      reportSubmitLockRef.current
+    ) return;
+
+    if (impersonatedEmail || user?.isImpersonating) {
+      alert(
+        'Reports cannot be submitted while impersonating another account. ' +
+        'Exit Debug Mode first.'
+      );
+      return;
+    }
+
+    reportSubmitLockRef.current = true;
     setIsSubmittingReport(true);
+
     try {
-      let docName = "";
-      if (activeSample) {
-        // Find the specific question tag matching the currently viewed PDF
-        const matchedTag = Object.keys(activeSample.scoresData || {}).find(tag => activeSample.scoresData[tag].fileUrl === activeSample.currentFileUrl);
-        docName = `Student Sample (${activeSample.year} - Grade: ${activeSample.overallGrade}) - Question: ${matchedTag || 'Unknown'}`;
-      } else if (viewingAnswer) {
-        docName = "Answer Key: " + previewItem.parent.title;
-      } else {
-        docName = previewItem.isFullPaper ? previewItem.parent.title : `${previewItem.parent.title} Q${previewItem.child.label}`;
+      if (!reportRequestIdRef.current) {
+        reportRequestIdRef.current = crypto.randomUUID();
       }
 
-      const viewId = activeSample ? `sample_${activeSample.id}` : (previewItem.isFullPaper ? previewItem.parent.id : `${previewItem.parent.id}_${previewItem.child.id}`);
+      const sampleTag = activeSample
+        ? activeSample.currentTag ||
+        Object.keys(activeSample.scoresData || {}).find(tag =>
+          activeSample.scoresData[tag].fileUrl ===
+          activeSample.currentFileUrl
+        ) ||
+        ''
+        : '';
 
-      await addDoc(collection(db, "admin_logs"), {
-        type: 'USER_REPORT',
-        message: `<b>Report from ${user?.email}</b><br/><b>Document:</b> ${docName}<br/><b>Reason:</b> ${reportForm.reason}<br/><b>Details:</b> ${reportForm.details}`,
-        viewId: viewId,
-        timestamp: new Date().toISOString(),
-        viewed: false
+      await archiveTool({
+        action: 'submitReport',
+        requestId: reportRequestIdRef.current,
+        archiveId: previewItem.parent.id,
+        childId: previewItem.isFullPaper
+          ? ''
+          : String(previewItem.child.id),
+        sampleId: activeSample?.id || '',
+        sampleTag,
+        answer: Boolean(viewingAnswer && !activeSample),
+        reason: reportForm.reason,
+        details: reportForm.details
       });
+
+      reportRequestIdRef.current = '';
       setShowReportModal(false);
       setReportForm({ reason: '', details: '' });
-      alert("Report submitted successfully.");
+
+      alert('Report submitted successfully.');
     } catch (error) {
-      alert("Failed to submit report.");
+      alert(
+        'The report could not be confirmed.\n\n' +
+        error.message +
+        '\n\nYou may retry. The same request ID will be retained to prevent duplicates.'
+      );
+    } finally {
+      reportSubmitLockRef.current = false;
+      setIsSubmittingReport(false);
     }
-    setIsSubmittingReport(false);
   };
 
   const closePreview = () => {
@@ -5396,6 +5581,110 @@ export default function AdvancedHistoryArchive() {
     setActiveSample(null);
     setCompareSample(null);
   };
+
+  const openResolvedReportDocument = async notification => {
+    const result = await refreshArchiveAfterMaintenance();
+
+    const parent = result.archives.find(
+      item => item.id === notification.archiveId
+    );
+
+    if (!parent) {
+      throw new Error(
+        'The report was resolved, but this document is no longer available ' +
+        'under your current version or assignment permissions.'
+      );
+    }
+
+    const targetIsAvailable =
+      notification.targetViewId === parent.id ||
+      (parent.subQuestions || []).some(child =>
+        `${parent.id}_${child.id}` === notification.targetViewId
+      );
+
+    if (!targetIsAvailable) {
+      throw new Error(
+        'The reported question is no longer available. ' +
+        'Please contact the administrator.'
+      );
+    }
+
+    const params = new URLSearchParams();
+
+    params.set('viewId', notification.targetViewId);
+
+    if (notification.answer) {
+      params.set('resolvedAnswer', '1');
+    }
+
+    if (notification.sampleId) {
+      params.set('resolvedSampleId', notification.sampleId);
+      params.set('resolvedSampleTag', notification.sampleTag || '');
+    }
+
+    setPreviewItem(null);
+    setActiveSample(null);
+    setCompareSample(null);
+    setViewingAnswer(false);
+
+    navigate({
+      pathname: location.pathname,
+      search: `?${params.toString()}`,
+      hash: ''
+    });
+  };
+
+  // A resolved sample opens its original archive context first,
+  // then selects the exact sample after the normal sample query finishes.
+  useEffect(() => {
+    if (!previewItem) return;
+
+    const params = new URLSearchParams(location.search);
+    const sampleId = params.get('resolvedSampleId');
+
+    if (!sampleId) return;
+
+    const sampleTag = params.get('resolvedSampleTag') || '';
+    const sample = previewSamples.find(item => item.id === sampleId);
+    const score = sample?.scoresData?.[sampleTag];
+
+    if (!sample || !score?.fileUrl) return;
+
+    setViewingAnswer(false);
+    setShowStudentSamples(true);
+
+    setActiveSample({
+      ...sample,
+      currentTag: sampleTag,
+      currentFileUrl: score.fileUrl
+    });
+
+    setCompareSample(null);
+    setEditingComment(false);
+    setCommentText(score.comment || '');
+
+    params.delete('resolvedSampleId');
+    params.delete('resolvedSampleTag');
+
+    const nextSearch = params.toString();
+
+    navigate({
+      pathname: location.pathname,
+      search: nextSearch ? `?${nextSearch}` : '',
+      hash: location.hash
+    }, {
+      replace: true,
+      state: location.state
+    });
+  }, [
+    previewItem,
+    previewSamples,
+    location.search,
+    location.pathname,
+    location.hash,
+    location.state,
+    navigate
+  ]);
 
   const handleExportDoc = () => {
     if (!canManageAccess) return;
@@ -5657,6 +5946,30 @@ export default function AdvancedHistoryArchive() {
           {/* --- SKILLS BOOK LIBRARY --- */}
           {skills.launchBar}
           {skills.dialogs}
+
+          <ArchiveLabelAudit
+            allowed={Boolean(
+              user?.isAdmin &&
+              !impersonatedEmail &&
+              !user?.isImpersonating
+            )}
+            disabled={archiveSaving || isLoading || poeBusy}
+            onEdit={handleEditClick}
+            revision={archives}
+          />
+
+          <ReportResolutionNotice
+            key={user?.email || 'signed-out'}
+            enabled={Boolean(
+              !authLoading &&
+              user?.isAuthorized &&
+              !impersonatedEmail &&
+              !user?.isImpersonating
+            )}
+            accountKey={user?.email || ''}
+            language={language}
+            onOpen={openResolvedReportDocument}
+          />
 
           {/* --- CONDITIONAL RENDERING FOR SECURITY --- */}
 
@@ -7102,8 +7415,23 @@ export default function AdvancedHistoryArchive() {
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-6 space-y-8">
-                  <div className="text-sm text-slate-500 bg-blue-50 p-3 rounded-lg border border-blue-100">
-                    <span className="font-bold">{t("Note:")}</span> {t("Deleting a tag here removes it from the filter list for this session. To permanently delete a tag, you must edit the questions that contain it.")}
+                  <div className="text-sm text-slate-700 bg-blue-50 p-3 rounded-lg border border-blue-100 space-y-2">
+                    <p>
+                      <strong>Question-type labels:</strong> deleting a DBQ or
+                      Essay label permanently removes it from all matching
+                      saved questions, including older versions. You will
+                      receive a confirmation and JSON backup first.
+                    </p>
+
+                    <p>
+                      <strong>Topics and source types:</strong> deleting these
+                      still only hides them from this session's filter list.
+                    </p>
+
+                    <p>
+                      Use the temporary missing-label audit above the archive
+                      to find questions left without a question-type label.
+                    </p>
                   </div>
 
                   <EnglishFilterLabelEditor
@@ -8337,9 +8665,29 @@ export default function AdvancedHistoryArchive() {
                                 </p>
                               )}
 
+                              {batchOriginalsRef.current[0].versionFamilyId &&
+                                !impersonatedEmail && (
+                                  <ArchiveVersionSearchControl
+                                    key={
+                                      batchOriginalsRef.current[0].versionFamilyId
+                                    }
+                                    familyId={
+                                      batchOriginalsRef.current[0].versionFamilyId
+                                    }
+                                    archives={archives}
+                                    disabled={
+                                      isLoading ||
+                                      poeBusy ||
+                                      archiveSaving
+                                    }
+                                    onChanged={refreshArchiveAfterMaintenance}
+                                  />
+                                )}
+
                               <p className="text-xs text-indigo-800">
                                 Creating a version never moves an existing assessment
                                 link. Old links continue to use the original record.
+                                CE/AL documents support versions.
                               </p>
                             </section>
                           )}
@@ -8592,7 +8940,13 @@ export default function AdvancedHistoryArchive() {
                                         } else if (batchForm.origin === "DSE Pastpaper") {
                                           newTitle = `${yearNum || newYear}`;
                                         }
-                                        setBatchForm({ ...batchForm, year: newYear, title: newTitle });
+                                        setBatchForm({
+                                          ...batchForm,
+                                          year: newYear,
+                                          title: batchForm.versionDraft
+                                            ? batchForm.title
+                                            : newTitle
+                                        });
                                       }} />
                                   </div>
                                   <div>
@@ -8612,7 +8966,13 @@ export default function AdvancedHistoryArchive() {
                                         if (tierName.includes("S6 DSE")) formattedTier = "S6 Post-mock";
                                         newTitle = `KTLS ${yearStr} ${formattedTier}`;
                                       }
-                                      setBatchForm({ ...batchForm, tier: newTier, title: newTitle });
+                                      setBatchForm({
+                                        ...batchForm,
+                                        tier: newTier,
+                                        title: batchForm.versionDraft || editingId
+                                          ? batchForm.title
+                                          : newTitle
+                                      });
                                     }}>
                                       {systemTiers.map(tier => <option key={tier.id} value={tier.id}>{tier.name}</option>)}
                                     </select>

@@ -187,9 +187,81 @@ function emptyConfig() {
   };
 }
 
+function sectionMarkBand(section, kind) {
+  if (kind !== "dbq") return "any";
+
+  if (["any", "short", "long"].includes(section?.markBand)) {
+    return section.markBand;
+  }
+
+  // Backward-compatible defaults for existing built-in sections.
+  if (String(section?.id || "").startsWith("short-")) return "short";
+  if (String(section?.id || "").startsWith("long-")) return "long";
+
+  return "any";
+}
+
+function questionMarkBand(value) {
+  if (
+    typeof value !== "string" &&
+    typeof value !== "number"
+  ) {
+    return "";
+  }
+
+  const text = String(value).trim();
+
+  if (!/^\d+(?:\.0+)?$/.test(text)) return "";
+
+  const marks = Number(text);
+
+  if (!Number.isSafeInteger(marks) || marks < 0) return "";
+
+  return marks <= 4 ? "short" : "long";
+}
+
+function sectionsForQuestionTag(sections, kind, tag, marks) {
+  const linked = sections.filter(section =>
+    Array.isArray(section.tags) &&
+    section.tags.includes(tag)
+  );
+
+  if (kind !== "dbq") return linked;
+
+  const band = questionMarkBand(marks);
+
+  const exact = band
+    ? linked.filter(section =>
+      sectionMarkBand(section, kind) === band
+    )
+    : [];
+
+  // A specific mark match wins over a generic fallback.
+  if (exact.length) return exact;
+
+  return linked.filter(section =>
+    sectionMarkBand(section, kind) === "any"
+  );
+}
+
 async function readConfig() {
   const snapshot = await configRef.get();
-  return snapshot.exists ? snapshot.data() : emptyConfig();
+  const config = snapshot.exists ? snapshot.data() : emptyConfig();
+
+  return {
+    ...config,
+    sections: {
+      ...config.sections,
+      dbq: (config.sections?.dbq || []).map(section => ({
+        ...section,
+        markBand: sectionMarkBand(section, "dbq")
+      })),
+      essay: (config.sections?.essay || []).map(section => ({
+        ...section,
+        markBand: "any"
+      }))
+    }
+  };
 }
 
 async function authorize(req) {
@@ -777,11 +849,19 @@ async function processAction(account, body) {
           fail(400, "Invalid question-label mapping.");
         }
 
+        if (
+          row.markBand !== undefined &&
+          !["any", "short", "long"].includes(row.markBand)
+        ) {
+          fail(400, "Invalid skills mark-matching rule.");
+        }
+
         const output = {
           id: row.id,
           titleEn,
           titleZh,
           tags: [...new Set(row.tags)],
+          markBand: sectionMarkBand(row, kind),
           en: String(row.en || "").trim(),
           zh: String(row.zh || "").trim()
         };
@@ -884,6 +964,23 @@ async function processAction(account, body) {
       }
 
       const ids = new Set(body.childIds.map(String));
+
+      try {
+        const { assertArchiveChildAccess } =
+          require("./archive-access.cjs");
+
+        await assertArchiveChildAccess(
+          account.email,
+          body.archiveId,
+          [...ids]
+        );
+      } catch (error) {
+        fail(
+          403,
+          error.message || "These questions are unavailable."
+        );
+      }
+
       const savedQuestions = Array.isArray(archive.subQuestions)
         ? archive.subQuestions
         : [];
@@ -932,12 +1029,20 @@ async function processAction(account, body) {
     const entries = [];
     const warnings = [];
 
+    const includedEntries = new Set();
+
     for (const question of questions) {
-      const tags = Array.isArray(question.questionType)
+      const rawTags = Array.isArray(question.questionType)
         ? question.questionType
         : typeof question.questionType === "string"
           ? [question.questionType]
           : [];
+
+      const tags = [...new Set(
+        rawTags.filter(tag =>
+          typeof tag === "string" && tag.trim()
+        )
+      )];
 
       const questionLabel = `Q${question.label}`;
 
@@ -946,16 +1051,34 @@ async function processAction(account, body) {
       }
 
       for (const tag of tags) {
-        const matches = config.sections[kind].filter(section =>
-          section.tags.includes(tag)
+        const matches = sectionsForQuestionTag(
+          config.sections[kind],
+          kind,
+          tag,
+          question.marks
         );
 
         if (!matches.length) {
-          warnings.push(`${questionLabel}: "${tag}" is not linked.`);
+          const markDescription = kind === "dbq"
+            ? questionMarkBand(question.marks) ||
+            "missing/invalid marks"
+            : "essay";
+
+          warnings.push(
+            `${questionLabel}: "${tag}" has no matching skills section ` +
+            `(${markDescription}).`
+          );
           continue;
         }
 
         for (const section of matches) {
+          const entryKey = JSON.stringify([
+            String(question.id),
+            section.id
+          ]);
+
+          if (includedEntries.has(entryKey)) continue;
+
           const selected = parseRanges(
             section[language],
             asset.pageCount
@@ -963,7 +1086,9 @@ async function processAction(account, body) {
 
           if (!selected.length) {
             warnings.push(
-              `${questionLabel}: "${tag}" has no ${language.toUpperCase()} pages.`
+              `${questionLabel}: "${tag}" has no ` +
+              `${language.toUpperCase()} pages for ` +
+              `"${section.titleEn || section.titleZh}".`
             );
             continue;
           }
@@ -974,6 +1099,8 @@ async function processAction(account, body) {
               positions.set(page, pages.length);
             }
           }
+
+          includedEntries.add(entryKey);
 
           entries.push({
             question: questionLabel,

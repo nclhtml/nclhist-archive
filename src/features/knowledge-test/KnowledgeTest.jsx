@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from "react";
+import { onAuthStateChanged } from "firebase/auth";
+import { auth } from "../../firebase.js";
 import { useAuth } from "../../main.jsx";
 import useCloudAnswers from "./useCloudAnswers.js";
 import QuestionPrompt from "./QuestionPrompt.jsx";
@@ -1463,6 +1465,22 @@ export default function KnowledgeTest() {
     const [profileEmail, setProfileEmail] = useState(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
+    const [authUid, setAuthUid] = useState(
+        () => auth.currentUser?.uid || null
+    );
+
+    useEffect(() => {
+        return onAuthStateChanged(auth, current => {
+            setAuthUid(current?.uid || null);
+            setHome(null);
+            setAttempt(null);
+            setReport(null);
+            setProfileEmail(null);
+            setTab("practice");
+            setBusy(false);
+            setError("");
+        });
+    }, []);
 
     const run = async job => {
         setBusy(true);
@@ -1492,7 +1510,10 @@ export default function KnowledgeTest() {
 
         if (
             authLoading ||
+            !authUid ||
             !realUser?.isAuthorized ||
+            String(auth.currentUser?.email || "").toLowerCase().trim() !==
+            String(realUser?.email || "").toLowerCase().trim() ||
             user?.isImpersonating
         ) return undefined;
 
@@ -1511,6 +1532,7 @@ export default function KnowledgeTest() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
         authLoading,
+        authUid,
         realUser?.email,
         realUser?.isAuthorized,
         user?.isImpersonating
@@ -1818,7 +1840,8 @@ export default function KnowledgeTest() {
 
                                 run(async () => {
                                     await knowledgeApi("abandon", {
-                                        id: attempt.id
+                                        id: attempt.id,
+                                        expectedUid: attempt.uid
                                     });
 
                                     setAttempt(null);

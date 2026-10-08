@@ -174,9 +174,8 @@ function Review({ question, submitted, correct, children }) {
         }
 
         return q.left.map((left, index) =>
-            `${left} → ${
-                q.right[answer?.[index]] ??
-                tr("Not answered", "未作答")
+            `${left} → ${q.right[answer?.[index]] ??
+            tr("Not answered", "未作答")
             }`
         ).join("; ");
     };
@@ -205,7 +204,7 @@ function Review({ question, submitted, correct, children }) {
 
                     {language === "zh"
                         ? question.focusEvent.nameZh ||
-                          question.focusEvent.name
+                        question.focusEvent.name
                         : question.focusEvent.name}
                 </p>
             )}
@@ -461,8 +460,8 @@ export function StudentPracticeHome({
                                 ))) return;
 
                                 run(async () => {
-                                    await knowledgeApi("abandon", {
-                                        id: home.summary.activeAttemptId
+                                    await knowledgeApi("abandonCurrent", {
+                                        expectedUid: home.actor.uid
                                     });
 
                                     await refresh();
@@ -483,6 +482,99 @@ export function StudentPracticeHome({
                     )}
                 </p>
             )}
+
+            <section className="kt-card">
+                <p className="kt-eyebrow">
+                    {tr("Historical thinking skills", "歷史思維技巧")}
+                </p>
+
+                <h2>
+                    {tr("Question type recognition", "題型辨識")}
+                </h2>
+
+                <p className="kt-muted">
+                    {tr(
+                        "Essay: recognise the analytical task of an essay question. Each exercise contains 20 multiple-choice questions with 11 fixed question-type options. This category is separate from Theme A and Theme B.",
+                        "論述題：辨識論述題的分析要求。每份練習有20道選擇題，每題提供11個固定題型選項。本類別獨立於主題甲及主題乙。"
+                    )}
+                </p>
+
+                {home.actor.admin && (
+                    <button
+                        type="button"
+                        className="kt-secondary"
+                        disabled={busy}
+                        onClick={() => run(async () => {
+                            const result = await knowledgeApi(
+                                "seedEssayRecognition"
+                            );
+
+                            await refresh();
+
+                            window.alert(tr(
+                                `${result.imported} Essay questions added. ${result.alreadyPresent} existing questions were retained without overwriting edits.`,
+                                `已加入 ${result.imported} 道論述題辨識題。另有 ${result.alreadyPresent} 道現有題目保留，沒有覆蓋修改。`
+                            ));
+                        })}
+                    >
+                        {tr(
+                            "Install the supplied 100 Essay questions",
+                            "加入提供的100道論述題辨識題"
+                        )}
+                    </button>
+                )}
+
+                <div className="kt-topic-grid kt-spaced">
+                    {home.topics
+                        .filter(topic => topic.id === "question-type")
+                        .map(topic => (
+                            <button
+                                type="button"
+                                key={topic.id}
+                                className="kt-topic-card"
+                                disabled={busy || !topic.ready}
+                                onClick={() => run(async () => start(
+                                    await knowledgeApi("start", {
+                                        topics: ["question-type"]
+                                    })
+                                ))}
+                            >
+                                <strong>
+                                    {tr("Essay", "論述題")}
+                                </strong>
+
+                                <span>
+                                    {tr(
+                                        `${topic.count} active questions`,
+                                        `${topic.count} 道可用題目`
+                                    )}
+                                </span>
+
+                                <span>
+                                    {tr(
+                                        "20 questions · 11 fixed options",
+                                        "20道題目 · 11個固定選項"
+                                    )}
+                                </span>
+
+                                {!topic.ready && (
+                                    <span>
+                                        {tr(
+                                            "At least 20 active questions are required.",
+                                            "需要至少20道可用題目。"
+                                        )}
+                                    </span>
+                                )}
+
+                                <span>
+                                    {home.actor.admin
+                                        ? tr("Preview →", "預覽 →")
+                                        : tr("Practise →", "開始練習 →")}
+                                </span>
+                            </button>
+                        ))}
+                </div>
+            </section>
 
             <section className="kt-card">
                 <p className="kt-eyebrow">

@@ -44,7 +44,8 @@ export function localizedTopic(id, language) {
         ww1: ["World War I", "第一次世界大戰"],
         ww2: ["World War II", "第二次世界大戰"],
         "cold-war": ["Cold War", "冷戰"],
-        cooperation: ["International Cooperation", "國際協作"]
+        cooperation: ["International Cooperation", "國際協作"],
+        "question-type": ["Question type recognition", "題型辨識"]
     };
 
     return labels[id]?.[language === "zh" ? 1 : 0] || id;

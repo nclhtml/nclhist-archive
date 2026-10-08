@@ -1,5 +1,6 @@
 const { createHash, randomInt } = require("node:crypto");
 const spacing = require("./spacing.cjs");
+const essayRecognition = require("./essay-recognition.cjs");
 
 module.exports = function makeFoundation({
     db,
@@ -90,6 +91,10 @@ module.exports = function makeFoundation({
             "Invalid question or event."
         );
 
+        if (raw.topic === essayRecognition.TOPIC) {
+            raw = essayRecognition.prepare(raw);
+        }
+
         const id = idOf(raw.id);
 
         requireValue(id.length <= 48, "IDs must be at most 48 characters.");
@@ -135,9 +140,26 @@ module.exports = function makeFoundation({
         };
 
         if (q.type === "mc") {
-            q.choices = list(raw.choices, `${id}: options`, 4, 4);
+            const optionCount =
+                q.topic === essayRecognition.TOPIC
+                    ? essayRecognition.LABELS.length
+                    : 4;
+
+            q.choices = list(
+                raw.choices,
+                `${id}: options`,
+                optionCount,
+                optionCount
+            );
+
             unique(q.choices, `${id}: options`);
-            q.answer = integer(raw.answer, 0, 3, `${id}: answer`);
+
+            q.answer = integer(
+                raw.answer,
+                0,
+                optionCount - 1,
+                `${id}: answer`
+            );
         }
 
         if (q.type === "blank") {
@@ -311,6 +333,35 @@ module.exports = function makeFoundation({
     }
 
     function readiness(items, topics) {
+        if (topics.includes(essayRecognition.TOPIC)) {
+            const validSelection =
+                topics.length === 1 &&
+                topics[0] === essayRecognition.TOPIC;
+
+            const count = items.filter(item =>
+                item.topic === essayRecognition.TOPIC &&
+                item.type === "mc" &&
+                item.active &&
+                !item.demo
+            ).length;
+
+            const ready = validSelection && count >= 20;
+
+            return {
+                ready,
+                regularCount: count,
+                eventCount: 0,
+                yearCount: 0,
+                reason: ready
+                    ? ""
+                    : (
+                        validSelection
+                            ? "Question type recognition needs at least 20 active non-demo Essay questions."
+                            : "Question type recognition must be selected separately from Theme A and Theme B."
+                    )
+            };
+        }
+
         const regular = items.filter(q =>
             q.active &&
             !q.demo &&
@@ -575,6 +626,21 @@ module.exports = function makeFoundation({
     }
 
     function prepareRegular(q) {
+        if (q.topic === essayRecognition.TOPIC) {
+            // Unlike ordinary MC questions, the recognition options
+            // always stay in their prescribed order.
+            return {
+                ...q,
+                choices: [...q.choices],
+                ...(q.zh ? {
+                    zh: {
+                        ...q.zh,
+                        choices: [...q.zh.choices]
+                    }
+                } : {})
+            };
+        }
+
         const result = {
             ...q,
             ...(q.zh ? { zh: { ...q.zh } } : {})
@@ -743,39 +809,76 @@ module.exports = function makeFoundation({
                 ? userSnap.data()
                 : emptySummary(actor.email);
 
+            let attemptToAbandon = null;
+
             if (summary.activeAttemptId) {
                 const active = await tx.get(
-                    attemptsRef(actor.email).doc(summary.activeAttemptId)
+                    attemptsRef(actor.email).doc(
+                        idOf(summary.activeAttemptId)
+                    )
                 );
 
                 if (active.exists && active.data().status === "active") {
-                    const existing = active.data();
+                    const existing = {
+                        ...active.data(),
+                        id: active.id
+                    };
 
-                    requireValue(
-                        (existing.assignmentId || null) ===
-                        (assignmentId || null),
-                        "You already have an unfinished exercise belonging to a different practice or assignment. Use “Resume exercise” to finish it, or “Abandon” to discard it, then press the required assignment button again. The requested assignment has NOT been started.",
-                        "failed-precondition"
-                    );
+                    let unavailableAssignment = false;
 
-                    if (assignmentId) {
+                    if (existing.assignmentId) {
                         const assignedSnapshot = await tx.get(
-                            assignments.doc(assignmentId)
+                            assignments.doc(
+                                idOf(existing.assignmentId)
+                            )
                         );
 
-                        const assigned = assignedSnapshot.data();
+                        const assigned = assignedSnapshot.exists
+                            ? assignedSnapshot.data()
+                            : null;
 
+                        unavailableAssignment =
+                            !assigned ||
+                            assigned.email !== actor.email ||
+                            assignmentLifecycle.closed(assigned) ||
+                            (
+                                actor.admin
+                                    ? assigned.testOnly !== true ||
+                                    assigned.ownerUid !== actor.uid
+                                    : assigned.testOnly === true
+                            );
+                    }
+
+                    if (unavailableAssignment) {
+                        // Do not let a closed or missing assignment
+                        // prevent the student from starting other work.
+                        // Defer the write until the new exercise is ready.
+                        attemptToAbandon = {
+                            reference: active.ref,
+                            reason: "assignment-unavailable"
+                        };
+                    } else if (
+                        (existing.assignmentId || null) ===
+                        (assignmentId || null)
+                    ) {
+                        // The requested assignment is already active,
+                        // or the student is resuming ordinary practice.
+                        return publicAttempt(existing);
+                    } else {
                         requireValue(
-                            assignedSnapshot.exists &&
-                            assigned.email === actor.email,
-                            "This assignment is unavailable.",
+                            data.replaceActiveAttemptId === existing.id,
+                            "You already have an unfinished exercise belonging to a different practice or assignment. Confirm that you want to abandon it before entering this assignment. The requested assignment has NOT been started.",
                             "failed-precondition"
                         );
 
-                        assignmentLifecycle.assertOpen(assigned);
+                        // This exact ID must still be active.
+                        // A different exercise opened in another tab
+                        // will not be silently abandoned.
+                        attemptToAbandon = {
+                            reference: active.ref,
+                            reason: "replaced-by-request"
+                        };
                     }
-
-                    return publicAttempt(existing);
                 }
             }
 
@@ -850,8 +953,25 @@ module.exports = function makeFoundation({
                 "failed-precondition"
             );
 
-            const regular = selectRegular(eligible, topics, entries);
-            const plans = makePlans(eligible, topics, entries);
+            const isRecognition =
+                topics.length === 1 &&
+                topics[0] === essayRecognition.TOPIC;
+
+            const regular = isRecognition
+                ? weightedOrder(
+                    eligible.filter(item =>
+                        item.topic === essayRecognition.TOPIC &&
+                        item.type === "mc" &&
+                        item.active &&
+                        !item.demo
+                    ),
+                    entries
+                ).slice(0, 20)
+                : selectRegular(eligible, topics, entries);
+
+            const plans = isRecognition
+                ? []
+                : makePlans(eligible, topics, entries);
 
             const ids = [...new Set([
                 ...regular.map(q => q.id),
@@ -883,7 +1003,7 @@ module.exports = function makeFoundation({
                 uid: actor.uid,
                 title,
                 topics,
-                assignmentId: assignment?.id || null,
+                assignmentId,
                 testAssignment: assignment?.testOnly === true,
                 preview: actor.admin,
                 formatVersion: 2,
@@ -899,6 +1019,17 @@ module.exports = function makeFoundation({
                 Buffer.byteLength(JSON.stringify(attempt), "utf8") < 800000,
                 "This exercise is too large. Shorten bank explanations."
             );
+
+            // All transaction reads and exercise validation are complete.
+            // The previous exercise and the new one change together.
+            // If creation fails, the previous exercise is retained.
+            if (attemptToAbandon) {
+                tx.update(attemptToAbandon.reference, {
+                    status: "abandoned",
+                    abandonedAt: now,
+                    abandonReason: attemptToAbandon.reason
+                });
+            }
 
             if (trackProgress) {
                 spacing.reserveAppearances(entries, ids, spacingDay);
@@ -1283,11 +1414,72 @@ module.exports = function makeFoundation({
         });
     }
 
+    async function seedEssayRecognition(actor) {
+        requireAdmin(actor);
+
+        const records = essayRecognition
+            .seedRows()
+            .map(cleanRecord);
+
+        return db.runTransaction(async tx => {
+            const [catalogSnapshot, existing] = await Promise.all([
+                tx.get(catalogRef),
+                tx.getAll(
+                    ...records.map(record =>
+                        questions.doc(record.id)
+                    )
+                )
+            ]);
+
+            const map = new Map(
+                (catalogSnapshot.data()?.items || [])
+                    .map(item => [item.id, item])
+            );
+
+            let imported = 0;
+            const newRecords = [];
+
+            records.forEach((record, index) => {
+                if (existing[index].exists) {
+                    // Retain all later edits and deactivation settings.
+                    // Installing again must not restore original content.
+                    const saved = {
+                        ...existing[index].data(),
+                        id: existing[index].id
+                    };
+
+                    map.set(saved.id, catalogItem(saved));
+                    return;
+                }
+
+                newRecords.push(record);
+                map.set(record.id, catalogItem(record));
+                imported++;
+            });
+
+            const nextCatalog = catalogData([...map.values()]);
+
+            // All transaction reads are complete.
+            newRecords.forEach(record => {
+                tx.create(questions.doc(record.id), record);
+            });
+
+            tx.set(catalogRef, nextCatalog);
+
+            return {
+                ok: true,
+                imported,
+                alreadyPresent: records.length - imported
+            };
+        });
+    }
+
     return {
         readiness,
         topicCounts,
         reindex,
         importRows,
+        seedEssayRecognition,
         start,
         submit
     };

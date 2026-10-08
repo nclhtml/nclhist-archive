@@ -112,16 +112,44 @@ export default function FoundationRunner({
                     <h2>{attempt.title}</h2>
                 </div>
 
-                <button
-                    className="kt-secondary"
-                    disabled={busy}
-                    onClick={() => run(async () => {
-                        await save();
-                        await onExit();
-                    })}
-                >
-                    {tr("Save and exit", "儲存並離開")}
-                </button>
+                <div className="kt-row">
+                    <button
+                        type="button"
+                        className="kt-secondary"
+                        disabled={busy}
+                        onClick={() => run(async () => {
+                            await save();
+                            await onExit();
+                        })}
+                    >
+                        {tr("Save and exit", "儲存並離開")}
+                    </button>
+
+                    <button
+                        type="button"
+                        className="kt-danger"
+                        disabled={busy}
+                        onClick={() => {
+                            if (!window.confirm(tr(
+                                "Abandon this unfinished exercise? It will not count towards completion. Submitted reports will not be deleted.",
+                                "放棄這份未完成練習？它不會計入完成次數，已提交的報告不會被刪除。"
+                            ))) return;
+
+                            run(async () => {
+                                // Do not save first: failed saving must
+                                // never prevent abandonment.
+                                await knowledgeApi("abandon", {
+                                    id: attempt.id,
+                                    expectedUid: attempt.uid
+                                });
+
+                                await onExit();
+                            });
+                        }}
+                    >
+                        {tr("Abandon and return", "放棄並返回")}
+                    </button>
+                </div>
             </div>
 
             <p className="kt-notice">
@@ -143,12 +171,21 @@ export default function FoundationRunner({
                     )}
             </p>
 
-            <p className="kt-muted">
-                {tr(
-                    "New exercises: 14 foundation questions, 3 sequencing questions and 3 year-matching questions.",
-                    "新練習：14題基礎知識、3題時序排列及3題年份配對。"
-                )}
-            </p>
+            {attempt.topics?.includes("question-type") ? (
+                <p className="kt-notice">
+                    {tr(
+                        "Essay question type recognition: choose the question type that best matches the decisive analytical task. Do not answer the historical essay itself. Each exercise has 20 multiple-choice questions, with all 11 options kept in a fixed order.",
+                        "論述題題型辨識：選擇最符合題目關鍵分析要求的題型，毋須回答歷史論述題本身。每份練習有20道選擇題，11個選項的次序固定。"
+                    )}
+                </p>
+            ) : (
+                <p className="kt-muted">
+                    {tr(
+                        "New exercises: 14 foundation questions, 3 sequencing questions and 3 year-matching questions.",
+                        "新練習：14題基礎知識、3題時序排列及3題年份配對。"
+                    )}
+                </p>
+            )}
 
             {attempt.questions.length < 20 && (
                 <p className="kt-notice">

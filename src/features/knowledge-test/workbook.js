@@ -13,6 +13,17 @@ const numberedHeaders = (prefix, count, suffix = "") =>
     Array.from({ length: count }, (_, i) => `${prefix}${i + 1}${suffix}`);
 
 export const HEADERS = {
+    Essay: [
+        "ID",
+        "Question",
+        "Revised type",
+        "Decisive analytical task",
+        "QuestionZh",
+        "Decisive analytical taskZh",
+        "Active",
+        "Demo"
+    ],
+
     MC: [
         ...COMMON,
         "A", "B", "C", "D", "Answer",
@@ -60,6 +71,26 @@ const TYPE_SHEET = {
     event: "Timeline"
 };
 
+const ESSAY_TYPES = [
+    "Explanatory—No stance",
+    "Explanatory—Stance",
+    "Trace and Explain",
+    "Relative Importance—Single-factor",
+    "Relative Importance—Dual-factors",
+    "Compare—Plain: Similarities/Differences",
+    "Compare—More than",
+    "Turning Point",
+    "Continuity/Change within Period",
+    "Dual Question",
+    "Rather Than"
+];
+
+function sheetFor(question) {
+    return question.topic === "question-type"
+        ? "Essay"
+        : TYPE_SHEET[question.type];
+}
+
 const cell = value => String(value ?? "").trim();
 
 function booleanCell(value, name, fallback) {
@@ -90,6 +121,44 @@ function alternatives(value) {
 }
 
 function rowToQuestion(row, sheet, rowNumber) {
+    if (sheet === "Essay") {
+        const promptZh = cell(row.QuestionZh);
+        const explanationZh = cell(
+            row["Decisive analytical taskZh"]
+        );
+
+        const hasChinese =
+            promptZh !== "" || explanationZh !== "";
+
+        if (hasChinese && (!promptZh || !explanationZh)) {
+            throw new Error(
+                "Supply both QuestionZh and Decisive analytical taskZh."
+            );
+        }
+
+        return {
+            id: cell(row.ID),
+            theme: "SKILLS",
+            topic: "question-type",
+            type: "mc",
+            subtopic: "Essay",
+            prompt: cell(row.Question),
+            recognitionType: cell(row["Revised type"]),
+            explanation: cell(row["Decisive analytical task"]),
+            active: booleanCell(row.Active, "Active", true),
+            demo: booleanCell(row.Demo, "Demo", false),
+            ...(hasChinese ? {
+                zh: {
+                    subtopic: "論述題",
+                    prompt: promptZh,
+                    explanation: explanationZh
+                }
+            } : {}),
+            _sheet: sheet,
+            _row: rowNumber
+        };
+    }
+
     const topicText = cell(row.Topic);
 
     const topic = TOPICS.find(t =>
@@ -247,6 +316,20 @@ export async function readWorkbook(file) {
 }
 
 function questionToRow(q) {
+    if (q.topic === "question-type") {
+        return {
+            ID: q.id,
+            Question: q.prompt,
+            "Revised type": ESSAY_TYPES[q.answer] || "",
+            "Decisive analytical task": q.explanation,
+            QuestionZh: q.zh?.prompt || "",
+            "Decisive analytical taskZh":
+                q.zh?.explanation || "",
+            Active: q.active ? "TRUE" : "FALSE",
+            Demo: q.demo ? "TRUE" : "FALSE"
+        };
+    }
+
     const topic = TOPICS.find(t => t.id === q.topic);
 
     if (!topic) throw new Error(`Unknown topic for ${q.id}.`);
@@ -328,7 +411,13 @@ export async function downloadWorkbook(questions, filename) {
 
     const instructions = [
         ["Knowledge Test bilingual question and event bank"],
-        ["Exercise format: 14 foundation + 3 sequencing + 3 year-matching questions."],
+        ["Historical-topic exercise format: 14 foundation + 3 sequencing + 3 year-matching questions."],
+        ["Essay worksheet: Question type recognition, separate from Theme A and Theme B."],
+        ["Essay exercises contain 20 MC questions with 11 fixed question-type options."],
+        ["Essay: Revised type must use the full English or Chinese question-type name, not an abbreviation."],
+        ["Essay: Question is the essay prompt to classify; Decisive analytical task is the explanation."],
+        ["Essay: use QuestionZh and Decisive analytical taskZh for the Chinese version."],
+        ["Essay: keep the same ID when updating an installed question."],
         ["Timeline contains ONE significant event per row, not prewritten questions."],
         ["The same Timeline bank supplies both generated chronology formats."],
         ["Timeline: Event is the event name; Year is one exact milestone year."],
@@ -366,7 +455,7 @@ export async function downloadWorkbook(questions, filename) {
 
     for (const [sheet, header] of Object.entries(HEADERS)) {
         const rows = questions
-            .filter(q => TYPE_SHEET[q.type] === sheet)
+            .filter(q => sheetFor(q) === sheet)
             .map(questionToRow);
 
         const ws = XLSX.utils.json_to_sheet(rows, { header });

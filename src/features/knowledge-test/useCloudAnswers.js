@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useLanguage } from "../../LanguageContext.jsx";
+import { auth } from "../../firebase.js";
 import { knowledgeApi } from "./api.js";
 
 export default function useCloudAnswers(attempt) {
@@ -13,8 +15,39 @@ export default function useCloudAnswers(attempt) {
   const savedGeneration = useRef(0);
   const pendingRequest = useRef(null);
   const queue = useRef(Promise.resolve());
+  const mounted = useRef(true);
+
+  const ownerUid = useRef(attempt.uid || auth.currentUser?.uid);
+  const ownerEmail = useRef(
+    String(attempt.email || auth.currentUser?.email || "")
+      .toLowerCase()
+      .trim()
+  );
+
+  const setStatus = useCallback(value => {
+    if (mounted.current) setSaveStatus(value);
+  }, []);
+
+  const checkOwner = useCallback(() => {
+    const current = auth.currentUser;
+
+    if (
+      !current ||
+      current.uid !== ownerUid.current ||
+      String(current.email || "").toLowerCase().trim() !==
+        ownerEmail.current
+    ) {
+      throw new Error(
+        "The signed-in account changed. Sign in again with the account that owns this exercise."
+      );
+    }
+  }, []);
 
   const updateAnswer = useCallback((questionId, value) => {
+    if (!mounted.current) return;
+
+    checkOwner();
+
     const next = {
       ...answersRef.current,
       [questionId]: value
@@ -23,19 +56,28 @@ export default function useCloudAnswers(attempt) {
     answersRef.current = next;
     editedGeneration.current += 1;
     setAnswers(next);
-    setSaveStatus("Changes not yet saved");
-  }, []);
+    setStatus("Changes not yet saved");
+  }, [checkOwner, setStatus]);
 
   const save = useCallback(() => {
     const job = queue.current
       .catch(() => {
-        // Permit an explicit retry after a failed request.
+        // Permit a later retry after a failed request.
       })
       .then(async () => {
+        if (!mounted.current) return;
+
+        checkOwner();
+
         while (
-          pendingRequest.current ||
-          savedGeneration.current < editedGeneration.current
+          mounted.current &&
+          (
+            pendingRequest.current ||
+            savedGeneration.current < editedGeneration.current
+          )
         ) {
+          checkOwner();
+
           if (!pendingRequest.current) {
             pendingRequest.current = {
               id: attempt.id,
@@ -48,48 +90,81 @@ export default function useCloudAnswers(attempt) {
 
           const pending = pendingRequest.current;
 
-          setSaveStatus("Saving to Firebase…");
+          setStatus("Saving to Firebase…");
 
           try {
             const result = await knowledgeApi("save", {
               id: pending.id,
               answers: pending.answers,
               expectedRevision: pending.expectedRevision,
-              saveId: pending.saveId
+              saveId: pending.saveId,
+              expectedUid: ownerUid.current
             });
 
             revisionRef.current = result.answerRevision;
             savedGeneration.current = pending.generation;
             pendingRequest.current = null;
           } catch (error) {
-            // Preserve this request ID so a retry is idempotent.
-            setSaveStatus(
+            setStatus(
               `Not saved: ${error.message || "Check your connection."}`
             );
+
             throw error;
           }
         }
 
-        setSaveStatus("Saved to Firebase");
+        if (mounted.current) {
+          setStatus("Saved to Firebase");
+        }
       });
 
     queue.current = job;
     return job;
-  }, [attempt.id]);
+  }, [attempt.id, checkOwner, setStatus]);
+
+  useEffect(() => {
+    mounted.current = true;
+
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (savedGeneration.current === editedGeneration.current) return;
 
     const timer = window.setTimeout(() => {
-      save().catch(() => {
-        // The visible status reports the error.
+      save().catch(error => {
+        setStatus(`Not saved: ${error.message || "Check your connection."}`);
       });
     }, 600);
 
     return () => window.clearTimeout(timer);
-  }, [answers, save]);
+  }, [answers, save, setStatus]);
 
   useEffect(() => {
+    const retryUnsaved = () => {
+      if (
+        mounted.current &&
+        (
+          pendingRequest.current ||
+          savedGeneration.current < editedGeneration.current
+        )
+      ) {
+        save().catch(error => {
+          setStatus(
+            `Not saved: ${error.message || "Check your connection."}`
+          );
+        });
+      }
+    };
+
+    const visibilityChanged = () => {
+      // Try saving both when leaving and when returning.
+      // A suspended browser cannot guarantee request completion.
+      retryUnsaved();
+    };
+
     const warnBeforeLeaving = event => {
       if (
         pendingRequest.current ||
@@ -100,12 +175,22 @@ export default function useCloudAnswers(attempt) {
       }
     };
 
+    document.addEventListener("visibilitychange", visibilityChanged);
+    window.addEventListener("online", retryUnsaved);
+    window.addEventListener("focus", retryUnsaved);
     window.addEventListener("beforeunload", warnBeforeLeaving);
 
     return () => {
+      document.removeEventListener(
+        "visibilitychange",
+        visibilityChanged
+      );
+
+      window.removeEventListener("online", retryUnsaved);
+      window.removeEventListener("focus", retryUnsaved);
       window.removeEventListener("beforeunload", warnBeforeLeaving);
     };
-  }, []);
+  }, [save, setStatus]);
 
   const translatedSaveStatus = language === "zh"
     ? (

@@ -26,7 +26,12 @@ const TOPICS = [
     { id: "ww1", label: "World War I", theme: "B" },
     { id: "ww2", label: "World War II", theme: "B" },
     { id: "cold-war", label: "Cold War", theme: "B" },
-    { id: "cooperation", label: "International Cooperation", theme: "B" }
+    { id: "cooperation", label: "International Cooperation", theme: "B" },
+    {
+        id: "question-type",
+        label: "Question type recognition",
+        theme: "SKILLS"
+    }
 ];
 
 const topicIds = new Set(TOPICS.map(t => t.id));
@@ -95,12 +100,27 @@ function permutation(value, length, name) {
 
 function cleanTopics(value) {
     requireValue(
-        Array.isArray(value) && value.length > 0 && value.length <= 7,
+        Array.isArray(value) &&
+        value.length > 0 &&
+        value.length <= TOPICS.length,
         "Select at least one topic."
     );
+
     const result = [...new Set(value)];
-    requireValue(result.every(t => topicIds.has(t)), "Unknown topic.");
-    return TOPICS.filter(t => result.includes(t.id)).map(t => t.id);
+
+    requireValue(
+        result.every(topic => topicIds.has(topic)),
+        "Unknown topic."
+    );
+
+    requireValue(
+        !result.includes("question-type") || result.length === 1,
+        "Question type recognition must be practised or assigned separately. Do not mix it with Theme A or Theme B topics."
+    );
+
+    return TOPICS
+        .filter(topic => result.includes(topic.id))
+        .map(topic => topic.id);
 }
 
 function normalize(value) {
@@ -430,12 +450,14 @@ function publicAttempt(a) {
 
     return {
         id: a.id,
+        email: a.email,
+        uid: a.uid,
         title: a.title,
         status: a.status,
         preview: a.preview,
         topics: a.topics,
         createdAt: a.createdAt,
-        assignmentId: a.assignmentId,
+        assignmentId: a.assignmentId || null,
         testAssignment: a.testAssignment === true,
         questions: a.questions.map(publicQuestion),
         answers: a.answers || {},
@@ -668,10 +690,16 @@ async function homeFor(actor) {
             a.name.localeCompare(b.name)
         ),
         assignments: assignmentSnap.docs
-            .map(d => assignmentLifecycle.project({
+            .map(d => ({
                 ...d.data(),
                 id: d.id
             }))
+            .filter(assignment =>
+                actor.admin || !assignment.cancelled
+            )
+            .map(assignment =>
+                assignmentLifecycle.project(assignment)
+            )
             .sort((a, b) => b.createdAt - a.createdAt)
     };
 }
@@ -811,27 +839,57 @@ async function saveAttempt(actor, data, abandon = false) {
             tx.get(userRef(actor.email))
         ]);
 
+        if (abandon) {
+            const current = snap.exists ? snap.data() : null;
+            const isCurrentAttempt =
+                userSnap.data()?.activeAttemptId === ref.id;
+
+            // A missing record may still be referenced by an old summary.
+            // Allow the owner to clear that stale pointer.
+            requireValue(
+                snap.exists || isCurrentAttempt,
+                "Exercise not found.",
+                "not-found"
+            );
+
+            // Only active exercises change status.
+            // Retried abandonment and submitted reports remain unchanged.
+            if (current?.status === "active") {
+                tx.update(ref, {
+                    status: "abandoned",
+                    abandonedAt: Date.now()
+                });
+            }
+
+            if (isCurrentAttempt) {
+                tx.set(
+                    userRef(actor.email),
+                    { activeAttemptId: null },
+                    { merge: true }
+                );
+            }
+
+            return {
+                ok: true,
+                status: current?.status === "active"
+                    ? "abandoned"
+                    : current?.status || "missing"
+            };
+        }
+
         requireValue(snap.exists, "Exercise not found.", "not-found");
-        const a = snap.data();
+
+        // Use the actual document ID, including for older records.
+        const a = {
+            ...snap.data(),
+            id: snap.id
+        };
 
         requireValue(
             a.status === "active",
             "This exercise is no longer active. Reload the page.",
             "failed-precondition"
         );
-
-        if (abandon) {
-            tx.update(ref, {
-                status: "abandoned",
-                abandonedAt: Date.now()
-            });
-
-            if (userSnap.data()?.activeAttemptId === a.id) {
-                tx.update(userRef(actor.email), { activeAttemptId: null });
-            }
-
-            return { ok: true };
-        }
 
         if (a.assignmentId) {
             const assignmentSnapshot = await tx.get(
@@ -1585,6 +1643,12 @@ exports.knowledgeApi = functions
             requireValue(data && typeof data === "object", "Invalid request.");
             const actor = await actorFor(context);
 
+            requireValue(
+                !data.expectedUid || data.expectedUid === actor.uid,
+                "The signed-in account changed. Sign in again with the account that owns this exercise.",
+                "failed-precondition"
+            );
+
             switch (data.action) {
                 case "studentGroupList":
                     return await assignmentTools.listGroups(actor);
@@ -1623,6 +1687,54 @@ exports.knowledgeApi = functions
 
                 case "save":
                     return await saveAttempt(actor, data);
+
+                case "abandonCurrent":
+                    return await db.runTransaction(async tx => {
+                        const reference = userRef(actor.email);
+                        const summarySnapshot = await tx.get(reference);
+
+                        if (!summarySnapshot.exists) {
+                            return { ok: true };
+                        }
+
+                        const activeId =
+                            summarySnapshot.data().activeAttemptId;
+
+                        let activeSnapshot = null;
+
+                        if (
+                            typeof activeId === "string" &&
+                            /^[A-Za-z0-9][A-Za-z0-9_-]{0,119}$/.test(activeId)
+                        ) {
+                            activeSnapshot = await tx.get(
+                                attemptsRef(actor.email).doc(activeId)
+                            );
+                        }
+
+                        // All reads are complete.
+                        // Missing, already-abandoned, or submitted records
+                        // must not prevent clearing a stale active pointer.
+                        if (
+                            activeSnapshot?.exists &&
+                            activeSnapshot.data().status === "active"
+                        ) {
+                            tx.update(activeSnapshot.ref, {
+                                status: "abandoned",
+                                abandonedAt: Date.now(),
+                                abandonReason: "student-recovery"
+                            });
+                        }
+
+                        if (activeId !== null && activeId !== undefined) {
+                            tx.set(
+                                reference,
+                                { activeAttemptId: null },
+                                { merge: true }
+                            );
+                        }
+
+                        return { ok: true };
+                    });
 
                 case "abandon":
                     return await saveAttempt(actor, data, true);
@@ -1696,6 +1808,9 @@ exports.knowledgeApi = functions
 
                 case "import":
                     return await foundation.importRows(actor, data, false);
+
+                case "seedEssayRecognition":
+                    return await foundation.seedEssayRecognition(actor);
 
                 case "reindexBank":
                     return await foundation.reindex(actor);

@@ -34,7 +34,8 @@ export default function AssignmentPriority({
         return () => window.clearInterval(timer);
     }, []);
 
-    const assignments = [...(home.assignments || [])];
+    const assignments = (home.assignments || [])
+        .filter(assignment => !assignment.cancelled);
 
     const unfinished = assignment =>
         !assignmentClosed(assignment);
@@ -81,15 +82,80 @@ export default function AssignmentPriority({
     };
 
     const launch = assignment => {
-        // Close first so any API error is visible on the main page.
+        // Close first so errors and confirmations are not hidden
+        // behind the compulsory-work reminder.
         dismiss();
 
         run(async () => {
-            const result = await knowledgeApi("start", {
-                assignmentId: assignment.id
-            });
+            try {
+                const result = await knowledgeApi("start", {
+                    assignmentId: assignment.id
+                });
 
-            start(result);
+                start(result);
+                return;
+            } catch (problem) {
+                const isDifferentUnfinishedExercise =
+                    String(problem.code || "").endsWith(
+                        "failed-precondition"
+                    ) &&
+                    String(problem.message || "").includes(
+                        "You already have an unfinished exercise belonging to a different practice or assignment."
+                    );
+
+                if (!isDifferentUnfinishedExercise) {
+                    // Refresh stale cards, for example when a teacher
+                    // cancelled or ended the assignment after loading.
+                    await refresh().catch(() => { });
+                    throw problem;
+                }
+
+                // Obtain the current ID rather than trusting an old
+                // home-page snapshot.
+                const latestHome = await knowledgeApi("home");
+                const activeId =
+                    latestHome.summary?.activeAttemptId;
+
+                if (!activeId) {
+                    // The previous exercise may have been completed
+                    // or abandoned in another tab.
+                    const result = await knowledgeApi("start", {
+                        assignmentId: assignment.id
+                    });
+
+                    start(result);
+                    return;
+                }
+
+                const confirmed = window.confirm(tr(
+                    "You have another unfinished exercise.\n\n" +
+                    "Abandon it and enter this assigned practice?\n\n" +
+                    "The unfinished exercise will not count towards progress. " +
+                    "Submitted reports will not be deleted. " +
+                    "If the new practice cannot start, your unfinished exercise will be kept.",
+                    "你有另一份尚未完成的練習。\n\n" +
+                    "是否放棄它，並進入這份指定練習？\n\n" +
+                    "未完成的練習不會計入進度，已提交的報告不會被刪除。" +
+                    "如新練習未能開始，原有的未完成練習將會保留。"
+                ));
+
+                if (!confirmed) {
+                    await refresh();
+                    return;
+                }
+
+                try {
+                    const result = await knowledgeApi("start", {
+                        assignmentId: assignment.id,
+                        replaceActiveAttemptId: activeId
+                    });
+
+                    start(result);
+                } catch (switchProblem) {
+                    await refresh().catch(() => { });
+                    throw switchProblem;
+                }
+            }
         });
     };
 
@@ -309,8 +375,8 @@ export default function AssignmentPriority({
                 {home.summary.activeAttemptId && (
                     <p className="kt-muted">
                         {tr(
-                            "You have an unfinished exercise. If it belongs to another practice, close this window and use Resume or Abandon before entering the assigned practice.",
-                            "你有尚未完成的練習。如它屬於其他練習，請先關閉此視窗，繼續完成或放棄該練習，再進入指定功課。"
+                            "You have an unfinished exercise. Use its assignment button to resume it. If you choose a different assignment, you will be asked whether to abandon the unfinished exercise and switch.",
+                            "你有尚未完成的練習。按相應功課的按鈕可繼續練習；如選擇另一份功課，系統會詢問你是否放棄原有練習並切換。"
                         )}
                     </p>
                 )}

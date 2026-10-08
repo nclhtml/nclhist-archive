@@ -8,7 +8,44 @@ const callable = httpsCallable(
 );
 
 export async function knowledgeApi(action, payload = {}) {
-  const result = await callable({ ...payload, action });
+  const account = auth.currentUser;
+
+  if (!account) {
+    throw new Error(
+      "Please sign in again with the account that owns this exercise."
+    );
+  }
+
+  const expectedUid = payload.expectedUid || account.uid;
+
+  if (account.uid !== expectedUid) {
+    throw new Error(
+      "The signed-in account changed. Please return to the correct account before continuing."
+    );
+  }
+
+  // Refresh an expired token through Firebase before making the request.
+  await account.getIdToken();
+
+  if (auth.currentUser?.uid !== expectedUid) {
+    throw new Error(
+      "The signed-in account changed. The previous exercise was not opened under the new account."
+    );
+  }
+
+  const result = await callable({
+    ...payload,
+    action,
+    expectedUid
+  });
+
+  // Do not display a response belonging to the previous account.
+  if (auth.currentUser?.uid !== expectedUid) {
+    throw new Error(
+      "The signed-in account changed while the request was running. Please reload the page."
+    );
+  }
+
   return result.data;
 }
 
@@ -19,7 +56,12 @@ export const TOPICS = [
   { id: "ww1", label: "World War I", theme: "B" },
   { id: "ww2", label: "World War II", theme: "B" },
   { id: "cold-war", label: "Cold War", theme: "B" },
-  { id: "cooperation", label: "International Cooperation", theme: "B" }
+{ id: "cooperation", label: "International Cooperation", theme: "B" },
+  {
+    id: "question-type",
+    label: "Question type recognition",
+    theme: "SKILLS"
+  }
 ];
 
 export function topicName(id) {

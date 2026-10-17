@@ -10,7 +10,7 @@ export default function SiteNavigation({ isAdmin, isPhoneLayout }) {
   const navRef = useRef(null);
 
   const groups = [
-{
+    {
       label: 'DSE-related',
       links: [
         { to: '/', label: 'Search Engine' },
@@ -28,22 +28,26 @@ export default function SiteNavigation({ isAdmin, isPhoneLayout }) {
     },
     ...(isAdmin
       ? [
-          {
-            label: 'Admin Tools',
-            links: [
-              { to: '/pdf', label: 'PDF Tools' },
-              { to: '/lottery', label: 'Lottery Machine' }
-            ]
-          },
-          {
-            label: 'Management Tools',
-            links: [
-              { to: '/record', label: 'Record Management' },
-              { to: '/marks', label: 'Marks Management' },
-              { to: '/timetable', label: 'Timetable' }
-            ]
-          }
-        ]
+        {
+          label: 'Admin Tools',
+          links: [
+            { to: '/pdf', label: 'PDF Tools' },
+            { to: '/lottery', label: 'Lottery Machine' }
+          ]
+        },
+        {
+          label: 'Management Tools',
+          links: [
+            { to: '/record', label: 'Record Management' },
+            { to: '/marks', label: 'Marks Management' },
+            {
+              to: '/designated-assessments',
+              label: 'Designated Assessment'
+            },
+            { to: '/timetable', label: 'Timetable' }
+          ]
+        }
+      ]
       : [])
   ];
 

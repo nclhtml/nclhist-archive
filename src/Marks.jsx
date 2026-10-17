@@ -22,6 +22,10 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import * as XLSX from 'xlsx';
 import { VersionPdfInline } from './VersionPdf.jsx';
+import { loadLinkedAssessmentMarks } from './linkedAssessmentMarks.js';
+import LinkedMarksValue from './LinkedMarksValue.jsx';
+import useMarksTermPreference from './useMarksTermPreference.js';
+import { DesignatedDocumentLinker } from './DesignatedItemTools.jsx';
 
 function getMarksAttachmentUrl(parent, isAnswer, language) {
   if (!parent) return '';
@@ -71,6 +75,35 @@ function MarksPdfAttachment({ fileUrl, title }) {
 
 // Helper to generate unique IDs for sections/subsections
 const generateId = () => Math.random().toString(36).substr(2, 9);
+
+// Reveal the highest two positions, including ties at the cutoff.
+// Missing values are never treated as zero.
+const marksIsTopTwo = (value, values) => {
+  if (
+    value === null ||
+    value === undefined ||
+    value === '' ||
+    !Number.isFinite(Number(value))
+  ) {
+    return false;
+  }
+
+  const scores = values
+    .filter(score =>
+      score !== null &&
+      score !== undefined &&
+      score !== '' &&
+      Number.isFinite(Number(score))
+    )
+    .map(Number)
+    .sort((a, b) => b - a);
+
+  if (!scores.length) return false;
+
+  const cutoff = scores[Math.min(1, scores.length - 1)];
+
+  return Number(value) >= cutoff;
+};
 
 const MARKS_DEFAULT_CATEGORIES = [
   'Assignments',
@@ -232,46 +265,19 @@ export default function Marks() {
   const [assessmentsError, setAssessmentsError] = useState('');
   const [isSavingAssessment, setIsSavingAssessment] = useState(false);
 
-  // Keep term preferences separate for every user and every class.
-  // Preserve the exact class name, including any invisible characters.
-  const termStorageKey = `marks:last-term:v1:${JSON.stringify([
-    user?.uid || user?.email || 'guest',
-    selectedClass
-  ])}`;
-
-  const rememberedTermsRef = React.useRef({});
-  const [termSelection, setTermSelection] = useState({
-    key: '',
-    value: ''
+  // Firebase-backed preference, separately for every account and class.
+  const {
+    selectedTerm,
+    setSelectedTerm,
+    termPreferenceError
+  } = useMarksTermPreference({
+    user,
+    selectedClass,
+    availableTerms: Array.isArray(termsMap[selectedClass])
+      ? termsMap[selectedClass]
+      : getDefaultTerms(selectedClass),
+    enabled: !isLoading && Boolean(user?.email && selectedClass)
   });
-
-  // Never temporarily use the previous class's term for the new class.
-  const selectedTerm =
-    termSelection.key === termStorageKey ? termSelection.value : '';
-
-  const setSelectedTerm = React.useCallback((value) => {
-    const nextTerm = typeof value === 'string' ? value : '';
-
-    setTermSelection({
-      key: termStorageKey,
-      value: nextTerm
-    });
-
-    if (!selectedClass) return;
-
-    // Keep an in-memory fallback if browser storage is unavailable.
-    rememberedTermsRef.current[termStorageKey] = nextTerm;
-
-    try {
-      if (nextTerm) {
-        window.localStorage.setItem(termStorageKey, nextTerm);
-      } else {
-        window.localStorage.removeItem(termStorageKey);
-      }
-    } catch (error) {
-      console.warn('Could not save the last-viewed term:', error);
-    }
-  }, [selectedClass, termStorageKey]);
 
   // Term Management State
   const [showTermManager, setShowTermManager] = useState(false);
@@ -573,11 +579,123 @@ export default function Marks() {
 
   // Document Linker State
   const [showDocLinker, setShowDocLinker] = useState(false);
-  const [docLinkerTarget, setDocLinkerTarget] = useState(null); // 'main' or section id
+  const [docLinkerTarget, setDocLinkerTarget] = useState(null);
   const [docFilterOrigin, setDocFilterOrigin] = useState('');
   const [docFilterYear, setDocFilterYear] = useState('');
   const [docSearchTerm, setDocSearchTerm] = useState('');
-  const [docFilterMode, setDocFilterMode] = useState('full'); // NEW STATE
+  const [docFilterMode, setDocFilterMode] = useState('full');
+  const [docCatalogueLoading, setDocCatalogueLoading] = useState(false);
+  const [docCatalogueError, setDocCatalogueError] = useState('');
+
+  // Refresh while the linker is open:
+  // - immediately through the first revision snapshot;
+  // - after archive saves in another tab/device;
+  // - when returning to this browser tab.
+  //
+  // If another change arrives during a request, run again afterwards
+  // rather than publishing an older request as the final catalogue.
+  useEffect(() => {
+    if (!showDocLinker || !user?.isAuthorized || !user?.email) {
+      return;
+    }
+
+    let cancelled = false;
+    let running = false;
+    let rerun = false;
+
+    const refresh = async () => {
+      if (cancelled) return;
+
+      if (running) {
+        rerun = true;
+        return;
+      }
+
+      running = true;
+      setDocCatalogueLoading(true);
+      setDocCatalogueError('');
+
+      try {
+        do {
+          rerun = false;
+
+          const documents = await loadAccessibleArchives({
+            effectiveEmail: user.email
+          });
+
+          if (cancelled) return;
+
+          // A revision arrived while this request was in flight.
+          // Fetch again before offering its results for selection.
+          if (!rerun) {
+            setArchives(documents);
+          }
+        } while (rerun && !cancelled);
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Could not refresh the archive linker:', error);
+
+          setDocCatalogueError(
+            'Could not refresh the document catalogue. ' +
+            (error.message || 'Check your connection and reopen this window.')
+          );
+        }
+      } finally {
+        running = false;
+
+        if (!cancelled) {
+          setDocCatalogueLoading(false);
+
+          if (rerun) {
+            rerun = false;
+            refresh();
+          }
+        }
+      }
+    };
+
+    const stopRevisionListener = onSnapshot(
+      doc(db, 'system_settings', 'archive_write_guard'),
+      () => {
+        refresh();
+      },
+      error => {
+        if (cancelled) return;
+
+        console.error('Could not watch archive revisions:', error);
+
+        setDocCatalogueError(
+          'Automatic archive updates could not be started. ' +
+          'Close and reopen this window after checking your connection.'
+        );
+      }
+    );
+
+    const handleFocus = () => {
+      refresh();
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        refresh();
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      cancelled = true;
+      stopRevisionListener();
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [
+    showDocLinker,
+    user?.email,
+    user?.role,
+    user?.isAuthorized
+  ]);
 
   // Preview Modal State
   const [previewItem, setPreviewItem] = useState(null);
@@ -595,6 +713,9 @@ export default function Marks() {
   const [linkedMarksData, setLinkedMarksData] = useState([]);
   const [isLoadingMarks, setIsLoadingMarks] = useState(false);
   const [currentMarksDocTitle, setCurrentMarksDocTitle] = useState('');
+  const [linkedMarksError, setLinkedMarksError] = useState('');
+  const [linkedMarksMode, setLinkedMarksMode] = useState('total');
+  const linkedMarksRequestRef = React.useRef(0);
 
   // Export to Excel State
   const [showExportModal, setShowExportModal] = useState(false);
@@ -854,7 +975,6 @@ export default function Marks() {
   }, [user]);
 
   useEffect(() => {
-    // Wait until the saved terms have finished loading.
     if (isLoading) return;
 
     if (!selectedClass) {
@@ -870,27 +990,12 @@ export default function Marks() {
 
     setTerms(classTerms);
 
-    let rememberedTerm = rememberedTermsRef.current[termStorageKey];
-
-    if (rememberedTerm === undefined) {
-      try {
-        rememberedTerm = window.localStorage.getItem(termStorageKey);
-      } catch (error) {
-        console.warn('Could not restore the last-viewed term:', error);
-      }
-    }
-
-    const nextTerm = classTerms.includes(rememberedTerm)
-      ? rememberedTerm
-      : (classTerms[0] || '');
-
-    setSelectedTerm(nextTerm);
+    // The preference hook restores the term from Firebase.
+    // Do not write a first-term default here while restoration is pending.
   }, [
     isLoading,
     selectedClass,
-    termsMap,
-    termStorageKey,
-    setSelectedTerm
+    termsMap
   ]);
 
   useEffect(() => {
@@ -905,8 +1010,6 @@ export default function Marks() {
   const firstTerm = terms[0] || '';
 
   useEffect(() => {
-    let cancelled = false;
-
     setAssessments([]);
     setSelectedAssessment(null);
     setMarksData({});
@@ -927,64 +1030,73 @@ export default function Marks() {
 
     setIsAssessmentsLoading(true);
 
-    const fetchAssessments = async () => {
-      try {
-        const q = query(
-          collection(db, 'assessments'),
-          where('category', '==', selectedCategory)
-        );
+    const assessmentQuery = query(
+      collection(db, 'assessments'),
+      where('category', '==', selectedCategory)
+    );
 
-        const querySnapshot = await getDocs(q);
-
-        if (cancelled) return;
-
-        const loadedAssessments = querySnapshot.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(a => {
-            const matchesClass = Array.isArray(a.classes)
-              ? a.classes.includes(selectedClass)
-              : a.className === selectedClass;
+    return onSnapshot(
+      assessmentQuery,
+      snapshot => {
+        const loaded = snapshot.docs
+          .map(document => ({
+            ...document.data(),
+            id: document.id
+          }))
+          .filter(assessment => {
+            const matchesClass = Array.isArray(assessment.classes)
+              ? assessment.classes.includes(selectedClass)
+              : assessment.className === selectedClass;
 
             const matchesTerm =
-              a.term === selectedTerm ||
-              (!a.term && selectedTerm === firstTerm);
+              assessment.term === selectedTerm ||
+              (!assessment.term && selectedTerm === firstTerm);
 
             return matchesClass && matchesTerm;
+          })
+          .sort((a, b) => {
+            const difference = (a.order ?? -1) - (b.order ?? -1);
+
+            if (difference) return difference;
+
+            return (Date.parse(b.date || '') || 0) -
+              (Date.parse(a.date || '') || 0);
           });
 
-        loadedAssessments.sort((a, b) => {
-          const orderDifference = (a.order ?? -1) - (b.order ?? -1);
-          if (orderDifference !== 0) return orderDifference;
+        setAssessments(loaded);
+        setAssessmentsError('');
+        setIsAssessmentsLoading(false);
 
-          const dateA = Date.parse(a.date || '') || 0;
-          const dateB = Date.parse(b.date || '') || 0;
-          return dateB - dateA;
+        setSelectedAssessment(previous => {
+          if (!previous) return null;
+
+          const current = loaded.find(item => item.id === previous.id);
+
+          if (!current) return null;
+
+          // Preserve the marks reference when only source metadata
+          // changed, so an unrelated name/link sync does not reset
+          // locally edited mark inputs.
+          const sameMarks =
+            JSON.stringify(current.marks || {}) ===
+            JSON.stringify(previous.marks || {});
+
+          return {
+            ...current,
+            marks: sameMarks ? previous.marks : current.marks
+          };
         });
+      },
+      error => {
+        console.error('Could not listen to assessments:', error);
 
-        setAssessments(loadedAssessments);
-
-        // Always start a newly selected class/term/category at Overall.
-        // Selecting an individual item does not rerun this effect.
-        setSelectedAssessment(null);
-      } catch (error) {
-        if (cancelled) return;
-
-        console.error('Error fetching assessments:', error);
         setAssessmentsError(
-          'Could not load assessments. Please check your connection, then switch to another category and back, or refresh the page.'
+          'Could not load assessment updates. Check your connection and permissions.'
         );
-      } finally {
-        if (!cancelled) {
-          setIsAssessmentsLoading(false);
-        }
+
+        setIsAssessmentsLoading(false);
       }
-    };
-
-    fetchAssessments();
-
-    return () => {
-      cancelled = true;
-    };
+    );
   }, [
     isLoading,
     selectedClass,
@@ -1465,8 +1577,16 @@ export default function Marks() {
       selectedAssessment.date || new Date().toISOString().split('T')[0]
     );
 
-    setFullMark(selectedAssessment.fullMark ?? 100);
-    setPaperFullMark(selectedAssessment.paperFullMark ?? 100);
+    setFullMark(
+      selectedAssessment.fullMark ??
+      (selectedAssessment.designatedPending ? '' : 100)
+    );
+
+    setPaperFullMark(
+      selectedAssessment.paperFullMark ??
+      (selectedAssessment.designatedPending ? '' : 100)
+    );
+
     setLinkedDocId(selectedAssessment.linkedDocId || '');
 
     // Determine the form format from this item, not from another item
@@ -1631,6 +1751,7 @@ export default function Marks() {
     // existing marks unreadable. Full marks and weights remain editable.
     if (
       isEditingAssessment &&
+      !selectedAssessment?.designatedPending &&
       useSections !== selectedAssessmentHasSections
     ) {
       alert(
@@ -1726,7 +1847,13 @@ export default function Marks() {
         fullMark: useSections ? null : Number(fullMark),
         paperFullMark: useSections ? Number(paperFullMark) : null,
         sectionsConfig: savedSections,
-        linkedDocId: linkedDocId || null
+        linkedDocId: linkedDocId || null,
+...(isEditingAssessment && (
+          selectedAssessment?.designatedSource ||
+          selectedAssessment?.designatedPending
+        )
+          ? { designatedPending: false }
+          : {})
       };
 
       if (isEditingAssessment) {
@@ -1800,6 +1927,19 @@ export default function Marks() {
 
   const handleDeleteAssessment = async (id, e) => {
     if (e) e.stopPropagation();
+
+    const item = assessments.find(value => value.id === id) ||
+      (selectedAssessment?.id === id ? selectedAssessment : null);
+
+    if (item?.designatedSource) {
+      alert(
+        'This item came from Designated Assessment.\n\n' +
+        'Delete its source list item there instead. Only empty Marks copies ' +
+        'will be deleted; copies with student data will be retained.'
+      );
+      return;
+    }
+
     if (!window.confirm("Are you sure you want to delete this assessment? All marks for ALL linked classes will be lost.")) return;
 
     try {
@@ -1884,6 +2024,12 @@ export default function Marks() {
 
   const handleSaveMarks = async () => {
     if (!selectedAssessment) return;
+
+    if (selectedAssessment.designatedPending) {
+      alert('Configure this assessment before entering or saving marks.');
+      return;
+    }
+
     setIsSaving(true);
 
     try {
@@ -2226,17 +2372,13 @@ export default function Marks() {
       .filter(s => s.total !== null);
 
     if (totals.length > 0) {
-      totals.sort((a, b) => b.total - a.total);
-      const highest = totals[0].total;
-      const highestStudents = totals.filter(s => s.total === highest);
+      const values = totals.map(student => student.total);
 
-      highestStudents.forEach(s => topStudentIds.add(s.id));
-
-      if (highestStudents.length === 1 && totals.length > 1) {
-        const secondHighest = totals[1].total;
-        const secondHighestStudents = totals.filter(s => s.total === secondHighest);
-        secondHighestStudents.forEach(s => topStudentIds.add(s.id));
-      }
+      totals.forEach(student => {
+        if (marksIsTopTwo(student.total, values)) {
+          topStudentIds.add(student.id);
+        }
+      });
     }
   }
 
@@ -2475,13 +2617,18 @@ export default function Marks() {
       const querySnapshot = await getDocs(q);
 
       const allTermAssessments = querySnapshot.docs
-        .map(doc => ({ id: doc.id, ...doc.data() }))
-        .filter(a => {
-          const matchesClass = (a.classes && Array.isArray(a.classes))
-            ? a.classes.some(c => modalClasses.includes(c))
-            : modalClasses.includes(a.className);
-          const matchesTerm = a.term === modalTerm;
-          return matchesClass && matchesTerm;
+        .map(document => ({
+          ...document.data(),
+          id: document.id
+        }))
+        .filter(assessment => {
+          if (assessment.designatedPending === true) return false;
+
+          const matchesClass = Array.isArray(assessment.classes)
+            ? assessment.classes.some(name => modalClasses.includes(name))
+            : modalClasses.includes(assessment.className);
+
+          return matchesClass && assessment.term === modalTerm;
         });
 
       const modalStudents = students
@@ -2723,14 +2870,66 @@ export default function Marks() {
   }, [archives]);
 
   const filteredArchives = useMemo(() => {
-    return linkableDocs.filter(a => {
-      const matchOrigin = !docFilterOrigin || a.origin === docFilterOrigin;
-      const matchYear = !docFilterYear || String(a.year) === docFilterYear;
-      const matchSearch = !docSearchTerm || a.title.toLowerCase().includes(docSearchTerm.toLowerCase());
-      const matchMode = a.linkMode === docFilterMode;
-      return matchOrigin && matchYear && matchSearch && matchMode;
+    const searchTerms = [...new Set(
+      String(docSearchTerm || '')
+        .split(/[,，]/)
+        .map(value => value.trim().toLowerCase())
+        .filter(Boolean)
+    )];
+
+    return linkableDocs.filter(archive => {
+      const matchOrigin =
+        !docFilterOrigin || archive.origin === docFilterOrigin;
+
+      const matchYear =
+        !docFilterYear || String(archive.year) === docFilterYear;
+
+      const searchText = [
+        archive.title,
+        archive.year,
+        archive.origin,
+        archive.versionLabel,
+        ...(Array.isArray(archive.topic)
+          ? archive.topic
+          : [archive.topic]),
+        ...(archive.subQuestions || []).flatMap(child => [
+          child.content,
+          child.contentChi,
+          ...(Array.isArray(child.topic)
+            ? child.topic
+            : [child.topic]),
+          ...(Array.isArray(child.questionType)
+            ? child.questionType
+            : [child.questionType])
+        ])
+      ]
+        .filter(value => value !== undefined && value !== null)
+        .join(' ')
+        .toLowerCase();
+
+      const compactText = searchText.replace(/\s+/g, '');
+
+      const matchSearch =
+        searchTerms.length === 0 ||
+        searchTerms.some(term =>
+          searchText.includes(term) ||
+          compactText.includes(term.replace(/\s+/g, ''))
+        );
+
+      return (
+        matchOrigin &&
+        matchYear &&
+        matchSearch &&
+        archive.linkMode === docFilterMode
+      );
     });
-  }, [linkableDocs, docFilterOrigin, docFilterYear, docSearchTerm, docFilterMode]);
+  }, [
+    linkableDocs,
+    docFilterOrigin,
+    docFilterYear,
+    docSearchTerm,
+    docFilterMode
+  ]);
 
   const uniqueOrigins = useMemo(() => [...new Set(linkableDocs.map(a => a.origin).filter(Boolean))], [linkableDocs]);
   const uniqueYears = useMemo(() => [...new Set(linkableDocs.map(a => String(a.year)).filter(Boolean))].sort().reverse(), [linkableDocs]);
@@ -2783,19 +2982,39 @@ export default function Marks() {
     });
   };
 
-  // NEW: Missing function that was causing crashes or rendering issues when viewing linked marks
+  // Main links, section links and archive-child links share one reader.
   const handleViewLinkedMarks = async (docId, docTitle) => {
+    if (!user?.isAdmin) return;
+
+    const requestId = ++linkedMarksRequestRef.current;
+
     setCurrentMarksDocTitle(docTitle);
+    setLinkedMarksData([]);
+    setLinkedMarksError('');
+    setLinkedMarksMode('total');
     setShowMarksModal(true);
     setIsLoadingMarks(true);
+
     try {
-      // Logic to fetch linked marks from Firestore would go here
-      // For now, we clear the dummy state to show the empty state
-      setLinkedMarksData([]);
+      const records = await loadLinkedAssessmentMarks(docId);
+
+      if (requestId !== linkedMarksRequestRef.current) return;
+
+      setLinkedMarksData(records);
     } catch (error) {
-      console.error("Error fetching linked marks:", error);
+      if (requestId !== linkedMarksRequestRef.current) return;
+
+      console.error('Error fetching linked assessment marks:', error);
+
+      setLinkedMarksError(
+        `${error.code || 'marks-load-error'}: ` +
+        (error.message || 'The linked marks could not be loaded.')
+      );
+    } finally {
+      if (requestId === linkedMarksRequestRef.current) {
+        setIsLoadingMarks(false);
+      }
     }
-    setIsLoadingMarks(false);
   };
 
   // ============================================================================
@@ -2811,13 +3030,18 @@ export default function Marks() {
     const q = query(collection(db, "assessments"));
     const querySnapshot = await getDocs(q);
     const allTermAssessments = querySnapshot.docs
-      .map(doc => ({ id: doc.id, ...doc.data() }))
-      .filter(a => {
-        const matchesClass = (a.classes && Array.isArray(a.classes))
-          ? a.classes.includes(selectedClass)
-          : a.className === selectedClass;
-        const matchesTerm = a.term === selectedTerm;
-        return matchesClass && matchesTerm;
+      .map(document => ({
+        ...document.data(),
+        id: document.id
+      }))
+      .filter(assessment => {
+        if (assessment.designatedPending === true) return false;
+
+        const matchesClass = Array.isArray(assessment.classes)
+          ? assessment.classes.includes(selectedClass)
+          : assessment.className === selectedClass;
+
+        return matchesClass && assessment.term === selectedTerm;
       });
 
     // Sort oldest to newest by default so they appear top-to-bottom in the modal (left-to-right in Excel)
@@ -3178,7 +3402,14 @@ export default function Marks() {
 
   if (!selectedAssessment && assessments.length > 0) {
     assessments.forEach(a => {
-      overviewStats[a.id] = { marks: [], fullMark: a.sectionsConfig ? 100 : (a.fullMark || 100) };
+      overviewStats[a.id] = {
+        marks: [],
+        fullMark: a.designatedPending
+          ? 0
+          : a.sectionsConfig?.length
+            ? 100
+            : (a.fullMark || 100)
+      };
       overviewTotalStats.fullMark += overviewStats[a.id].fullMark;
     });
 
@@ -3870,12 +4101,36 @@ export default function Marks() {
             </div>
             <select
               value={selectedTerm}
-              onChange={(e) => setSelectedTerm(e.target.value)}
+              onChange={event =>
+                setSelectedTerm(event.target.value)
+              }
               className="w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium bg-gray-50"
             >
-              {terms.length === 0 && <option value="">No terms</option>}
-              {terms.map(t => <option key={t} value={t}>{t}</option>)}
+              {!selectedTerm && (
+                <option value="" disabled>
+                  {termPreferenceError
+                    ? 'Select a term'
+                    : terms.length
+                      ? 'Restoring saved term...'
+                      : 'No terms'}
+                </option>
+              )}
+
+              {terms.map(term => (
+                <option key={term} value={term}>
+                  {term}
+                </option>
+              ))}
             </select>
+
+            {termPreferenceError && (
+              <p
+                role="alert"
+                className="mt-2 text-xs text-red-700"
+              >
+                {termPreferenceError}
+              </p>
+            )}
           </div>
 
           <div className="pt-3 border-t border-gray-100">
@@ -4102,8 +4357,8 @@ export default function Marks() {
                         ) : (
                           <div
                             className={`marks-category-row ${selectedCategory === cat
-                                ? 'bg-blue-50 text-blue-700'
-                                : 'text-gray-600 hover:bg-gray-50'
+                              ? 'bg-blue-50 text-blue-700'
+                              : 'text-gray-600 hover:bg-gray-50'
                               }`}
                           >
                             <button
@@ -4230,7 +4485,15 @@ export default function Marks() {
                   return (
                     <li
                       key={item.id}
-                      className={itemIsSelected ? 'bg-blue-50' : 'bg-white'}
+                      className={
+                        item.designatedSource
+                          ? itemIsSelected
+                            ? 'bg-yellow-100 ring-1 ring-inset ring-yellow-400'
+                            : 'bg-yellow-50'
+                          : itemIsSelected
+                            ? 'bg-blue-50'
+                            : 'bg-white'
+                      }
                     >
                       <button
                         type="button"
@@ -4242,17 +4505,29 @@ export default function Marks() {
                         className="w-full min-w-0 text-left px-4 pt-3 pb-2 hover:bg-blue-50 transition-colors"
                       >
                         <span
-                          className={`block text-sm font-semibold break-words ${itemIsSelected ? 'text-blue-700' : 'text-gray-800'
+                          className={`block text-sm font-semibold break-words ${item.designatedSource
+                            ? 'text-yellow-950'
+                            : itemIsSelected
+                              ? 'text-blue-700'
+                              : 'text-gray-800'
                             }`}
                         >
                           {item.name}
                         </span>
+
+                        {item.designatedSource && (
+                          <span className="mt-1 inline-block rounded border border-yellow-400 bg-yellow-200 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-yellow-950">
+                            Compulsory
+                          </span>
+                        )}
                         <span className="block text-xs text-gray-500 mt-1">
                           {item.date || 'No date'}
                           {' · '}
-                          {itemHasSections
-                            ? `Paper full mark: ${item.paperFullMark ?? 100}`
-                            : `Full mark: ${item.fullMark ?? 100}`}
+                          {item.designatedPending
+                            ? 'Configuration required'
+                            : itemHasSections
+                              ? `Paper full mark: ${item.paperFullMark ?? 100}`
+                              : `Full mark: ${item.fullMark ?? 100}`}
                         </span>
                         {itemHasSections && (
                           <span className="block text-xs text-indigo-600 mt-1">
@@ -4359,7 +4634,12 @@ export default function Marks() {
                         <th key={a.id} className="p-3 border-b w-32 text-center border-r border-gray-200">
                           <div className="truncate" title={a.name}>{a.name}</div>
                           <div className="text-[10px] text-gray-400 normal-case font-normal mt-1">
-                            Full: {a.sectionsConfig ? 100 : (a.fullMark || 100)}
+                            {a.designatedPending
+                              ? 'Configuration required'
+                              : `Full: ${a.sectionsConfig?.length
+                                ? 100
+                                : (a.fullMark || 100)
+                              }`}
                           </div>
                         </th>
                       ))}
@@ -4412,14 +4692,51 @@ export default function Marks() {
 
                                 const isMissing = finalMark === null;
 
+                                const revealTopMark =
+                                  !isMissing &&
+                                  marksIsTopTwo(
+                                    finalMark,
+                                    overviewStats[a.id]?.marks || []
+                                  );
+
                                 return (
-                                  <td key={a.id} className={`p-3 text-center border-r border-gray-200 ${isMissing ? 'bg-red-50' : ''}`}>
-                                    {isMissing ? '-' : (studentView ? '***' : finalMark.toFixed(1))}
+                                  <td
+                                    key={a.id}
+                                    className={`p-3 text-center border-r border-gray-200 ${isMissing
+                                      ? 'bg-red-50'
+                                      : revealTopMark
+                                        ? 'bg-yellow-200 font-bold text-yellow-950'
+                                        : ''
+                                      }`}
+                                  >
+                                    {isMissing
+                                      ? '-'
+                                      : studentView && !revealTopMark
+                                        ? '***'
+                                        : finalMark.toFixed(1)}
                                   </td>
                                 );
                               })}
-                              <td className={`p-3 text-center font-bold text-blue-700 ${!hasAnyMark ? 'bg-red-50' : 'bg-blue-50/50'}`}>
-                                {!hasAnyMark ? '-' : (studentView ? '***' : studentTotal.toFixed(1))}
+                              <td
+                                className={`p-3 text-center font-bold ${!hasAnyMark
+                                  ? 'bg-red-50 text-blue-700'
+                                  : marksIsTopTwo(
+                                    studentTotal,
+                                    overviewTotalStats.marks
+                                  )
+                                    ? 'bg-yellow-200 text-yellow-950'
+                                    : 'bg-blue-50/50 text-blue-700'
+                                  }`}
+                              >
+                                {!hasAnyMark
+                                  ? '-'
+                                  : studentView &&
+                                    !marksIsTopTwo(
+                                      studentTotal,
+                                      overviewTotalStats.marks
+                                    )
+                                    ? '***'
+                                    : studentTotal.toFixed(1)}
                               </td>
                             </tr>
                           );
@@ -4452,6 +4769,31 @@ export default function Marks() {
               </div>
             </div>
           )
+        ) : selectedAssessment.designatedPending === true ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 space-y-4">
+            <h2 className="text-xl font-bold text-amber-950">
+              {selectedAssessment.name}
+            </h2>
+
+            <p className="text-sm text-amber-900">
+              This item was added by Designated Assessment.
+              It has no marking configuration yet.
+            </p>
+
+            <p className="text-sm text-amber-900">
+              Configure its date, full mark and, where needed, its sections
+              before entering marks. It is excluded from term calculations
+              and exports until configured.
+            </p>
+
+            <button
+              type="button"
+              onClick={openEditModal}
+              className="rounded-lg bg-amber-700 px-4 py-2 text-sm font-bold text-white"
+            >
+              Configure assessment
+            </button>
+          </div>
         ) : (
           <div className="w-full bg-white rounded-lg shadow-sm border border-gray-200 flex flex-col">
             {/* Header */}
@@ -4888,8 +5230,19 @@ export default function Marks() {
                               </td>
                             )}
 
-                            <td className={`p-3 font-bold text-center border-l border-gray-200 ${finalTotal === null ? 'bg-red-50' : (isTopMark && !studentView ? 'bg-yellow-200 text-yellow-800' : 'text-blue-700 bg-blue-50/50')}`}>
-                              {finalTotal === null ? '-' : (studentView ? '***' : finalTotal.toFixed(1))}
+                            <td
+                              className={`p-3 font-bold text-center border-l border-gray-200 ${finalTotal === null
+                                ? 'bg-red-50'
+                                : isTopMark
+                                  ? 'bg-yellow-200 text-yellow-950'
+                                  : 'text-blue-700 bg-blue-50/50'
+                                }`}
+                            >
+                              {finalTotal === null
+                                ? '-'
+                                : studentView && !isTopMark
+                                  ? '***'
+                                  : finalTotal.toFixed(1)}
                             </td>
 
                             {isMultiSectionCategory && (
@@ -5103,19 +5456,25 @@ export default function Marks() {
                         type="checkbox"
                         id="forceMultiSection"
                         checked={forceMultiSection}
-                        onChange={(e) => setForceMultiSection(e.target.checked)}
-                        disabled={isEditingAssessment}
+                        onChange={event =>
+                          setForceMultiSection(event.target.checked)
+                        }
+                        disabled={
+                          isEditingAssessment &&
+                          !selectedAssessment?.designatedPending
+                        }
                         className="mt-1 rounded text-blue-600 focus:ring-blue-500 disabled:opacity-50"
                       />
                       Enable Multi-Section Layout for this specific item
                     </label>
 
-                    {isEditingAssessment && (
-                      <p className="mt-1 text-xs text-gray-500">
-                        The layout is locked to protect existing marks.
-                        Full marks and section weights can still be edited.
-                      </p>
-                    )}
+                    {isEditingAssessment &&
+                      !selectedAssessment?.designatedPending && (
+                        <p className="mt-1 text-xs text-gray-500">
+                          The layout is locked to protect existing marks.
+                          Full marks and section weights can still be edited.
+                        </p>
+                      )}
                   </div>
                 )}
 
@@ -5365,8 +5724,24 @@ export default function Marks() {
                               </td>
                             );
                           })}
-                          <td className="p-3 text-center font-bold text-blue-700 bg-blue-50/50">
-                            {finalTotal === null ? '-' : (allClassesStudentView ? '***' : finalTotal.toFixed(1))}
+                          <td
+                            className={`p-3 text-center font-bold ${marksIsTopTwo(
+                              finalTotal,
+                              allClassesStatsData?.marks || []
+                            )
+                              ? 'bg-yellow-200 text-yellow-950'
+                              : 'bg-blue-50/50 text-blue-700'
+                              }`}
+                          >
+                            {finalTotal === null
+                              ? '-'
+                              : allClassesStudentView &&
+                                !marksIsTopTwo(
+                                  finalTotal,
+                                  allClassesStatsData?.marks || []
+                                )
+                                ? '***'
+                                : finalTotal.toFixed(1)}
                           </td>
                         </tr>
                       );
@@ -6189,92 +6564,37 @@ export default function Marks() {
         </div>
       )}
 
-      {/* Document Linker Modal */}
+      {/* Document Linker — search and inspect question text before selecting */}
       {showDocLinker && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col">
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-lg">
-              <h2 className="text-lg font-bold text-gray-800 flex items-center">
-                <LinkIcon className="w-5 h-5 mr-2 text-blue-600" />
-                Link Archive Document
-              </h2>
-              <button
-                onClick={() => setShowDocLinker(false)}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                <X className="w-6 h-6" />
-              </button>
-            </div>
+        <DesignatedDocumentLinker
+          key={`${docLinkerTarget || 'main'}:${selectedAssessment?.id || 'new'}`}
+          archives={archives}
+          loading={docCatalogueLoading}
+          error={docCatalogueError}
+          selectedId={
+            docLinkerTarget === 'main'
+              ? linkedDocId
+              : sectionsConfig.find(
+                section => section.id === docLinkerTarget
+              )?.linkedDocId || ''
+          }
+          onClose={() => setShowDocLinker(false)}
+          onSelect={({ linkedDocId: selectedLink }) => {
+            if (docCatalogueLoading || docCatalogueError) return;
 
-            <div className="p-4 bg-white border-b border-gray-200 flex flex-col sm:flex-row gap-3">
-              <div className="flex-1 relative">
-                <Search className="absolute left-3 top-2.5 text-gray-400 w-4 h-4" />
-                <input
-                  type="text"
-                  placeholder="Search document title..."
-                  value={docSearchTerm}
-                  onChange={e => setDocSearchTerm(e.target.value)}
-                  data-gramm="false" data-gramm_editor="false"
-                  className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-md text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <select
-                value={docFilterOrigin}
-                onChange={e => setDocFilterOrigin(e.target.value)}
-                className="border border-gray-300 rounded-md px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">All Origins</option>
-                {uniqueOrigins.map(o => <option key={o} value={o}>{o}</option>)}
-              </select>
-              <select
-                value={docFilterYear}
-                onChange={e => setDocFilterYear(e.target.value)}
-                className="border border-gray-300 rounded-md px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">All Years</option>
-                {uniqueYears.map(y => <option key={y} value={y}>{y}</option>)}
-              </select>
-              <select
-                value={docFilterMode}
-                onChange={e => setDocFilterMode(e.target.value)}
-                className="border border-gray-300 rounded-md px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="full">Full Papers</option>
-                <option value="sub">Sub-Questions</option>
-              </select>
-            </div>
+            if (docLinkerTarget === 'main') {
+              setLinkedDocId(selectedLink);
+            } else {
+              updateSection(
+                docLinkerTarget,
+                'linkedDocId',
+                selectedLink
+              );
+            }
 
-            <div className="flex-1 overflow-y-auto p-4 bg-gray-50">
-              {filteredArchives.length === 0 ? (
-                <div className="text-center text-gray-500 py-10">No documents found matching criteria.</div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {filteredArchives.map(doc => (
-                    <div
-                      key={doc.id}
-                      onClick={() => {
-                        if (docLinkerTarget === 'main') {
-                          setLinkedDocId(doc.id);
-                        } else {
-                          updateSection(docLinkerTarget, 'linkedDocId', doc.id);
-                        }
-                        setShowDocLinker(false);
-                      }}
-                      className={`p-3 rounded-lg border cursor-pointer transition-all ${(docLinkerTarget === 'main' ? linkedDocId : sectionsConfig.find(s => s.id === docLinkerTarget)?.linkedDocId) === doc.id ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500' : 'border-gray-200 bg-white hover:border-blue-300 hover:bg-gray-50'}`}
-                    >
-                      <div className="font-bold text-gray-800 text-sm mb-1 truncate" title={doc.title}>{doc.title}</div>
-                      <div className="flex items-center gap-2 text-xs text-gray-500">
-                        <span className="bg-gray-100 px-1.5 py-0.5 rounded">{doc.year}</span>
-                        <span className="bg-gray-100 px-1.5 py-0.5 rounded truncate">{doc.origin}</span>
-                        <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">{doc.paperType || 'Unknown'}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+            setShowDocLinker(false);
+          }}
+        />
       )}
 
       {/* Preview Modal for Linked Document */}
@@ -6522,7 +6842,7 @@ export default function Marks() {
 
       {/* --- LINKED MARKS MODAL --- */}
       {showMarksModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
           <div className="bg-white rounded-xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
             <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
               <div>
@@ -6530,8 +6850,25 @@ export default function Marks() {
                   <BarChart2 size={20} className="text-teal-600" /> Linked Marks Record
                 </h2>
                 <p className="text-sm text-slate-500 mt-1">
-                  Showing all student marks linked to: <span className="font-bold text-slate-700">{currentMarksDocTitle}</span>
+                  Showing all student marks linked to:{' '}
+                  <span className="font-bold text-slate-700">
+                    {currentMarksDocTitle}
+                  </span>
                 </p>
+
+                <p className="mt-2 text-xs text-teal-700">
+                  Component-linked documents show only their linked
+                  component and its recorded parts.
+                </p>
+
+                {linkedMarksError && (
+                  <p
+                    role="alert"
+                    className="mt-3 whitespace-pre-wrap rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700"
+                  >
+                    {linkedMarksError}
+                  </p>
+                )}
               </div>
               <button onClick={() => setShowMarksModal(false)} className="text-slate-400 hover:text-slate-800">
                 <X size={20} />
@@ -6549,7 +6886,9 @@ export default function Marks() {
                   <BarChart2 size={48} className="mb-4 text-slate-300" />
                   <h3 className="text-lg font-semibold text-slate-600">No Marks Found</h3>
                   <p className="text-sm max-w-xs text-center mt-2">
-                    There are currently no student marks linked to this document.
+                    {linkedMarksError
+                      ? 'The request failed. Close this window and click View Marks to retry.'
+                      : 'No recorded student marks were found through the main or section links for this document.'}
                   </p>
                 </div>
               ) : (
@@ -6575,8 +6914,11 @@ export default function Marks() {
                           <td className="px-4 py-3 text-slate-500 text-xs border-r border-slate-200">
                             {record.term} <span className="mx-1">•</span> {record.category}
                           </td>
-                          <td className="px-4 py-3 text-right font-bold text-teal-700 bg-teal-50/30">
-                            {record.mark}
+                          <td className="px-4 py-3 text-right align-top bg-teal-50/30">
+                            <LinkedMarksValue
+                              record={record}
+                              detailed={linkedMarksMode === 'details'}
+                            />
                           </td>
                         </tr>
                       ))}

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
     collection,
     getDocs,
@@ -11,13 +12,15 @@ import {
     deleteDoc,
     query,
     where,
-    setDoc
+    setDoc,
+    onSnapshot
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { useAuth } from './main.jsx';
 import { getUserClassAccess } from './classAccess.js';
 import { loadAssignedClassAssessments } from './dashboardAccessClient.js';
 import { loadAccessibleArchives } from './archiveAccessClient.js';
+import { dashboardItemCanAppear } from './dashboardItemVisibility.js';
 
 import {
     loadClassAssessments,
@@ -71,8 +74,66 @@ const getTermWeight = (term) => {
     return weight;
 };
 
+// Terms take priority over saved item order.
+// Within a term, newest dates appear first.
+const compareDashboardItems = (a, b) => {
+    const termA = String(a.term || '');
+    const termB = String(b.term || '');
+
+    const termDifference =
+        getTermWeight(termB) - getTermWeight(termA);
+
+    if (termDifference) return termDifference;
+
+    // Keep different terms grouped even when they have equal weights.
+    if (termA !== termB) {
+        return termB.localeCompare(
+            termA,
+            undefined,
+            { numeric: true }
+        );
+    }
+
+    const dateA = Date.parse(a.date || '') || 0;
+    const dateB = Date.parse(b.date || '') || 0;
+
+    if (dateA !== dateB) return dateB - dateA;
+
+    const orderA = Number.isFinite(Number(a.order))
+        ? Number(a.order)
+        : -1;
+
+    const orderB = Number.isFinite(Number(b.order))
+        ? Number(b.order)
+        : -1;
+
+    if (orderA !== orderB) return orderA - orderB;
+
+    return String(a.id || '').localeCompare(String(b.id || ''));
+};
+
+function resolveDashboardDocument(archives, link) {
+    if (!link) return null;
+
+    const parent = archives.find(archive => archive.id === link);
+
+    if (parent) return { parent, child: null };
+
+    for (const archive of archives) {
+        const child = (archive.subQuestions || []).find(
+            question => `${archive.id}_${question.id}` === link
+        );
+
+        if (child) return { parent: archive, child };
+    }
+
+    return null;
+}
+
 export default function StudentDashboard() {
     const { user, authLoading } = useAuth();
+    const navigate = useNavigate();
+    const location = useLocation();
 
     const dashboardIdentity = JSON.stringify([
         user?.email || '',
@@ -84,7 +145,41 @@ export default function StudentDashboard() {
     const [loadedDashboardIdentity, setLoadedDashboardIdentity] = useState('');
     const [dashboardError, setDashboardError] = useState('');
     const [studentProfiles, setStudentProfiles] = useState([]);
-    const { t, language } = useLanguage();
+    const { t, language, setLanguage } = useLanguage();
+
+    useEffect(() => {
+        const parameters = new URLSearchParams(location.search);
+        const requestedLanguage = parameters.get('archiveLang');
+
+        if (!['zh', 'en'].includes(requestedLanguage)) return;
+
+        setLanguage(requestedLanguage);
+
+        // Consume the navigation preference once.
+        // The user can still change the website language afterwards.
+        parameters.delete('archiveLang');
+
+        const nextSearch = parameters.toString();
+
+        navigate(
+            {
+                pathname: location.pathname,
+                search: nextSearch ? `?${nextSearch}` : '',
+                hash: location.hash
+            },
+            {
+                replace: true,
+                state: location.state
+            }
+        );
+    }, [
+        location.search,
+        location.pathname,
+        location.hash,
+        location.state,
+        navigate,
+        setLanguage
+    ]);
     const [items, setItems] = useState([]);
     const [archives, setArchives] = useState([]);
     const [linkableDocs, setLinkableDocs] = useState([]);
@@ -126,6 +221,46 @@ export default function StudentDashboard() {
     const [loadedClass, setLoadedClass] = useState('');
     const [classReload, setClassReload] = useState(0);
     const [catalogueLoading, setCatalogueLoading] = useState(false);
+
+    const designatedLinkRevisionRef = React.useRef(null);
+
+    useEffect(() => {
+        if (!user?.isAuthorized || !selectedClass) return;
+
+        return onSnapshot(
+            doc(db, 'settings', 'designated_link_updates'),
+            snapshot => {
+                const revision = snapshot.data()?.revision || '';
+
+                if (designatedLinkRevisionRef.current === null) {
+                    designatedLinkRevisionRef.current = revision;
+                    return;
+                }
+
+                if (revision === designatedLinkRevisionRef.current) return;
+
+                // Do not discard an administrator's open edit form.
+                // When editing ends, resubscription detects the newer revision.
+                if (isEditing || showAddModal) return;
+
+                designatedLinkRevisionRef.current = revision;
+                cataloguePromiseRef.current = null;
+                setClassReload(previous => previous + 1);
+            },
+            error => {
+                console.error(
+                    'Could not watch designated document-link updates:',
+                    error
+                );
+            }
+        );
+    }, [
+        user?.email,
+        user?.isAuthorized,
+        selectedClass,
+        isEditing,
+        showAddModal
+    ]);
 
     const cataloguePromiseRef = React.useRef(null);
     const activeDashboardRef = React.useRef('');
@@ -434,12 +569,25 @@ export default function StudentDashboard() {
             let stage = 'class assessments';
 
             try {
-                const assessments = await loadAssignedClassAssessments(
-                    selectedClass,
-                    user.email
-                );
+const receivedAssessments =
+                    await loadAssignedClassAssessments(
+                        selectedClass,
+                        user.email
+                    );
 
                 if (cancelled) return;
+
+                if (!Array.isArray(receivedAssessments)) {
+                    throw new Error(
+                        'The assessment service returned an invalid response.'
+                    );
+                }
+
+                // No administrator exception.
+                // Filter before loading document links or storing dashboard data.
+                const assessments = receivedAssessments.filter(
+                    dashboardItemCanAppear
+                );
 
                 let classStudents = [];
 
@@ -477,20 +625,7 @@ export default function StudentDashboard() {
 
                 if (cancelled) return;
 
-                assessments.sort((a, b) => {
-                    const orderA = a.order !== undefined ? a.order : -1;
-                    const orderB = b.order !== undefined ? b.order : -1;
-
-                    if (orderA !== orderB) return orderA - orderB;
-
-                    const weightA = getTermWeight(a.term);
-                    const weightB = getTermWeight(b.term);
-
-                    if (weightA !== weightB) return weightB - weightA;
-
-                    return new Date(b.date) - new Date(a.date);
-                });
-
+                assessments.sort(compareDashboardItems);
                 const names = {};
 
                 classStudents
@@ -583,25 +718,24 @@ export default function StudentDashboard() {
         setCurrentStudentData(profile || null);
     }, [studentProfiles, selectedClass, user?.isAdmin]);
 
-    // Dynamically filter items based on the selected tab (which is now restricted by role)
+    // Keep each term together, newest term and date first.
+    // Stars remain visible but do not move records into other terms.
     useEffect(() => {
-        if (selectedClass) {
-            let filtered = allItems.filter(item => item.classes?.includes(selectedClass) || item.className === selectedClass);
-
-            // Sort to push starred items to the top
-            filtered.sort((a, b) => {
-                const aIsStarred = a.linkedDocId && starredItems.includes(a.linkedDocId);
-                const bIsStarred = b.linkedDocId && starredItems.includes(b.linkedDocId);
-                if (aIsStarred && !bIsStarred) return -1;
-                if (!aIsStarred && bIsStarred) return 1;
-                return 0; // Keep existing order otherwise
-            });
-
-            setItems(filtered);
-        } else {
+        if (!selectedClass) {
             setItems([]);
+            return;
         }
-    }, [allItems, selectedClass, starredItems]);
+
+const filtered = allItems
+            .filter(dashboardItemCanAppear)
+            .filter(item =>
+                item.classes?.includes(selectedClass) ||
+                item.className === selectedClass
+            )
+            .sort(compareDashboardItems);
+
+        setItems(filtered);
+    }, [allItems, selectedClass]);
 
     const toggleStar = async (uniqueId) => {
         if (!user?.email) return;
@@ -750,17 +884,7 @@ export default function StudentDashboard() {
                     const matchIdx = newAll.findIndex(a => a.id === item.id);
                     if (matchIdx !== -1) newAll[matchIdx].order = idx;
                 });
-                return newAll.sort((a, b) => {
-                    const orderA = a.order !== undefined ? a.order : -1;
-                    const orderB = b.order !== undefined ? b.order : -1;
-                    if (orderA !== orderB) return orderA - orderB;
-
-                    // Keep fallback logic consistent in state
-                    const weightA = getTermWeight(a.term);
-                    const weightB = getTermWeight(b.term);
-                    if (weightA !== weightB) return weightB - weightA;
-                    return new Date(b.date) - new Date(a.date);
-                });
+                return newAll.sort(compareDashboardItems);
             });
         } catch (error) {
             console.error("Error saving order:", error);
@@ -910,16 +1034,9 @@ export default function StudentDashboard() {
         );
 
         // Sort ascending (oldest first) for chronological graph
-        const sorted = [...filtered].sort((a, b) => {
-            const orderA = a.order !== undefined ? a.order : -1;
-            const orderB = b.order !== undefined ? b.order : -1;
-            if (orderA !== orderB) return orderB - orderA; // Reverse of list sort
-
-            const weightA = getTermWeight(a.term);
-            const weightB = getTermWeight(b.term);
-            if (weightA !== weightB) return weightA - weightB;
-            return new Date(a.date) - new Date(b.date);
-        });
+        const sorted = [...filtered].sort(
+            (a, b) => compareDashboardItems(b, a)
+        );
 
         return sorted.map(item => {
             const stats = calculateItemStats(item);
@@ -1518,7 +1635,9 @@ export default function StudentDashboard() {
                 return 'Assignments';
             };
 
-            const filteredItems = allItems.filter(item => {
+const filteredItems = allItems.filter(item => {
+                if (!dashboardItemCanAppear(item)) return false;
+
                 const matchesClass =
                     item.classes?.includes(selectedClass) ||
                     item.className === selectedClass;
@@ -2609,21 +2728,29 @@ export default function StudentDashboard() {
                                     }
                                 }
 
-                                // Extract small wording for Assignments/Quizzes
+                                // Prefer the website's selected language.
+                                // Fall back only when that language has no text.
                                 let smallWording = null;
-                                if (item.category === 'Assignments' || item.category === 'Quizzes') {
-                                    if (item.linkedDocId) {
-                                        const isSub = item.linkedDocId.includes('_');
-                                        const [parentId, childId] = item.linkedDocId.split('_');
-                                        const parentDoc = archives.find(a => a.id === parentId);
-                                        if (parentDoc && parentDoc.subQuestions && parentDoc.subQuestions.length > 0) {
-                                            if (isSub) {
-                                                const childDoc = parentDoc.subQuestions.find(sq => sq.id.toString() === childId);
-                                                if (childDoc) smallWording = childDoc.content;
-                                            } else {
-                                                const lastQ = parentDoc.subQuestions[parentDoc.subQuestions.length - 1];
-                                                smallWording = lastQ.content;
-                                            }
+
+                                if (
+                                    ['Assignments', 'Quizzes'].includes(item.category)
+                                ) {
+                                    const resolved = resolveDashboardDocument(
+                                        archives,
+                                        item.linkedDocId
+                                    );
+
+                                    if (resolved) {
+                                        const children =
+                                            resolved.parent.subQuestions || [];
+
+                                        const question = resolved.child ||
+                                            children[children.length - 1];
+
+                                        if (question) {
+                                            smallWording = language.startsWith('zh')
+                                                ? question.contentChi || question.content
+                                                : question.content || question.contentChi;
                                         }
                                     }
                                 }
@@ -2695,7 +2822,7 @@ export default function StudentDashboard() {
                                                             const lDoc = linkableDocs.find(a => a.id === sec.linkedDocId);
                                                             return lDoc ? (
                                                                 <div key={sec.id} className="flex items-center gap-0.5 md:gap-2 flex-wrap justify-center">
-                                                                    <a href={`/?search=${encodeURIComponent(lDoc.title)}&viewId=${lDoc.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-[8px] md:text-xs text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-1 py-0.5 md:px-2 md:py-1 rounded border border-blue-100 shadow-sm">
+                                                                    <a href={`/?search=${encodeURIComponent(lDoc.title)}&viewId=${encodeURIComponent(lDoc.id)}&archiveLang=${language.startsWith('zh') ? 'zh' : 'en'}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-[8px] md:text-xs text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-1 py-0.5 md:px-2 md:py-1 rounded border border-blue-100 shadow-sm">
                                                                         <FileText size={8} className="md:w-3 md:h-3" /> {sec.name}
                                                                     </a>
                                                                     {!user?.isAdmin && (
@@ -2722,7 +2849,7 @@ export default function StudentDashboard() {
                                                     </div>
                                                 ) : linkedDoc ? (
                                                     <div className="flex items-center gap-0.5 md:gap-2 flex-wrap justify-center">
-                                                        <a href={`/?search=${encodeURIComponent(linkedDoc.title)}&viewId=${linkedDoc.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-[8px] md:text-sm text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-1 py-0.5 md:px-2 md:py-1 rounded border border-blue-100 shadow-sm">
+                                                        <a href={`/?search=${encodeURIComponent(linkedDoc.title)}&viewId=${encodeURIComponent(linkedDoc.id)}&archiveLang=${language.startsWith('zh') ? 'zh' : 'en'}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-[8px] md:text-sm text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-1 py-0.5 md:px-2 md:py-1 rounded border border-blue-100 shadow-sm">
                                                             <FileText size={8} className="md:w-3.5 md:h-3.5" /> {t("View")}
                                                         </a>
                                                         {!user?.isAdmin && (

@@ -7,6 +7,10 @@ const db = admin.firestore();
 const OWNER_EMAIL = "clng@ktls.edu.hk";
 const ACCESS_POLICY_VERSION = 2;
 
+const {
+    studentVisibleAssessments
+} = require("./assessment-student-visibility.cjs");
+
 function cleanEmail(value) {
     return String(value || "").trim().toLowerCase();
 }
@@ -239,7 +243,12 @@ async function readAssignedLinks(account) {
         }
     };
 
-    assessments.forEach(assessment => {
+    const visibleAssessments = await studentVisibleAssessments(
+        [...assessments.values()],
+        account
+    );
+
+    visibleAssessments.forEach(assessment => {
         add(assessment.linkedDocId);
 
         if (Array.isArray(assessment.sectionsConfig)) {
@@ -901,10 +910,15 @@ exports.archiveClassAssessments = functions
                 });
             });
 
+            const visibleAssessments = await studentVisibleAssessments(
+                [...assessments.values()],
+                account
+            );
+
             return {
                 effectiveEmail: account.email,
                 className,
-                assessments: [...assessments.values()]
+                assessments: visibleAssessments
             };
         } catch (error) {
             if (error instanceof functions.https.HttpsError) {

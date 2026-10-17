@@ -11,6 +11,9 @@ const DseTrend = React.lazy(() => import('./DseTrend.jsx'));
 const PdfTool = React.lazy(() => import('./PdfTool.jsx'));
 const Record = React.lazy(() => import('./Record.jsx'));
 const Marks = React.lazy(() => import('./Marks.jsx'));
+const DesignatedAssessments = React.lazy(
+  () => import('./DesignatedAssessments.jsx')
+);
 const ArchiveVersionAssignments = React.lazy(
   () => import('./ArchiveVersionAssignments.jsx')
 );
@@ -966,6 +969,12 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="/timetable" element={
                 <ProtectedAdminRoute>
                   <Timetable />
+                </ProtectedAdminRoute>
+              } />
+
+              <Route path="/designated-assessments" element={
+                <ProtectedAdminRoute>
+                  <DesignatedAssessments />
                 </ProtectedAdminRoute>
               } />
               <Route path="/dashboard" element={<StudentDashboard />} />

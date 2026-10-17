@@ -97,6 +97,9 @@ import ArchiveLabelAudit, {
 
 import ReportResolutionNotice from './ReportResolutionNotice.jsx';
 import ArchiveVersionSearchControl from './ArchiveVersionSearchControl.jsx';
+import { loadLinkedAssessmentMarks } from './linkedAssessmentMarks.js';
+import LinkedMarksValue from './LinkedMarksValue.jsx';
+import { convertBatchWord } from './convertBatchWord.js';
 
 const createEmptyFilters = () => ({
   origin: [],
@@ -1879,6 +1882,9 @@ export default function AdvancedHistoryArchive() {
   const [linkedMarksData, setLinkedMarksData] = useState([]);
   const [isLoadingMarks, setIsLoadingMarks] = useState(false);
   const [currentMarksDocTitle, setCurrentMarksDocTitle] = useState('');
+  const [linkedMarksError, setLinkedMarksError] = useState('');
+  const [linkedMarksMode, setLinkedMarksMode] = useState('total');
+  const linkedMarksRequestRef = useRef(0);
 
   // Dynamic Lists State
   const [availableTopics, setAvailableTopics] = useState(INITIAL_TOPICS);
@@ -3239,83 +3245,39 @@ export default function AdvancedHistoryArchive() {
     }
   };
 
-  // --- FETCH LINKED MARKS ---
+  // --- FETCH MAIN-LINKED AND SECTION-LINKED MARKS ---
   const handleViewLinkedMarks = async (docId, docTitle) => {
+    if (!user?.isAdmin) return;
+
+    const requestId = ++linkedMarksRequestRef.current;
+
     setCurrentMarksDocTitle(docTitle);
+    setLinkedMarksData([]);
+    setLinkedMarksError('');
+    setLinkedMarksMode('total');
     setShowMarksModal(true);
     setIsLoadingMarks(true);
 
     try {
-      // Fetch assessments linked to this doc
-      const q = query(collection(db, "assessments"), where("linkedDocId", "==", docId));
-      const snap = await getDocs(q);
-      const assessmentsData = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const records = await loadLinkedAssessmentMarks(docId);
 
-      // Fetch students to map names
-      const stuSnap = await getDocs(collection(db, "students"));
-      const studentsData = stuSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-      const studentMap = {};
-      studentsData.forEach(s => studentMap[s.id] = s);
-
-      // Process data for display
-      let records = [];
-      assessmentsData.forEach(assessment => {
-        const marks = assessment.marks || {};
-        const fullMark = assessment.sectionsConfig && assessment.sectionsConfig.length > 0 ? 100 : (assessment.fullMark || 100);
-
-        Object.keys(marks).forEach(studentId => {
-          if (studentId.endsWith('_deduction')) return; // skip deduction keys
-          const student = studentMap[studentId];
-          if (!student) return;
-
-          const markVal = marks[studentId];
-          let finalMark = null;
-
-          // Simplified calculation for display
-          if (assessment.sectionsConfig && assessment.sectionsConfig.length > 0) {
-            let total = 0;
-            if (typeof markVal === 'object') {
-              Object.values(markVal).forEach(v => {
-                if (v && !isNaN(parseFloat(v))) total += parseFloat(v);
-              });
-              finalMark = total;
-            } else {
-              finalMark = parseFloat(markVal);
-            }
-            const deduction = parseFloat(marks[`${studentId}_deduction`]) || 0;
-            if (!isNaN(finalMark)) finalMark -= deduction;
-          } else {
-            finalMark = parseFloat(markVal);
-            const deduction = parseFloat(marks[`${studentId}_deduction`]) || 0;
-            if (!isNaN(finalMark)) finalMark -= deduction;
-          }
-
-          if (finalMark !== null && !isNaN(finalMark)) {
-            records.push({
-              assessmentName: assessment.name,
-              term: assessment.term,
-              category: assessment.category,
-              className: student.className,
-              classNumber: student.classNumber,
-              studentName: student.englishName,
-              mark: finalMark.toFixed(1),
-              fullMark: fullMark
-            });
-          }
-        });
-      });
-
-      // Sort records by class, then class number
-      records.sort((a, b) => {
-        if (a.className !== b.className) return a.className.localeCompare(b.className);
-        return String(a.classNumber).localeCompare(String(b.classNumber), undefined, { numeric: true });
-      });
+      if (requestId !== linkedMarksRequestRef.current) return;
 
       setLinkedMarksData(records);
     } catch (error) {
-      console.error("Error fetching marks:", error);
+      if (requestId !== linkedMarksRequestRef.current) return;
+
+      console.error('Error fetching linked assessment marks:', error);
+
+      setLinkedMarksError(
+        `${error.code || 'marks-load-error'}: ` +
+        (error.message || 'The linked marks could not be loaded.')
+      );
+    } finally {
+      if (requestId === linkedMarksRequestRef.current) {
+        setIsLoadingMarks(false);
+      }
     }
-    setIsLoadingMarks(false);
   };
 
   // --- FETCH LEGACY STUDENT SAMPLES FOR PREVIEW ---
@@ -4258,6 +4220,86 @@ export default function AdvancedHistoryArchive() {
     setIsUploadModalOpen(true);
   };
 
+  // Open an exact archive record from a designated-item language button.
+  // The URL requests navigation only; existing admin checks still apply.
+  const incomingArchiveEditRef = useRef('');
+
+  useEffect(() => {
+    const parameters = new URLSearchParams(location.search);
+    const archiveId = parameters.get('editArchiveId');
+
+    if (!archiveId) {
+      incomingArchiveEditRef.current = '';
+      return;
+    }
+
+    if (
+      authLoading ||
+      !user?.isAdmin ||
+      impersonatedEmail ||
+      user?.isImpersonating
+    ) return;
+
+    const archive = archives.find(item => item.id === archiveId);
+
+    // Wait for the authenticated catalogue to load.
+    if (!archive) return;
+
+    const requestKey = `${archiveId}:${location.search}`;
+
+    if (
+      incomingArchiveEditRef.current === requestKey ||
+      archiveWriteBusyRef.current
+    ) return;
+
+    incomingArchiveEditRef.current = requestKey;
+
+    const language =
+      parameters.get('editArchiveLanguage') === 'zh' ? 'zh' : 'en';
+
+    const openEditor = async () => {
+      await handleEditClick(
+        { stopPropagation() { } },
+        archive
+      );
+
+      setBatchLangTab(language);
+
+      parameters.delete('editArchiveId');
+      parameters.delete('editArchiveLanguage');
+
+      const nextSearch = parameters.toString();
+
+      navigate(
+        {
+          pathname: location.pathname,
+          search: nextSearch ? `?${nextSearch}` : '',
+          hash: location.hash
+        },
+        {
+          replace: true,
+          state: location.state
+        }
+      );
+    };
+
+    openEditor().catch(error => {
+      console.error('Could not open the requested archive editor:', error);
+      alert(error.message || 'Could not open this question set.');
+    });
+  }, [
+    location.search,
+    location.pathname,
+    location.hash,
+    archives,
+    authLoading,
+    user?.email,
+    user?.isAdmin,
+    user?.isImpersonating,
+    impersonatedEmail,
+    navigate
+  ]);
+
   const handleAddArchiveVersion = () => {
     if (
       !user?.isAdmin ||
@@ -5013,11 +5055,94 @@ export default function AdvancedHistoryArchive() {
     }
   };
 
-  const handleBatchPdfChange = async (e, isAnswer = false, isChinese = false) => {
-    const file = e.target.files[0];
-    if (!file) return;
+  const batchFileBusyRef = useRef(false);
+  const [batchFileStatus, setBatchFileStatus] = useState('');
+
+  const handleBatchPdfChange = async (
+    e,
+    isAnswer = false,
+    isChinese = false
+  ) => {
+    const originalFile = e.target.files?.[0];
+
+    if (
+      !originalFile ||
+      batchFileBusyRef.current ||
+      archiveWriteBusyRef.current ||
+      poeBusy
+    ) {
+      return;
+    }
+
+    if (
+      !/\.pdf$/i.test(originalFile.name) &&
+      !/\.docx$/i.test(originalFile.name)
+    ) {
+      alert('Select a PDF or DOCX file.');
+      return;
+    }
+
+    batchFileBusyRef.current = true;
     setIsLoading(true);
+    setBatchAIDraft(null);
+
+    const isWord = /\.docx$/i.test(originalFile.name);
+
+    setBatchFileStatus(
+      isWord
+        ? `Converting ${originalFile.name} to PDF on the server...`
+        : `Loading ${originalFile.name}...`
+    );
+
+    // Clear this upload slot before processing.
+    // A failed conversion must not leave an older source PDF silently active.
+    if (isChinese) {
+      if (isAnswer) {
+        setBatchAnsPdfFileChi(null);
+        setBatchLoadedAnsPdfChi(null);
+
+        if (batchAnsPdfPreviewUrlChi?.startsWith('blob:')) {
+          URL.revokeObjectURL(batchAnsPdfPreviewUrlChi);
+        }
+
+        setBatchAnsPdfPreviewUrlChi('');
+      } else {
+        setBatchPdfFileChi(null);
+        setBatchLoadedPdfChi(null);
+
+        if (batchPdfPreviewUrlChi?.startsWith('blob:')) {
+          URL.revokeObjectURL(batchPdfPreviewUrlChi);
+        }
+
+        setBatchPdfPreviewUrlChi('');
+      }
+    } else if (isAnswer) {
+      setBatchAnsPdfFile(null);
+      setBatchLoadedAnsPdf(null);
+
+      if (batchAnsPdfPreviewUrl?.startsWith('blob:')) {
+        URL.revokeObjectURL(batchAnsPdfPreviewUrl);
+      }
+
+      setBatchAnsPdfPreviewUrl('');
+    } else {
+      setBatchPdfFile(null);
+      setBatchLoadedPdf(null);
+
+      if (batchPdfPreviewUrl?.startsWith('blob:')) {
+        URL.revokeObjectURL(batchPdfPreviewUrl);
+      }
+
+      setBatchPdfPreviewUrl('');
+    }
+
     try {
+      // Everything after this line receives a PDF File, even when
+      // the selected source was a DOCX.
+      const file = isWord
+        ? await convertBatchWord(originalFile)
+        : originalFile;
+
       const fileBytes = await file.arrayBuffer();
       const pdfDoc = await PDFDocument.load(fileBytes);
       const fileUrl = URL.createObjectURL(file);
@@ -5026,32 +5151,45 @@ export default function AdvancedHistoryArchive() {
         if (isAnswer) {
           setBatchAnsPdfFileChi(file);
           setBatchLoadedAnsPdfChi(pdfDoc);
-          if (batchAnsPdfPreviewUrlChi) URL.revokeObjectURL(batchAnsPdfPreviewUrlChi);
           setBatchAnsPdfPreviewUrlChi(fileUrl);
         } else {
           setBatchPdfFileChi(file);
           setBatchLoadedPdfChi(pdfDoc);
-          if (batchPdfPreviewUrlChi) URL.revokeObjectURL(batchPdfPreviewUrlChi);
           setBatchPdfPreviewUrlChi(fileUrl);
         }
+      } else if (isAnswer) {
+        setBatchAnsPdfFile(file);
+        setBatchLoadedAnsPdf(pdfDoc);
+        setBatchAnsPdfPreviewUrl(fileUrl);
       } else {
-        if (isAnswer) {
-          setBatchAnsPdfFile(file);
-          setBatchLoadedAnsPdf(pdfDoc);
-          if (batchAnsPdfPreviewUrl) URL.revokeObjectURL(batchAnsPdfPreviewUrl);
-          setBatchAnsPdfPreviewUrl(fileUrl);
-        } else {
-          setBatchPdfFile(file);
-          setBatchLoadedPdf(pdfDoc);
-          if (batchPdfPreviewUrl) URL.revokeObjectURL(batchPdfPreviewUrl);
-          setBatchPdfPreviewUrl(fileUrl);
-        }
+        setBatchPdfFile(file);
+        setBatchLoadedPdf(pdfDoc);
+        setBatchPdfPreviewUrl(fileUrl);
       }
+
       setBatchPreviewMode(isAnswer ? 'answer' : 'question');
+
+      setBatchFileStatus(
+        isWord
+          ? `Converted ${originalFile.name} → ${file.name}. ` +
+          `${pdfDoc.getPageCount()} PDF page(s). ` +
+          'Review the PDF preview and its page numbers before sending to Poe.'
+          : `${file.name} loaded — ${pdfDoc.getPageCount()} page(s).`
+      );
     } catch (error) {
-      console.error("Error loading PDF:", error);
-      alert("Failed to load PDF.");
+      console.error('Could not prepare the batch source PDF:', error);
+
+      setBatchFileStatus(
+        'Source loading failed. This upload slot is now empty.'
+      );
+
+      alert(
+        'The selected file was not loaded.\n\n' +
+        (error.message || 'Please try again.') +
+        '\n\nAn older PDF has not been kept in this upload slot.'
+      );
     } finally {
+      batchFileBusyRef.current = false;
       setIsLoading(false);
     }
   };
@@ -5430,7 +5568,11 @@ export default function AdvancedHistoryArchive() {
     setIsManageSamplesModalOpen(true);
   };
   const closeModal = () => {
-    if (poeBusy || archiveWriteBusyRef.current) return;
+    if (
+      poeBusy ||
+      archiveWriteBusyRef.current ||
+      batchFileBusyRef.current
+    ) return;
 
     batchOriginalsRef.current = [];
     setBatchAIDraft(null);
@@ -8590,6 +8732,14 @@ export default function AdvancedHistoryArchive() {
                         </div>
 
                         <form id="batch-form" onSubmit={handleBatchSubmit} className="space-y-6 px-6 pb-6">
+                          {batchFileStatus && (
+                            <div
+                              role="status"
+                              className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800"
+                            >
+                              {batchFileStatus}
+                            </div>
+                          )}
                           {editingId && batchOriginalsRef.current.length > 0 && (
                             <section className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 space-y-3">
                               <h3 className="font-bold text-indigo-900">
@@ -8985,9 +9135,10 @@ export default function AdvancedHistoryArchive() {
                                           <input
                                             key="batch-en-main"
                                             type="file"
-                                            accept=".pdf"
+                                            accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                                            disabled={isLoading || poeBusy || archiveSaving}
                                             onChange={(e) => handleBatchPdfChange(e, false, false)}
-                                            className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-teal-50 file:text-teal-700"
+                                            className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-teal-50 file:text-teal-700 disabled:opacity-40"
                                           />
                                           {batchPdfFile && <div className="text-xs text-teal-600 mt-2 font-bold">{t("Selected:")} {batchPdfFile.name}</div>}
                                           {pendingToolFile && (
@@ -9015,7 +9166,14 @@ export default function AdvancedHistoryArchive() {
                                       <div className="col-span-full">
                                         <label className="label">{t("Separate Answer Key PDF (English - Optional)")}</label>
                                         <div className="relative">
-                                          <input key="batch-en-ans" type="file" accept=".pdf" onChange={(e) => handleBatchPdfChange(e, true, false)} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-green-50 file:text-green-700" />
+                                          <input
+                                            key="batch-en-ans"
+                                            type="file"
+                                            accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                                            disabled={isLoading || poeBusy || archiveSaving}
+                                            onChange={(e) => handleBatchPdfChange(e, true, false)}
+                                            className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-green-50 file:text-green-700 disabled:opacity-40"
+                                          />
                                           {batchAnsPdfFile && <div className="text-xs text-green-600 mt-2 font-bold">{t("Selected:")} {batchAnsPdfFile.name}</div>}
                                           {pendingToolFile && (
                                             <label className="flex items-center gap-2 mt-2 text-xs text-green-700 bg-green-50 p-2 rounded-lg border border-green-100 cursor-pointer w-fit hover:bg-green-100 transition-colors">
@@ -9045,7 +9203,14 @@ export default function AdvancedHistoryArchive() {
                                       <div className="col-span-full">
                                         <label className="label">{t("Main Exam PDF (Chinese - Optional)")}</label>
                                         <div className="relative">
-                                          <input key="batch-zh-main" type="file" accept=".pdf" onChange={(e) => handleBatchPdfChange(e, false, true)} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-teal-50 file:text-teal-700" />
+                                          <input
+                                            key="batch-zh-main"
+                                            type="file"
+                                            accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                                            disabled={isLoading || poeBusy || archiveSaving}
+                                            onChange={(e) => handleBatchPdfChange(e, false, true)}
+                                            className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-teal-50 file:text-teal-700 disabled:opacity-40"
+                                          />
                                           {batchPdfFileChi && <div className="text-xs text-teal-600 mt-2 font-bold">{t("Selected:")} {batchPdfFileChi.name}</div>}
                                           {pendingToolFile && (
                                             <label className="flex items-center gap-2 mt-2 text-xs text-teal-700 bg-teal-50 p-2 rounded-lg border border-teal-100 cursor-pointer w-fit hover:bg-teal-100 transition-colors">
@@ -9072,7 +9237,14 @@ export default function AdvancedHistoryArchive() {
                                       <div className="col-span-full">
                                         <label className="label">{t("Separate Answer Key PDF (Chinese - Optional)")}</label>
                                         <div className="relative">
-                                          <input key="batch-zh-ans" type="file" accept=".pdf" onChange={(e) => handleBatchPdfChange(e, true, true)} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-green-50 file:text-green-700" />
+                                          <input
+                                            key="batch-zh-ans"
+                                            type="file"
+                                            accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                                            disabled={isLoading || poeBusy || archiveSaving}
+                                            onChange={(e) => handleBatchPdfChange(e, true, true)}
+                                            className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-green-50 file:text-green-700 disabled:opacity-40"
+                                          />
                                           {batchAnsPdfFileChi && <div className="text-xs text-green-600 mt-2 font-bold">{t("Selected:")} {batchAnsPdfFileChi.name}</div>}
                                           {pendingToolFile && (
                                             <label className="flex items-center gap-2 mt-2 text-xs text-green-700 bg-green-50 p-2 rounded-lg border border-green-100 cursor-pointer w-fit hover:bg-green-100 transition-colors">
@@ -10853,7 +11025,26 @@ The supplied documents follow.`;
                     <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                       <BarChart2 size={20} className="text-teal-600" /> {t("Assessment Marks")}
                     </h2>
-                    <p className="text-xs text-slate-500 mt-1">{t("Showing marks linked to:")} <span className="font-bold">{currentMarksDocTitle}</span></p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      {t("Showing marks linked to:")}{' '}
+                      <span className="font-bold">
+                        {currentMarksDocTitle}
+                      </span>
+                    </p>
+
+                    <p className="mt-2 text-xs text-teal-700">
+                      Component-linked documents show only their linked
+                      component and its recorded parts.
+                    </p>
+
+                    {linkedMarksError && (
+                      <p
+                        role="alert"
+                        className="mt-3 whitespace-pre-wrap rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700"
+                      >
+                        {linkedMarksError}
+                      </p>
+                    )}
                   </div>
                   <button onClick={() => setShowMarksModal(false)} className="text-slate-400 hover:text-slate-800">
                     <X size={20} />
@@ -10864,7 +11055,11 @@ The supplied documents follow.`;
                   {isLoadingMarks ? (
                     <div className="flex justify-center py-10"><Loader2 className="animate-spin text-teal-600" size={32} /></div>
                   ) : linkedMarksData.length === 0 ? (
-                    <div className="text-center py-10 text-slate-500 italic">{t("No assessment marks linked to this document yet.")}</div>
+                    <div className="text-center py-10 text-slate-500 italic">
+                      {linkedMarksError
+                        ? 'The request failed. Close this window and click View Marks to retry.'
+                        : 'No recorded student marks were found through the main or section links for this document.'}
+                    </div>
                   ) : (
                     <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
                       <table className="w-full text-left text-sm">
@@ -10881,8 +11076,28 @@ The supplied documents follow.`;
                             <tr key={idx} className="hover:bg-slate-50">
                               <td className="px-4 py-3 font-medium text-slate-800">{record.studentName}</td>
                               <td className="px-4 py-3 text-slate-600">{record.className} ({record.classNumber})</td>
-                              <td className="px-4 py-3 text-slate-600">{record.assessmentName}</td>
-                              <td className="px-4 py-3 text-right font-bold text-teal-600">{record.mark} / {record.fullMark}</td>
+                              <td className="px-4 py-3 text-slate-600">
+                                <div>{record.assessmentName}</div>
+
+                                <div className="mt-1 text-xs text-slate-400">
+                                  {record.term}
+                                  {record.term && record.category ? ' · ' : ''}
+                                  {record.category}
+                                </div>
+
+                                {linkedMarksMode === 'details' && (
+                                  <div className="mt-1 text-xs text-teal-700">
+                                    Matched: {record.matchedLinks.join(', ')}
+                                  </div>
+                                )}
+                              </td>
+
+                              <td className="px-4 py-3 text-right align-top">
+                                <LinkedMarksValue
+                                  record={record}
+                                  detailed={linkedMarksMode === 'details'}
+                                />
+                              </td>
                             </tr>
                           ))}
                         </tbody>

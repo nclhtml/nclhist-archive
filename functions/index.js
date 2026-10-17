@@ -367,3 +367,10 @@ exports.archiveCatalogue = archiveAccess.archiveCatalogue;
 exports.archiveVersionPdf = archiveAccess.archiveVersionPdf;
 exports.archiveClassAssessments = archiveAccess.archiveClassAssessments;
 exports.archiveTools = archiveAccess.archiveTools;
+
+const designatedAssessments = require("./designated-assessments.cjs");
+exports.designatedAssessments =
+    designatedAssessments.designatedAssessments;
+
+const designatedIncoming = require("./designated-incoming.cjs");
+exports.designatedIncoming = designatedIncoming.designatedIncoming;

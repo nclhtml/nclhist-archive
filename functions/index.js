@@ -374,3 +374,6 @@ exports.designatedAssessments =
 
 const designatedIncoming = require("./designated-incoming.cjs");
 exports.designatedIncoming = designatedIncoming.designatedIncoming;
+
+const markingScheme = require("./marking-scheme/api.cjs");
+exports.markingSchemeApi = markingScheme.markingSchemeApi;

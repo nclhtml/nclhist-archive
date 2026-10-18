@@ -25,6 +25,10 @@ const ExerciseRunner = React.lazy(() => import('./ExerciseRunner.jsx'));
 const LotteryMachine = React.lazy(() => import('./LotteryMachine.jsx'));
 const Timetable = React.lazy(() => import('./Timetable.jsx'));
 const KnowledgeTest = React.lazy(() => import('./features/knowledge-test/KnowledgeTest.jsx'));
+
+const MarkingSchemeGenerator = React.lazy(
+  () => import('./features/marking-scheme/MarkingSchemeGenerator.jsx')
+);
 import { LanguageProvider, useLanguage } from './LanguageContext.jsx'; // <-- NEW IMPORT
 import { BookX } from 'lucide-react'; // Ensure BookX is imported for the dock
 import { auth, db, googleProvider } from './firebase.js';
@@ -966,9 +970,15 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                   <LotteryMachine />
                 </ProtectedAdminRoute>
               } />
-              <Route path="/timetable" element={
+<Route path="/timetable" element={
                 <ProtectedAdminRoute>
                   <Timetable />
+                </ProtectedAdminRoute>
+              } />
+
+              <Route path="/marking-scheme" element={
+                <ProtectedAdminRoute>
+                  <MarkingSchemeGenerator />
                 </ProtectedAdminRoute>
               } />
 

@@ -32,7 +32,11 @@ export default function SiteNavigation({ isAdmin, isPhoneLayout }) {
           label: 'Admin Tools',
           links: [
             { to: '/pdf', label: 'PDF Tools' },
-            { to: '/lottery', label: 'Lottery Machine' }
+            { to: '/lottery', label: 'Lottery Machine' },
+            {
+              to: '/marking-scheme',
+              label: 'Document Generator'
+            }
           ]
         },
         {

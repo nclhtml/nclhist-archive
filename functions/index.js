@@ -348,6 +348,175 @@ exports.sendWelcomeEmailOnRoleAdd = functions.firestore
         return null;
     });
 
+// Records website-reported PDF open/download button clicks.
+//
+// This is activity monitoring, not proof of a completed file save.
+// Identity and timestamps come from Firebase/the server, not the browser.
+exports.recordArchiveDownloadClick = functions
+    .region("us-central1")
+    .https.onCall(async (data, context) => {
+        if (!context.auth) {
+            throw new functions.https.HttpsError(
+                "unauthenticated",
+                "Sign in before recording PDF activity."
+            );
+        }
+
+        const email = String(context.auth.token.email || "")
+            .trim()
+            .toLowerCase();
+
+        if (
+            !email ||
+            email.includes("/") ||
+            context.auth.token.email_verified !== true
+        ) {
+            throw new functions.https.HttpsError(
+                "permission-denied",
+                "A verified account is required."
+            );
+        }
+
+        if (email === "clng@ktls.edu.hk") {
+            return { recorded: false, administrator: true };
+        }
+
+        const roleSnapshot = await db
+            .collection("user_roles")
+            .doc(email)
+            .get();
+
+        if (
+            !roleSnapshot.exists ||
+            typeof roleSnapshot.data().role !== "string" ||
+            !roleSnapshot.data().role.trim()
+        ) {
+            throw new functions.https.HttpsError(
+                "permission-denied",
+                "This account does not have website access."
+            );
+        }
+
+        if (
+            ["admin", "superadmin", "super_admin"].includes(
+                roleSnapshot.data().role.toLowerCase()
+            )
+        ) {
+            return { recorded: false, administrator: true };
+        }
+
+        if (
+            !data ||
+            typeof data !== "object" ||
+            Array.isArray(data) ||
+            typeof data.eventId !== "string" ||
+            !/^[a-f0-9-]{36}$/i.test(data.eventId) ||
+            typeof data.fileName !== "string" ||
+            data.fileName.length > 200
+        ) {
+            throw new functions.https.HttpsError(
+                "invalid-argument",
+                "Invalid PDF activity event."
+            );
+        }
+
+        const escapeHtml = value => String(value).replace(
+            /[&<>"']/g,
+            character => ({
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;"
+            }[character])
+        );
+
+        const fileName = data.fileName
+            .replace(/[\u0000-\u001f\u007f]/g, " ")
+            .trim() || "Archive PDF";
+
+        const windowMs = 10 * 60 * 1000;
+        const threshold = 10;
+
+        // Keep counters beneath the existing private skillbook namespace.
+        // This collection is server-only and is not returned by skillsApi.
+        const counterRef = db
+            .doc("skillbook_private/config")
+            .collection("downloadActivity")
+            .doc(context.auth.uid);
+
+        const alertRef = db.collection("admin_logs").doc();
+
+        return db.runTransaction(async transaction => {
+            const snapshot = await transaction.get(counterRef);
+            const previous = snapshot.data() || {};
+            const now = Date.now();
+
+            const events = (
+                Array.isArray(previous.events) ? previous.events : []
+            ).filter(event =>
+                event &&
+                Number.isFinite(event.time) &&
+                event.time > now - windowMs &&
+                event.time <= now
+            );
+
+            // Avoid counting the same event twice.
+            if (events.some(event => event.id === data.eventId)) {
+                return {
+                    recorded: false,
+                    duplicate: true,
+                    count: events.length
+                };
+            }
+
+            events.push({
+                id: data.eventId,
+                time: now,
+                fileName
+            });
+
+            // Bound document size even if somebody repeatedly clicks.
+            const recentEvents = events.slice(-200);
+            const lastAlertAt = Number(previous.lastAlertAt) || 0;
+
+            const shouldAlert =
+                recentEvents.length >= threshold &&
+                now - lastAlertAt >= windowMs;
+
+            transaction.set(counterRef, {
+                email,
+                events: recentEvents,
+                lastAlertAt: shouldAlert ? now : lastAlertAt,
+                updatedAt: new Date(now).toISOString()
+            });
+
+            if (shouldAlert) {
+                transaction.set(alertRef, {
+                    type: "SUSPICIOUS_DOWNLOAD",
+                    message:
+                        `User <b>${escapeHtml(email)}</b> generated ` +
+                        `<b>${recentEvents.length}</b> website-reported ` +
+                        `PDF open/download button clicks within 10 minutes.` +
+                        `<br/>These are clicks, not verified completed downloads ` +
+                        `or necessarily different documents.` +
+                        `<br/><b>Recent labels:</b> ` +
+                        recentEvents.slice(-20)
+                            .map(event => escapeHtml(event.fileName))
+                            .join(", "),
+                    timestamp: new Date(now).toISOString(),
+                    viewed: false
+                });
+            }
+
+            return {
+                recorded: true,
+                count: recentEvents.length,
+                alerted: shouldAlert
+            };
+        });
+    });
+
 exports.historyGame = require("./history-game/api.cjs");
 
 const poeImport = require("./poe-import.cjs");

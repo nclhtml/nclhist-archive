@@ -57,11 +57,13 @@ import {
   writeBatch
 } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+import { getFunctions, httpsCallable } from "firebase/functions";
 
 // --- IMPORT UPDATE CONTENT ---
 import { UpdateContent, updateVersion } from './UpdateContent.jsx';
 import { useLanguage } from './LanguageContext.jsx';
 import PoeImportPanel from './PoeImportPanel.jsx';
+import ArchiveTranslationImport from './ArchiveTranslationImport.jsx';
 import StudentSampleAuditPanel from './StudentSampleAuditPanel.jsx';
 import usePhoneLayout from './usePhoneLayout.js';
 import { useSkillBooks } from './SkillBooks.jsx';
@@ -382,6 +384,7 @@ const StudentSampleAIImport = ({
   file,
   pdf,
   disabled,
+  editing = false,
   onImport,
   onBusyChange
 }) => {
@@ -627,10 +630,32 @@ const StudentSampleAIImport = ({
 
       const summary =
         `Fill ${scores.length} question records for ${year}, grade ${overallGrade}?\n\n` +
+        `Replacement source: ${file.name}\n` +
+        `Original PDF pages: ${pageCount}\n\n` +
         `Removed ${removedDuplicates} duplicate whole-question marking column(s).\n` +
         'All selected marked-script page ranges will be retained.\n\n' +
-        'This replaces the current NEW sample draft. Nothing is uploaded yet.' +
-        (warnings.length ? '\n\nCHECK THESE ITEMS:\n' + warnings.join('\n') : '');
+        (
+          editing
+            ? (
+              'FULL REPLACEMENT OF THIS SAMPLE DRAFT\n\n' +
+              'This replaces the currently displayed year, language, grade, ' +
+              'question tags, totals, component marks and page ranges.\n\n' +
+              'Existing split-PDF links and teacher comments will NOT be ' +
+              'copied into the replacement draft.\n\n' +
+              'New split PDFs will be generated from the selected full PDF ' +
+              'only when you click Update Archive.\n\n' +
+              'The saved sample ID will stay the same. Old Storage PDFs ' +
+              'will not be deleted.\n\n' +
+              'Nothing in the database is changed by filling this form.'
+            )
+            : (
+              'This replaces the current NEW sample draft. ' +
+              'Nothing is uploaded yet.'
+            )
+        ) +
+        (warnings.length
+          ? '\n\nCHECK THESE ITEMS:\n' + warnings.join('\n')
+          : '');
 
       if (!window.confirm(summary)) return;
 
@@ -641,14 +666,38 @@ const StudentSampleAIImport = ({
         customDocTitle: '',
         filterOrigin: '',
         filterYear: '',
-        scores,
+        scores: scores.map(score => ({
+          ...score,
+
+          // A full AI replacement must use fresh page splits.
+          // Do not retain any previously attached question PDF.
+          fileUrl: '',
+          newFile: null,
+          newFileUrl: '',
+          comment: ''
+        })),
+
         // Local-only reference: prevents using this draft with a different PDF.
         aiSourceFile: file
       });
 
       setMessage(
-        `Filled ${scores.length} records. ${removedDuplicates} duplicate marking column(s) removed.\n` +
-        'Check the official totals, component marks, and every marked-script range before Upload Data.' +
+        `Filled ${scores.length} records. ` +
+        `${removedDuplicates} duplicate marking column(s) removed.\n\n` +
+        (
+          editing
+            ? (
+              'Replacement draft ready. The saved sample has not changed yet.\n' +
+              'Check the year, language, grade, official totals, component marks ' +
+              'and every marked-script page range.\n\n' +
+              'Click Update Archive to replace this saved sample and generate ' +
+              'its new split PDFs. Its sample ID will be retained.'
+            )
+            : (
+              'Check the official totals, component marks and every ' +
+              'marked-script range before Upload Data.'
+            )
+        ) +
         (warnings.length ? '\n\n' + warnings.join('\n') : '')
       );
     } catch (error) {
@@ -663,11 +712,29 @@ const StudentSampleAIImport = ({
       </h3>
 
       <p className="text-xs text-amber-900">
-        Select the full original PDF below first. You can generate its JSON
-        directly with Poe through the backend, or keep using the manual
-        Copy AI Prompt and paste workflow. Review the JSON before filling
-        the form, and verify all marked-script pages before Upload Data.
+        {editing
+          ? (
+            'To replace this saved sample, select the complete replacement ' +
+            'student PDF below first. Generate its JSON with Poe through ' +
+            'the backend, or use the manual prompt and paste workflow. ' +
+            'Fill Sample Form creates a replacement draft; Update Archive ' +
+            'saves the replacement and generates new split PDFs.'
+          )
+          : (
+            'Select the full original PDF below first. You can generate its ' +
+            'JSON directly with Poe through the backend, or keep using the ' +
+            'manual Copy AI Prompt and paste workflow. Review the JSON before ' +
+            'filling the form, and verify all marked-script pages before Upload Data.'
+          )}
       </p>
+
+      {editing && (
+        <p className="rounded-lg border border-red-200 bg-white p-3 text-xs font-bold text-red-800">
+          Full replacement: old question records, marks, split-PDF links and
+          teacher comments are not merged into the new draft.
+          The saved sample ID is retained. Old Storage PDFs are kept for safety.
+        </p>
+      )}
 
       <PoeImportPanel
         mode="sample"
@@ -699,8 +766,15 @@ const StudentSampleAIImport = ({
 
       {disabled && (
         <p className="text-xs text-red-700">
-          AI replacement is unavailable while processing or editing an existing sample.
-          Use a new Student Sample upload for this import.
+          AI import is temporarily unavailable while the application is processing.
+          Wait for the current operation to finish.
+        </p>
+      )}
+
+      {editing && !ready && (
+        <p className="text-xs font-bold text-amber-900">
+          Select the complete replacement PDF below to enable backend AI.
+          A previously saved individual split PDF is not a full source PDF.
         </p>
       )}
 
@@ -1179,6 +1253,9 @@ const CustomPDFViewer = ({ fileUrl }) => {
 };
 
 const ArchivePDFViewerSession = ({ fileUrl }) => {
+  const { user: viewerUser } = useAuth();
+  const allowViewerDownload = Boolean(viewerUser?.isAdmin);
+
   const [expanded, setExpanded] = useState(false);
   const [ready, setReady] = useState(false);
 
@@ -1218,10 +1295,14 @@ const ArchivePDFViewerSession = ({ fileUrl }) => {
         enableShortcuts: false
       },
 
-      // Prevent the built-in shortcut/pinch handler from competing
-      // with our controlled wheel zoom.
+      // Prevent competing pinch/keyboard zoom handlers.
       zoomPlugin: {
         enableShortcuts: false
+      },
+
+      // Non-admins use the website's tracked open/download button.
+      printPlugin: {
+        enableShortcuts: allowViewerDownload
       }
     },
 
@@ -1233,9 +1314,15 @@ const ArchivePDFViewerSession = ({ fileUrl }) => {
             EnterFullScreen: () => null,
             EnterFullScreenMenuItem: () => null,
 
-            // Keep this viewer attached to its supplied archive URL.
             Open: () => null,
-            OpenMenuItem: () => null
+            OpenMenuItem: () => null,
+
+            ...(allowViewerDownload ? {} : {
+              Download: () => null,
+              DownloadMenuItem: () => null,
+              Print: () => null,
+              PrintMenuItem: () => null
+            })
           }))}
       </Toolbar>
     )
@@ -1501,7 +1588,7 @@ const ArchivePDFViewerSession = ({ fileUrl }) => {
           {expanded ? 'Return to document' : 'Expand viewer'}
         </button>
 
-        {isAppleTouchDevice && (
+        {isAppleTouchDevice && allowViewerDownload && (
           <a
             href={fileUrl}
             target="_blank"
@@ -1514,7 +1601,9 @@ const ArchivePDFViewerSession = ({ fileUrl }) => {
 
         {isAppleTouchDevice && (
           <span style={{ fontSize: 12, color: '#64748b' }}>
-            Use the PDF toolbar to zoom, or open separately for pinch zoom.
+            {allowViewerDownload
+              ? 'Use the PDF toolbar to zoom, or open separately for pinch zoom.'
+              : 'Use the PDF toolbar to zoom. To open separately, use View & Download in the document header.'}
           </span>
         )}
       </div>
@@ -1577,14 +1666,21 @@ const ArchivePDFViewerSession = ({ fileUrl }) => {
                 <p style={{ marginTop: 8 }}>
                   {error.message || 'Please close and reopen the document.'}
                 </p>
-                <a
-                  href={fileUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ ...controlStyle, marginTop: 12 }}
-                >
-                  Open the same PDF separately
-                </a>
+                {allowViewerDownload ? (
+                  <a
+                    href={fileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ ...controlStyle, marginTop: 12 }}
+                  >
+                    Open the same PDF separately
+                  </a>
+                ) : (
+                  <p style={{ marginTop: 12, fontSize: 13 }}>
+                    Use View &amp; Download in the document header
+                    to open this PDF separately.
+                  </p>
+                )}
               </div>
             )}
           />
@@ -1826,7 +1922,7 @@ export default function AdvancedHistoryArchive() {
     );
   };
   const [deleteConfirm, setDeleteConfirm] = useState(false);
-  const [downloadHistory, setDownloadHistory] = useState([]);
+  // PDF open/download click counts are maintained by the backend.
 
   // State for submitting reports.
   const [showReportModal, setShowReportModal] = useState(false);
@@ -2003,6 +2099,23 @@ export default function AdvancedHistoryArchive() {
   const [loadedPdfDoc, setLoadedPdfDoc] = useState(null);
   const [pdfPageCount, setPdfPageCount] = useState(0);
   const [samplePdfPreviewUrl, setSamplePdfPreviewUrl] = useState('');
+
+  const manageSampleScrollRef = useRef(null);
+  const manageSampleScrollTopRef = useRef(0);
+
+  React.useLayoutEffect(() => {
+    if (!isManageSamplesModalOpen || isLoading) return;
+
+    const frame = requestAnimationFrame(() => {
+      const container = manageSampleScrollRef.current;
+
+      if (container) {
+        container.scrollTop = manageSampleScrollTopRef.current;
+      }
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [isManageSamplesModalOpen, isLoading, allSamples]);
 
   // --- USER MANAGEMENT STATE ---
   const [managedUsers, setManagedUsers] = useState([]);
@@ -5197,7 +5310,13 @@ export default function AdvancedHistoryArchive() {
   // --- HANDLE STUDENT SAMPLE FILE SELECTION (Generate Previews) ---
   const handleSampleFileChange = async (e) => {
     const file = e.target.files?.[0];
-    if (!file || isLoading) return;
+
+    if (
+      !file ||
+      isLoading ||
+      poeBusy ||
+      archiveSaving
+    ) return;
 
     const replacingDraftPdf =
       !editingId && Boolean(selectedSampleFile || sampleForm.aiSourceFile);
@@ -5272,9 +5391,76 @@ export default function AdvancedHistoryArchive() {
   // --- HANDLE STUDENT SAMPLE SUBMIT (Split & Upload / Edit) ---
   const handleSampleSubmit = async (e) => {
     e.preventDefault();
-    if (!user?.isAdmin || isLoading) return;
+
+    if (
+      !user?.isAdmin ||
+      isLoading ||
+      poeBusy ||
+      archiveSaving
+    ) return;
 
     try {
+      if (sampleForm.aiReplacementFor) {
+        if (
+          !editingId ||
+          sampleForm.aiReplacementFor !== editingId
+        ) {
+          throw new Error(
+            'This AI replacement belongs to a different saved sample. ' +
+            'Close the editor and reopen the intended sample.'
+          );
+        }
+
+        if (
+          !loadedPdfDoc ||
+          !selectedSampleFile ||
+          sampleForm.aiSourceFile !== selectedSampleFile
+        ) {
+          throw new Error(
+            'Select the same full PDF used for this AI replacement ' +
+            'and import its complete JSON again.'
+          );
+        }
+
+        const replacementRows = sampleForm.scores.filter(
+          score => String(score.tag ?? '').trim()
+        );
+
+        if (!replacementRows.length) {
+          throw new Error('The AI replacement contains no question records.');
+        }
+
+        for (const score of replacementRows) {
+          if (score.newFile || score.fileUrl) {
+            throw new Error(
+              `${score.tag}: this full AI replacement must use fresh ` +
+              'page splits from its selected full PDF, not an existing ' +
+              'or individually attached question PDF.'
+            );
+          }
+
+          if (!String(score.pagesStr ?? '').trim()) {
+            throw new Error(
+              `${score.tag}: enter verified marked-script pages, ` +
+              'or remove this record if there is no script to upload.'
+            );
+          }
+
+          const total = String(score.mark ?? '').trim();
+
+          if (!/^\d+(?:\.\d+)?$/.test(total)) {
+            throw new Error(
+              `${score.tag}: provide one official non-negative question total.`
+            );
+          }
+
+          getValidatedSamplePages(
+            score.pagesStr,
+            loadedPdfDoc.getPageCount(),
+            `${score.tag} replacement marked-script pages`
+          );
+        }
+      }
       if (!String(sampleForm.year ?? '').trim()) {
         throw new Error('Please provide a year.');
       }
@@ -5379,6 +5565,30 @@ export default function AdvancedHistoryArchive() {
     } catch (error) {
       alert('Upload stopped before any files were saved.\n\n' + error.message);
       return;
+    }
+
+    if (sampleForm.aiReplacementFor) {
+      const replacementRows = sampleForm.scores.filter(
+        score => String(score.tag ?? '').trim()
+      );
+
+      if (!window.confirm(
+        'Save this FULL sample replacement?\n\n' +
+        `Sample ID: ${editingId}\n` +
+        `Source PDF: ${selectedSampleFile.name}\n` +
+        `Year: ${sampleForm.year}\n` +
+        `Language: ${sampleForm.language}\n` +
+        `Overall grade: ${sampleForm.overallGrade}\n` +
+        `Question records: ${replacementRows.length}\n\n` +
+        replacementRows.map(score =>
+          `${score.tag} — total ${score.mark} — PDF pages ${score.pagesStr}`
+        ).join('\n') +
+        '\n\nThe current saved question associations, marks and split-PDF ' +
+        'links will be replaced with this draft.\n\n' +
+        'Old question records not included here will no longer belong ' +
+        'to this sample. Old teacher comments will not be retained.\n\n' +
+        'The sample ID stays unchanged. Old Storage PDFs will NOT be deleted.'
+      )) return;
     }
 
     setIsLoading(true);
@@ -5635,20 +5845,31 @@ export default function AdvancedHistoryArchive() {
   };
 
   const handleDownloadTracking = async (fileName) => {
-    const now = Date.now();
-    const tenMinsAgo = now - 10 * 60 * 1000;
-    const newHistory = [...downloadHistory.filter(d => d.time > tenMinsAgo), { time: now, fileName }];
-    setDownloadHistory(newHistory);
+    // Do not count administrators or Debug Mode activity.
+    if (
+      !user?.isAuthorized ||
+      user?.isAdmin ||
+      impersonatedEmail ||
+      user?.isImpersonating
+    ) return;
 
-    if (newHistory.length === 10) {
-      try {
-        await addDoc(collection(db, "admin_logs"), {
-          type: 'SUSPICIOUS_DOWNLOAD',
-          message: `User <b>${user?.displayName || user?.email}</b> downloaded 10 documents within 10 minutes.<br/><b>Files:</b> ${newHistory.map(d => d.fileName).join(', ')}`,
-          timestamp: new Date().toISOString(),
-          viewed: false
-        });
-      } catch (e) { console.error("Error logging suspicious activity", e); }
+    try {
+      const recordClick = httpsCallable(
+        getFunctions(db.app, 'us-central1'),
+        'recordArchiveDownloadClick'
+      );
+
+      await recordClick({
+        eventId: crypto.randomUUID(),
+        fileName: String(fileName || 'Archive PDF').slice(0, 200)
+      });
+    } catch (error) {
+      // Tracking must not stop the PDF opening.
+      // A failed request is not falsely reported as a recorded download.
+      console.warn(
+        'PDF open/download click could not be recorded:',
+        error.code || error.message
+      );
     }
   };
 
@@ -6856,8 +7077,15 @@ export default function AdvancedHistoryArchive() {
           )
           }
           <AnimatePresence>
-            {isManageSamplesModalOpen && user?.isAdmin && (
-              <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            {user?.isAdmin && (
+              <div
+                key={user.email}
+                className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 items-center justify-center p-4"
+                style={{
+                  display: isManageSamplesModalOpen ? 'flex' : 'none'
+                }}
+                aria-hidden={!isManageSamplesModalOpen}
+              >
                 <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-white rounded-xl w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
                   <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
                     <div>
@@ -6883,8 +7111,22 @@ export default function AdvancedHistoryArchive() {
                     </button>
                   </div>
 
-                  <div className="flex-1 overflow-y-auto p-6 bg-slate-50/50">
+                  <div
+                    ref={manageSampleScrollRef}
+                    onScroll={event => {
+                      if (
+                        isManageSamplesModalOpen &&
+                        !isLoading &&
+                        event.currentTarget.clientHeight > 0
+                      ) {
+                        manageSampleScrollTopRef.current =
+                          event.currentTarget.scrollTop;
+                      }
+                    }}
+                    className="flex-1 overflow-y-auto p-6 bg-slate-50/50"
+                  >
                     <StudentSampleAuditPanel
+                      active={isManageSamplesModalOpen}
                       allowed={Boolean(
                         !authLoading &&
                         !impersonatedEmail &&
@@ -8936,51 +9178,94 @@ export default function AdvancedHistoryArchive() {
                             </div>
                           )}
 
-                          <PoeImportPanel
-                            mode="batch"
-                            entries={[
-                              {
-                                role: 'question_en',
-                                label: 'English main question PDF',
-                                file: batchPdfFile
-                              },
-                              {
-                                role: 'question_zh',
-                                label: 'Chinese main question PDF',
-                                file: batchPdfFileChi
-                              },
-                              {
-                                role: 'answer_en',
-                                label: 'English answer PDF',
-                                file: batchAnsPdfFile
-                              },
-                              {
-                                role: 'answer_zh',
-                                label: 'Chinese answer PDF',
-                                file: batchAnsPdfFileChi
-                              }
-                            ]}
-                            disabled={
-                              isLoading ||
-                              Boolean(editingId) ||
-                              batchForm.questions.some(
-                                q => typeof q.id === 'string' && q.id.length > 10
-                              )
-                            }
-                            onBusyChange={setPoeBusy}
-                            onInvalidate={() => setBatchAIDraft(null)}
-                            onDraft={draft => {
-                              setBatchAIDraft({
-                                text: draft.text,
-                                mainFiles: {
-                                  question_en: batchPdfFile,
-                                  question_zh: batchPdfFileChi,
-                                  answer_en: batchAnsPdfFile,
-                                  answer_zh: batchAnsPdfFileChi
+                          {editingId ? (
+                            batchLangTab === 'en' || batchLangTab === 'zh' ? (
+                              <ArchiveTranslationImport
+                                key={`${editingId}:${batchLangTab}`}
+                                form={batchForm}
+                                language={batchLangTab}
+                                sources={{
+                                  question_en: {
+                                    file: batchPdfFile,
+                                    pdf: batchLoadedPdf
+                                  },
+                                  question_zh: {
+                                    file: batchPdfFileChi,
+                                    pdf: batchLoadedPdfChi
+                                  },
+                                  answer_en: {
+                                    file: batchAnsPdfFile,
+                                    pdf: batchLoadedAnsPdf
+                                  },
+                                  answer_zh: {
+                                    file: batchAnsPdfFileChi,
+                                    pdf: batchLoadedAnsPdfChi
+                                  }
+                                }}
+                                disabled={
+                                  isLoading ||
+                                  archiveSaving ||
+                                  Boolean(impersonatedEmail) ||
+                                  Boolean(user?.isImpersonating)
                                 }
-                              });
-                            }}
-                          />
+                                onChange={setBatchForm}
+                                onBusyChange={setPoeBusy}
+                              />
+                            ) : (
+                              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+                                To use AI to fill a missing language version,
+                                open the English Version or Chinese Version tab.
+                                The missing-language importer preserves the
+                                other language and existing question IDs.
+                              </div>
+                            )
+                          ) : (
+                            <PoeImportPanel
+                              mode="batch"
+                              entries={[
+                                {
+                                  role: 'question_en',
+                                  label: 'English main question PDF',
+                                  file: batchPdfFile
+                                },
+                                {
+                                  role: 'question_zh',
+                                  label: 'Chinese main question PDF',
+                                  file: batchPdfFileChi
+                                },
+                                {
+                                  role: 'answer_en',
+                                  label: 'English answer PDF',
+                                  file: batchAnsPdfFile
+                                },
+                                {
+                                  role: 'answer_zh',
+                                  label: 'Chinese answer PDF',
+                                  file: batchAnsPdfFileChi
+                                }
+                              ]}
+                              disabled={
+                                isLoading ||
+                                archiveSaving ||
+                                batchForm.questions.some(
+                                  q => typeof q.id === 'string' && q.id.length > 10
+                                )
+                              }
+                              onBusyChange={setPoeBusy}
+                              onInvalidate={() => setBatchAIDraft(null)}
+                              onDraft={draft => {
+                                setBatchAIDraft({
+                                  text: draft.text,
+                                  mainFiles: {
+                                    question_en: batchPdfFile,
+                                    question_zh: batchPdfFileChi,
+                                    answer_en: batchAnsPdfFile,
+                                    answer_zh: batchAnsPdfFileChi
+                                  }
+                                });
+                              }}
+                            />
+                          )}
 
                           {batchAIDraft && (
                             <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3 text-xs text-indigo-900 space-y-2">
@@ -10460,13 +10745,25 @@ The supplied documents follow.`;
                         <form id="sample-form" onSubmit={handleSampleSubmit} className="space-y-6">
                           {sampleTab === 'dse' && (
                             <StudentSampleAIImport
-                              key={selectedSampleFile ? `${selectedSampleFile.name}-${selectedSampleFile.lastModified}` : 'no-sample-pdf'}
+                              key={`${editingId || 'new'}:${selectedSampleFile
+                                  ? `${selectedSampleFile.name}-${selectedSampleFile.lastModified}`
+                                  : 'no-sample-pdf'
+                                }`}
                               file={selectedSampleFile}
                               pdf={loadedPdfDoc}
-                              disabled={isLoading || Boolean(editingId)}
+                              editing={Boolean(editingId)}
+                              disabled={isLoading || archiveSaving}
                               onBusyChange={setPoeBusy}
                               onImport={(draft) => {
-                                setSampleForm(prev => ({ ...prev, ...draft }));
+                                setSampleForm(previous => ({
+                                  ...previous,
+                                  ...draft,
+
+                                  // Local-only marker:
+                                  // this replacement belongs to this exact saved sample.
+                                  aiReplacementFor: editingId || ''
+                                }));
+
                                 setSampleTab('dse');
                               }}
                             />
@@ -10586,9 +10883,12 @@ The supplied documents follow.`;
                                     </label>
                                     <div className="relative">
                                       <input
-                                        type="file" accept=".pdf" required={!editingId && !selectedSampleFile}
+                                        type="file"
+                                        accept=".pdf"
+                                        required={!editingId && !selectedSampleFile}
+                                        disabled={isLoading || poeBusy || archiveSaving}
                                         onChange={handleSampleFileChange}
-                                        className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+                                        className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 disabled:opacity-40"
                                       />
                                       {selectedSampleFile && <div className="text-xs text-indigo-600 mt-2 font-bold">{t("Selected:")} {selectedSampleFile.name}</div>}
                                       {pendingToolFile && (

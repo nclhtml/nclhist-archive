@@ -149,13 +149,41 @@ function SkillsModal({ title, onClose, children, reader = false }) {
 
 function SkillsReader({ session, api, language, onClose }) {
     const zh = language === 'zh';
-    const [page, setPage] = useState(1);
+// Open the first listed chapter directly instead of loading
+    // the PDF contents page first.
+    const [page, setPage] = useState(
+        () => session.entries?.[0]?.page || 1
+    );
     const [zoom, setZoom] = useState(100);
     const [image, setImage] = useState('');
     const [busy, setBusy] = useState(true);
     const [error, setError] = useState('');
     const [retry, setRetry] = useState(0);
     const [expired, setExpired] = useState(false);
+
+    // Keep at most eight already-requested pages in this reader.
+    // No prefetching, persistent storage, or cross-user cache.
+    const pageCacheRef = useRef(new Map());
+
+    useEffect(() => {
+        return () => {
+            for (const url of pageCacheRef.current.values()) {
+                URL.revokeObjectURL(url);
+            }
+
+            pageCacheRef.current.clear();
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!expired) return;
+
+        for (const url of pageCacheRef.current.values()) {
+            URL.revokeObjectURL(url);
+        }
+
+        pageCacheRef.current.clear();
+    }, [expired]);
 
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -166,15 +194,28 @@ function SkillsReader({ session, api, language, onClose }) {
         return () => clearTimeout(timer);
     }, [session.expiresAt]);
 
-    useEffect(() => {
+ useEffect(() => {
         if (expired) return undefined;
 
         let active = true;
-        let objectUrl = '';
         const controller = new AbortController();
+        const cache = pageCacheRef.current;
+        const cachedUrl = cache.get(page);
+
+        setError('');
+
+        if (cachedUrl) {
+            // Move this page to the end: most recently used.
+            cache.delete(page);
+            cache.set(page, cachedUrl);
+
+            setImage(cachedUrl);
+            setBusy(false);
+
+            return undefined;
+        }
 
         setBusy(true);
-        setError('');
         setImage('');
 
         api(
@@ -183,7 +224,19 @@ function SkillsReader({ session, api, language, onClose }) {
         )
             .then(blob => {
                 if (!active) return;
-                objectUrl = URL.createObjectURL(blob);
+
+                const objectUrl = URL.createObjectURL(blob);
+                cache.set(page, objectUrl);
+
+                // Bound memory use on phones and tablets.
+                while (cache.size > 8) {
+                    const oldestPage = cache.keys().next().value;
+                    const oldestUrl = cache.get(oldestPage);
+
+                    cache.delete(oldestPage);
+                    URL.revokeObjectURL(oldestUrl);
+                }
+
                 setImage(objectUrl);
             })
             .catch(problem => {
@@ -198,7 +251,6 @@ function SkillsReader({ session, api, language, onClose }) {
         return () => {
             active = false;
             controller.abort();
-            if (objectUrl) URL.revokeObjectURL(objectUrl);
         };
     }, [api, session.id, page, retry, expired]);
 
@@ -283,26 +335,89 @@ function SkillsReader({ session, api, language, onClose }) {
                 </span>
             </div>
 
-            {(session.entries?.length > 0 || session.warnings?.length > 0) && (
+{session.entries?.length > 0 && (
+                <div className="shrink-0 border-b border-indigo-200 bg-indigo-50 p-2">
+                    <label className="flex flex-col gap-1 text-xs font-bold text-indigo-950 sm:flex-row sm:items-center sm:gap-3">
+                        <span className="shrink-0">
+                            {zh ? '目錄 — 直接跳至章節' : 'Catalogue — jump directly to a chapter'}
+                        </span>
+
+                        <select
+                            value=""
+                            disabled={expired}
+                            onChange={event => {
+                                if (event.target.value === '') return;
+
+                                const entry = session.entries[
+                                    Number(event.target.value)
+                                ];
+
+                                if (
+                                    entry &&
+                                    Number.isInteger(entry.page) &&
+                                    entry.page >= 1 &&
+                                    entry.page <= session.pageCount
+                                ) {
+                                    setPage(entry.page);
+                                }
+                            }}
+                            className="min-h-[44px] w-full min-w-0 rounded-lg border border-indigo-300 bg-white p-2 text-sm font-normal text-slate-900"
+                            aria-label={zh ? '選擇技巧章節' : 'Choose a skills chapter'}
+                        >
+                            <option value="">
+                                {zh ? '選擇章節…' : 'Choose a chapter…'}
+                            </option>
+
+                            {session.entries.map((entry, index) => (
+                                <option key={index} value={index}>
+                                    {entry.question
+                                        ? `${entry.question} — `
+                                        : ''}
+                                    {entry.title}
+                                    {' '}({zh ? '頁' : 'p.'} {entry.page})
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+
+                    <details className="mt-2 text-xs">
+                        <summary className="cursor-pointer font-bold text-indigo-900">
+                            {zh ? '顯示完整目錄' : 'Show the complete catalogue'}
+                        </summary>
+
+                        <div className="mt-2 max-h-48 space-y-1 overflow-auto rounded-lg bg-white p-2">
+                            {session.entries.map((entry, index) => (
+                                <button
+                                    key={index}
+                                    type="button"
+                                    disabled={expired}
+                                    onClick={() => setPage(entry.page)}
+                                    className={`block w-full rounded px-2 py-2 text-left disabled:opacity-40 ${
+                                        page === entry.page
+                                            ? 'bg-indigo-100 font-bold text-indigo-950'
+                                            : 'text-blue-800 hover:bg-slate-100'
+                                    }`}
+                                >
+                                    {entry.question
+                                        ? `${entry.question} — `
+                                        : ''}
+                                    {entry.title}
+                                    {' '}({zh ? '頁' : 'p.'} {entry.page})
+                                </button>
+                            ))}
+                        </div>
+                    </details>
+                </div>
+            )}
+
+            {session.warnings?.length > 0 && (
                 <details className="shrink-0 border-b border-amber-200 bg-amber-50 p-2 text-sm">
                     <summary className="cursor-pointer font-bold text-amber-900">
-                        {zh ? '題目與技巧目錄 / 未連結項目' : 'Question skills / Unlinked items'}
+                        {zh ? '未連結項目 / 注意事項' : 'Unlinked items / Warnings'}
                     </summary>
 
-                    <div className="max-h-40 space-y-2 overflow-auto p-2">
-                        {session.entries?.map((entry, index) => (
-                            <button
-                                key={index}
-                                type="button"
-                                onClick={() => setPage(entry.page)}
-                                className="block text-left text-sm text-blue-800 underline"
-                            >
-                                {entry.question} — {entry.title}
-                                {' '}({zh ? '頁' : 'p.'} {entry.page})
-                            </button>
-                        ))}
-
-                        {session.warnings?.map((warning, index) => (
+                    <div className="max-h-32 space-y-2 overflow-auto p-2">
+                        {session.warnings.map((warning, index) => (
                             <p key={index} className="text-xs text-amber-900">
                                 {warning}
                             </p>

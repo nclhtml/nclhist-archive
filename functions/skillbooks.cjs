@@ -15,6 +15,112 @@ const MAX_BYTES = 30 * 1024 * 1024;
 const MAX_PAGES = 200;
 const SESSION_MS = 30 * 60 * 1000;
 
+// Catalogue numbers supplied by the administrator.
+//
+// These offsets convert the contents-page numbers to physical PDF pages.
+// Leave them at 0 when printed page 3 is also PDF page 3.
+// The English and Chinese books are independent.
+const BOOK_CONTENTS_PAGE_OFFSETS = {
+  dbq: { en: 0, zh: 0 },
+  essay: { en: 0, zh: 0 }
+};
+
+function bookContents(kind, language, pageCount) {
+  // Each DBQ row:
+  // English title, Chinese title, English page, Chinese page.
+  const dbq = [
+    ["The Expectation of HKEAA", "解構考評局期望", 3, 3],
+    ["Flow of doing DBQs", "DBQ 作答流程", 4, 4],
+    ["Interpreting Sources", "各種資料的詮釋", 4, 4],
+    ["Sources: Textual Source", "資料詮釋：文字資料", 4, 4],
+    ["Sources: Cartoon", "資料詮釋：漫畫", 6, 6],
+    ["Sources: Table", "資料詮釋：表格", 8, 8],
+    ["Sources: Table of historical facts", "資料詮釋：史實列表", 9, 9],
+    ["About (a) (b) short questions", "(a) (b)問短答題基本須知", 10, 10],
+    ["2 Answer formats of DBQ short questions", "DBQ 兩大短答入題法", 12, 12],
+    ["Short: Attitude", "短答：態度", 13, 13],
+    ["Short: View", "短答：看法", 14, 14],
+    ["Short: Purpose/Main message", "短答：目的/主要信息", 15, 15],
+    ["Short: Language and Argument", "短答：用語及論據", 16, 16],
+    ["Short: Role", "短答：角色", 16, 16],
+    ["Short: Characteristics/Features", "短答：特徵", 17, 17],
+    ["Short: Efforts", "短答：努力", 17, 17],
+    ["Short: To what extent — two-sided arguments", "短答：在甚麼程度（兩面立論）", 18, 18],
+    ["Short: Usefulness and Limitation", "短答：用處與局限", 18, 18],
+    ["Short: Data description", "短答：數據描述", 19, 19],
+    ["Short: Fair and Bias", "短答：公允與偏見", 20, 20],
+    ["Short: Turning point and change", "短答：轉捩點及轉變", 20, 21],
+    ["Short: Suggest a caption", "短答：建議一個標題", 21, 21],
+    ["Short: If", "短答：假設", 21, 20],
+    ["Short: Compare sources", "短答：比較看法", 22, 22],
+    ["About (c) Long Questions", "長答題基本須知", 23, 23],
+    ["Long: Plain discuss", "長答：直述題", 25, 25],
+    ["Long: Single-factor Relative Importance", "長答：單項相對重要性", 26, 26],
+    ["Constructing Rebuttals", "構建駁論", 27, 27],
+    ["Long: Two-sided arguments", "長答：兩面立論", 29, 29],
+    ["Long: Rather Than", "長答：而非", 30, 30],
+    ["Long: Normal Stance", "長答：立場題", 32, 32],
+    ["Long: Usefulness and Limitation", "長答：用處及局限", 33, 33],
+    ["Long: Change/Transformation", "長答：轉變、蛻變", 34, 34],
+    ["Long: Progressive", "長答：漸進題", 35, 35],
+    ["Long: Fair and Bias", "長答：公允與偏見", 36, 36],
+    ["Long: Dual Question", "長答：雙問題", 37, 37],
+    ["Long: If conditional", "長答：假設", 38, 38],
+    ["Long: Compare sources", "長答：比較看法", 39, 39]
+  ];
+
+  const essayEnglish = [
+    ["About Essay Questions", 2],
+    ["Strategies for Question Selection", 2],
+    ["Essay General Marking Criteria", 3],
+    ["Strategies for Responding to Questions", 4],
+    ["Structure of Core Paragraphs", 6],
+    ["Explanatory Questions — A. No stance", 8],
+    ["Explanatory Questions — B. Stance", 9],
+    ["Trace and Explain", 10],
+    ["Relative Importance — Introduction", 11],
+    ["Relative Importance — A. Single-factor", 12],
+    ["Relative Importance — B. Dual-factors", 14],
+    ["Compare — A. Plain: Similarity and Difference", 15],
+    ["Compare — B. More than", 16],
+    ["Turning point", 17],
+    ["Continuity/Change within period", 18],
+    ["Dual Question", 20],
+    ["Rather Than", 22]
+  ];
+
+  let entries = [];
+
+  if (kind === "dbq") {
+    entries = dbq.map(([titleEn, titleZh, pageEn, pageZh]) => ({
+      question: "",
+      title: language === "zh" ? titleZh : titleEn,
+      page: language === "zh" ? pageZh : pageEn
+    }));
+  } else if (kind === "essay" && language === "en") {
+    entries = essayEnglish.map(([title, page]) => ({
+      question: "",
+      title,
+      page
+    }));
+  }
+
+  // Chinese essay catalogue intentionally remains empty.
+  const offset = BOOK_CONTENTS_PAGE_OFFSETS[kind]?.[language] || 0;
+
+  return entries
+    .map(entry => ({
+      ...entry,
+      page: entry.page + offset
+    }))
+    .filter(entry =>
+      Number.isSafeInteger(entry.page) &&
+      entry.page >= 1 &&
+      entry.page <= pageCount
+    )
+    .sort((left, right) => left.page - right.page);
+}
+
 const firestore = admin.firestore();
 const bucket = admin.storage().bucket(BUCKET_NAME);
 const configRef = firestore.doc("skillbook_private/config");
@@ -1010,13 +1116,14 @@ async function processAction(account, body) {
       );
     }
 
-    if (body.mode === "book") {
+if (body.mode === "book") {
       return createSession(account, {
         asset,
         pages: Array.from(
           { length: asset.pageCount },
           (_, index) => index + 1
         ),
+        entries: bookContents(kind, language, asset.pageCount),
         title: language === "zh"
           ? kind === "dbq" ? "DBQ 答題技巧" : "論述題答題技巧"
           : kind === "dbq" ? "DBQ Skills Book" : "Essay Skills Book",

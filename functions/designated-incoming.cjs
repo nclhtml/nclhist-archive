@@ -338,8 +338,9 @@ exports.designatedIncoming = functions
                     });
                 });
 
-                const records = [];
+const records = [];
                 const validSlots = new Set();
+                const routingNotices = [];
 
                 const ordered = [...assessments.values()].sort((a, b) =>
                     (Number(a.order) || 0) - (Number(b.order) || 0) ||
@@ -382,8 +383,21 @@ exports.designatedIncoming = functions
                                 state.closed[value] !== true
                             );
 
-                            // All matching categories stopped: do not import.
-                            if (!bucket) return;
+// Report why a newly discovered assessment
+                            // could not be routed into the visible list.
+                            if (!bucket) {
+                                routingNotices.push({
+                                    assessmentId: item.id,
+                                    className,
+                                    name: item.name || "Unnamed assessment",
+                                    term: actualTerm,
+                                    reason: eligible.length
+                                        ? "All categories matching this class term are stopped."
+                                        : `Its term "${actualTerm}" does not match any configured category term for this class.`
+                                });
+
+                                return;
+                            }
 
                             const highest = Math.max(
                                 0,
@@ -1085,10 +1099,12 @@ groupRevision: commonChanged || adoption || detachment
                         name,
                         state.languages[name] || defaultLanguage(name)
                     ])),
-                    classes: names,
+classes: names,
                     records,
                     boundCopies,
-                    common
+                    common,
+                    routingNotices,
+                    loadedAt: new Date().toISOString()
                 };
             });
         } catch (error) {

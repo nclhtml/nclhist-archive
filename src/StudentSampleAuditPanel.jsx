@@ -1,5 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { collection, getDocsFromServer } from 'firebase/firestore';
+import {
+  collection,
+  getDocsFromServer,
+  doc,
+  getDocFromServer
+} from 'firebase/firestore';
 import { auth, db } from './firebase.js';
 
 const OWNER_EMAIL = 'clng@ktls.edu.hk';
@@ -411,6 +416,7 @@ function auditSample(sample, archives, expectedEssays) {
 
 export default function StudentSampleAuditPanel({
   allowed,
+  active = true,
   disabled = false,
   onEdit
 }) {
@@ -418,21 +424,112 @@ export default function StudentSampleAuditPanel({
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState(null);
   const [error, setError] = useState('');
+  const [selectedYear, setSelectedYear] = useState('all');
+  const [yearOrder, setYearOrder] = useState('asc');
+  const [reviewedIds, setReviewedIds] = useState({});
+  const [editingSampleId, setEditingSampleId] = useState('');
 
   const mounted = useRef(false);
   const running = useRef(false);
+  const listRef = useRef(null);
+  const scrollTopRef = useRef(0);
   const latestAllowed = useRef(allowed);
   latestAllowed.current = allowed;
 
   useEffect(() => {
     mounted.current = true;
+
     return () => {
       mounted.current = false;
     };
   }, []);
 
+  useEffect(() => {
+    if (allowed) return;
+
+    // Do not retain a superadmin report across a permission change.
+    setReport(null);
+    setError('');
+    setReviewedIds({});
+    setSelectedYear('all');
+    scrollTopRef.current = 0;
+  }, [allowed]);
+
+  React.useLayoutEffect(() => {
+    if (!active || !report) return;
+
+    const frame = requestAnimationFrame(() => {
+      if (listRef.current) {
+        listRef.current.scrollTop = scrollTopRef.current;
+      }
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [active, report]);
+
+  const yearOf = sample =>
+    String(sample.year ?? '').trim() || 'Unknown year';
+
+  const compareYears = (left, right) => {
+    const leftNumeric = /^\d{4}$/.test(left);
+    const rightNumeric = /^\d{4}$/.test(right);
+
+    if (leftNumeric && rightNumeric) {
+      return yearOrder === 'asc'
+        ? Number(left) - Number(right)
+        : Number(right) - Number(left);
+    }
+
+    // Keep unknown/non-year groups after actual years.
+    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
+
+    return left.localeCompare(right, undefined, { numeric: true });
+  };
+
+  const flagged = report?.flagged || [];
+
+  const years = [...new Set([
+    ...flagged.map(result => yearOf(result.sample)),
+    ...(selectedYear !== 'all' ? [selectedYear] : [])
+  ])].sort(compareYears);
+
+  const visibleFlagged = flagged
+    .filter(result =>
+      selectedYear === 'all' ||
+      yearOf(result.sample) === selectedYear
+    )
+    .sort((left, right) =>
+      compareYears(yearOf(left.sample), yearOf(right.sample)) ||
+      String(left.sample.language || '').localeCompare(
+        String(right.sample.language || '')
+      ) ||
+      String(left.sample.overallGrade || '').localeCompare(
+        String(right.sample.overallGrade || ''),
+        undefined,
+        { numeric: true }
+      ) ||
+      left.sample.id.localeCompare(right.sample.id)
+    );
+
+  const reviewedCount = visibleFlagged.filter(
+    result => reviewedIds[result.sample.id]
+  ).length;
+
+  const resetListPosition = () => {
+    scrollTopRef.current = 0;
+
+    if (listRef.current) {
+      listRef.current.scrollTop = 0;
+    }
+  };
+
   const runCheck = async () => {
-    if (!allowed || disabled || running.current) return;
+    if (
+      !allowed ||
+      disabled ||
+      running.current ||
+      editingSampleId
+    ) return;
 
     const actualUser = auth.currentUser;
 
@@ -444,9 +541,15 @@ export default function StudentSampleAuditPanel({
       return;
     }
 
+    if (listRef.current) {
+      scrollTopRef.current = listRef.current.scrollTop;
+    }
+
     running.current = true;
     setBusy(true);
-    setReport(null);
+
+    // Keep the previous report visible while refreshing.
+    // Clearing it would remove the list and lose its position.
     setError('');
 
     try {
@@ -478,6 +581,7 @@ export default function StudentSampleAuditPanel({
 
       setReport({
         checkedAt: new Date().toLocaleString(),
+        expectedEssays,
         sampleCount: samples.length,
         checkedQuestions: results.reduce(
           (sum, result) => sum + result.checkedQuestions, 0
@@ -491,7 +595,7 @@ export default function StudentSampleAuditPanel({
         flagged: results.filter(result => result.issues.length > 0)
       });
     } catch (failure) {
-      if (mounted.current) {
+      if (mounted.current && latestAllowed.current) {
         setError(
           'The scan did not complete. No records were changed. ' +
           (failure.message || 'Could not read the database.')
@@ -503,7 +607,68 @@ export default function StudentSampleAuditPanel({
     }
   };
 
+  const editLatestSample = async sampleId => {
+    if (
+      !allowed ||
+      disabled ||
+      busy ||
+      editingSampleId
+    ) return;
+
+    const actualUser = auth.currentUser;
+
+    if (
+      !actualUser?.emailVerified ||
+      normalizeText(actualUser.email) !== OWNER_EMAIL
+    ) {
+      setError('Use the real verified superadmin account.');
+      return;
+    }
+
+    if (listRef.current) {
+      scrollTopRef.current = listRef.current.scrollTop;
+    }
+
+    setEditingSampleId(sampleId);
+    setError('');
+
+    try {
+      // The retained report is a snapshot. Always edit fresh data,
+      // never restore old marks from the retained report.
+      const snapshot = await getDocFromServer(
+        doc(db, 'student_samples', sampleId)
+      );
+
+      if (
+        !mounted.current ||
+        !latestAllowed.current ||
+        auth.currentUser?.uid !== actualUser.uid
+      ) return;
+
+      if (!snapshot.exists()) {
+        throw new Error(
+          'This sample was already deleted. Its old warning remains in ' +
+          'the retained report so your place is not lost. Mark it reviewed ' +
+          'and continue, or click Refresh review results.'
+        );
+      }
+
+      onEdit({
+        ...snapshot.data(),
+        id: snapshot.id
+      });
+    } catch (failure) {
+      if (mounted.current && latestAllowed.current) {
+        setError(failure.message || 'Could not open this sample.');
+      }
+    } finally {
+      if (mounted.current) setEditingSampleId('');
+    }
+  };
+
   if (!allowed) return null;
+
+  const controlsDisabled = busy || disabled || Boolean(editingSampleId);
 
   return (
     <section className="mb-5 rounded-xl border border-amber-300 bg-amber-50 p-4 space-y-3">
@@ -512,8 +677,9 @@ export default function StudentSampleAuditPanel({
       </h3>
 
       <p className="text-xs text-amber-900">
-        Read-only database check. No Poe request, PDF inspection, automatic
-        correction or email. Warnings identify records to review, not proven errors.
+        Read-only database check. No Poe request, PDF inspection,
+        automatic correction or email. Warnings identify records
+        to review, not proven errors.
       </p>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -521,10 +687,9 @@ export default function StudentSampleAuditPanel({
           Flag more than this many positively scored essays per candidate/year:
           <select
             value={expectedEssays}
-            disabled={busy || disabled}
+            disabled={controlsDisabled}
             onChange={event => {
               setExpectedEssays(Number(event.target.value));
-              setReport(null);
             }}
             className="ml-2 rounded border border-amber-300 bg-white p-2"
           >
@@ -536,85 +701,219 @@ export default function StudentSampleAuditPanel({
 
         <button
           type="button"
-          disabled={busy || disabled}
+          disabled={controlsDisabled}
           onClick={runCheck}
           className="rounded-lg bg-amber-700 px-4 py-2 text-xs font-bold text-white disabled:opacity-50"
         >
-          {busy ? 'Checking saved records…' : 'Check sample marks'}
+          {busy
+            ? 'Checking saved records…'
+            : report
+              ? 'Refresh review results'
+              : 'Check sample marks'}
         </button>
       </div>
 
       <p className="text-xs text-slate-600">
-        Zero-only essays are excluded; blanks remain unknown. Fewer than the
-        selected number is not flagged because a saved sample may be partial.
-        Multiple marker columns do not count as multiple essays.
+        Zero-only essays are excluded; blanks remain unknown. Fewer than
+        the selected number is not flagged because a saved sample may
+        be partial. Multiple marker columns do not count as multiple essays.
       </p>
 
       {error && (
-        <p role="alert" className="text-xs text-red-800 whitespace-pre-wrap">
+        <p
+          role="alert"
+          className="whitespace-pre-wrap rounded-lg border border-red-200 bg-white p-3 text-xs text-red-800"
+        >
           {error}
         </p>
       )}
 
       {report && (
         <div className="space-y-3">
-          <div role="status" className="text-xs text-slate-800 space-y-1">
+          <div role="status" className="space-y-1 text-xs text-slate-800">
             <p>
               Checked {report.sampleCount} sample documents and{' '}
               {report.checkedQuestions} recognized DSE score records.
-              {' '}Flagged samples: <strong>{report.flagged.length}</strong>.
+              {' '}Flagged samples: <strong>{flagged.length}</strong>.
             </p>
-            <p>Snapshot taken: {report.checkedAt}. Rerun after editing.</p>
+
+            <p>
+              Snapshot: {report.checkedAt}.
+              {' '}Essay threshold used: {report.expectedEssays}.
+            </p>
+
+            {report.expectedEssays !== expectedEssays && (
+              <p className="font-bold text-amber-900">
+                The selected threshold changed. Click Refresh review
+                results to apply it.
+              </p>
+            )}
+
             <p>
               DBQs without an unambiguous exact-title question-bank match:
-              {' '}{report.unmatchedDbqs}. Their allocation-limit checks were skipped.
+              {' '}{report.unmatchedDbqs}. Allocation-limit checks were skipped
+              for those DBQs.
             </p>
+
             <p>
               Custom/unrecognized tags skipped: {report.skippedTags}.
-              Nested DBQ parts are not included in the final-component
-              ordering heuristic.
+              Nested DBQ parts are excluded from the final-component heuristic.
             </p>
           </div>
 
-          {report.flagged.length === 0 ? (
+          <div className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-200 bg-white p-3">
+            <label className="text-xs font-bold text-slate-700">
+              Review year
+              <select
+                value={selectedYear}
+                disabled={controlsDisabled}
+                onChange={event => {
+                  setSelectedYear(event.target.value);
+                  resetListPosition();
+                }}
+                className="ml-2 rounded border border-slate-300 bg-white p-2"
+              >
+                <option value="all">All years</option>
+
+                {years.map(year => (
+                  <option key={year} value={year}>
+                    {year}
+                    {' '}({flagged.filter(
+                      result => yearOf(result.sample) === year
+                    ).length})
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="text-xs font-bold text-slate-700">
+              Year order
+              <select
+                value={yearOrder}
+                disabled={controlsDisabled}
+                onChange={event => {
+                  setYearOrder(event.target.value);
+                  resetListPosition();
+                }}
+                className="ml-2 rounded border border-slate-300 bg-white p-2"
+              >
+                <option value="asc">Oldest first</option>
+                <option value="desc">Newest first</option>
+              </select>
+            </label>
+
+            <span className="text-xs font-bold text-emerald-800">
+              Reviewed in this selection: {reviewedCount} / {visibleFlagged.length}
+            </span>
+          </div>
+
+          <p className="text-xs text-slate-600">
+            Year selection, order, reviewed checkboxes and position stay
+            while you close this window to edit, delete or upload samples.
+            Reviewed means you checked it; it does not automatically mean
+            the warning was corrected. Refresh results after your changes
+            to check the current database.
+          </p>
+
+          {flagged.length === 0 ? (
             <p className="rounded-lg bg-white p-3 text-xs text-green-800">
               No warnings from these checks. This does not verify the PDFs,
-              page ranges or completeness of the extraction.
+              page ranges or extraction completeness.
+            </p>
+          ) : visibleFlagged.length === 0 ? (
+            <p className="rounded-lg bg-white p-3 text-xs text-green-800">
+              No current warnings for the selected year.
+              Your year selection has been retained.
             </p>
           ) : (
-            <div className="max-h-80 overflow-y-auto space-y-3">
-              {report.flagged.map(({ sample, issues }) => (
-                <div
-                  key={sample.id}
-                  className="rounded-lg border border-amber-200 bg-white p-3 space-y-2"
-                >
-                  <div className="text-xs font-bold text-slate-800">
-                    {String(sample.year ?? '')} — {String(sample.language ?? '')}
-                    {' '}— Grade {String(sample.overallGrade ?? '')}
-                  </div>
+            <div
+              ref={listRef}
+              onScroll={event => {
+                if (
+                  active &&
+                  !busy &&
+                  event.currentTarget.clientHeight > 0
+                ) {
+                  scrollTopRef.current = event.currentTarget.scrollTop;
+                }
+              }}
+              className="max-h-[55vh] overflow-y-auto space-y-3 pr-1"
+            >
+              {visibleFlagged.map(({ sample, issues }, index) => {
+                const year = yearOf(sample);
+                const showYear =
+                  index === 0 ||
+                  yearOf(visibleFlagged[index - 1].sample) !== year;
 
-                  <div className="text-xs text-slate-500 break-all">
-                    Sample ID: {sample.id}
-                  </div>
+                const reviewed = Boolean(reviewedIds[sample.id]);
 
-                  <ul className="list-disc pl-5 space-y-2 text-xs text-slate-700">
-                    {issues.map((issue, index) => (
-                      <li key={index}>
-                        <strong>{issue.tag}:</strong> {issue.reason}
-                      </li>
-                    ))}
-                  </ul>
+                return (
+                  <React.Fragment key={sample.id}>
+                    {showYear && (
+                      <h4 className="sticky top-0 z-10 rounded-lg border border-amber-300 bg-amber-100 p-3 text-sm font-bold text-amber-950">
+                        {year}
+                        {' '}— {visibleFlagged.filter(
+                          result => yearOf(result.sample) === year
+                        ).length} flagged sample(s)
+                      </h4>
+                    )}
 
-                  <button
-                    type="button"
-                    disabled={busy || disabled}
-                    onClick={() => onEdit(sample)}
-                    className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-800 disabled:opacity-50"
-                  >
-                    Edit this sample
-                  </button>
-                </div>
-              ))}
+                    <div
+                      className={`space-y-2 rounded-lg border p-3 ${
+                        reviewed
+                          ? 'border-emerald-300 bg-emerald-50'
+                          : 'border-amber-200 bg-white'
+                      }`}
+                    >
+                      <div className="text-xs font-bold text-slate-800">
+                        {year} — {String(sample.language ?? '')}
+                        {' '}— Grade {String(sample.overallGrade ?? '')}
+                      </div>
+
+                      <div className="break-all text-xs text-slate-500">
+                        Sample ID: {sample.id}
+                      </div>
+
+                      <ul className="list-disc space-y-2 pl-5 text-xs text-slate-700">
+                        {issues.map((issue, issueIndex) => (
+                          <li key={issueIndex}>
+                            <strong>{issue.tag}:</strong> {issue.reason}
+                          </li>
+                        ))}
+                      </ul>
+
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <button
+                          type="button"
+                          disabled={controlsDisabled}
+                          onClick={() => editLatestSample(sample.id)}
+                          className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-800 disabled:opacity-50"
+                        >
+                          {editingSampleId === sample.id
+                            ? 'Loading latest saved sample…'
+                            : 'Edit this sample'}
+                        </button>
+
+                        <label className="flex items-center gap-2 text-xs font-bold text-emerald-900">
+                          <input
+                            type="checkbox"
+                            checked={reviewed}
+                            onChange={event => {
+                              const checked = event.target.checked;
+
+                              setReviewedIds(previous => ({
+                                ...previous,
+                                [sample.id]: checked
+                              }));
+                            }}
+                          />
+                          Reviewed this session
+                        </label>
+                      </div>
+                    </div>
+                  </React.Fragment>
+                );
+              })}
             </div>
           )}
         </div>

@@ -91,6 +91,8 @@ function sortedRecords(values) {
 export function DesignatedIncomingProvider({
   data,
   archives,
+  archiveLoading = false,
+  archiveError = '',
   onCommonChanged,
   children
 }) {
@@ -190,9 +192,13 @@ export function DesignatedIncomingProvider({
     data?.config || null
   ]);
 
+// Only changing account/level closes the linker.
+  // Reloading data for this same level must not discard its draft.
   useEffect(() => {
     setTarget(null);
+  }, [identity]);
 
+  useEffect(() => {
     let cancelled = false;
     let timer;
 
@@ -215,18 +221,90 @@ export function DesignatedIncomingProvider({
     };
   }, [sourceSignature, perform]);
 
+const reportRefresh = result => {
+    if (!result) return;
+
+    const ordinary = result.records?.length || 0;
+    const attached = result.boundCopies?.length || 0;
+    const notices = result.routingNotices || [];
+
+    setMessage(
+      `Class assessments reloaded from the server.\n` +
+      `Class-specific placements: ${ordinary}\n` +
+      `Common-item class copies: ${attached}\n` +
+      `Loaded at: ${result.loadedAt || 'current request'}` +
+      (notices.length
+        ? '\n\nNot placed in this list:\n' +
+          notices.slice(0, 12).map(notice =>
+            `${notice.className.replace(/\u200B/g, '')} — ` +
+            `${notice.name}: ${notice.reason}`
+          ).join('\n') +
+          (notices.length > 12
+            ? `\n…and ${notices.length - 12} more.`
+            : '')
+        : '')
+    );
+  };
+
   const refresh = async () => {
     if (lock.current) return;
 
     const result = await perform('load');
+    reportRefresh(result);
 
-    if (result) {
-      setMessage('Class assessments refreshed.');
-      window.dispatchEvent(
-        new Event('designated-refresh-archives')
-      );
-    }
+    window.dispatchEvent(
+      new Event('designated-refresh-archives')
+    );
   };
+
+  // The page-level Reload list button must reload this provider too.
+  // A common-list load by itself may not change its revision, so the
+  // sourceSignature effect alone is insufficient.
+  useEffect(() => {
+    let cancelled = false;
+    let timer;
+
+    const refreshWhenIdle = () => {
+      if (cancelled) return;
+
+      if (lock.current) {
+        timer = window.setTimeout(refreshWhenIdle, 150);
+        return;
+      }
+
+      void perform('load').then(result => {
+        if (!cancelled && result) {
+          const notices = result.routingNotices || [];
+
+          setMessage(
+            `Class assessments reloaded. ` +
+            `${result.records?.length || 0} class-specific placement(s), ` +
+            `${result.boundCopies?.length || 0} common-item copy/copies.` +
+            (notices.length
+              ? '\n\nNot placed:\n' +
+                notices.slice(0, 12).map(notice =>
+                  `${notice.className.replace(/\u200B/g, '')} — ` +
+                  `${notice.name}: ${notice.reason}`
+                ).join('\n')
+              : '')
+          );
+        }
+      });
+    };
+
+    const listener = () => {
+      window.clearTimeout(timer);
+      refreshWhenIdle();
+    };
+
+    window.addEventListener('designated-refresh-incoming', listener);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      window.removeEventListener('designated-refresh-incoming', listener);
+    };
+  }, [perform, identity]);
 
   const downloadOne = async (url, name) => {
     if (lock.current) return;
@@ -333,31 +411,72 @@ export function DesignatedIncomingProvider({
         </aside>
       )}
 
-      {target && (
-        <DesignatedDocumentLinker
-          archives={archives}
-          loading={busy}
-          error=""
-          selectedId={target.linkedDocId}
-          onClose={() => setTarget(null)}
-          onSelect={async selection => {
-            const result = await perform('link', {
-              key: target.key,
-              expectedLink: target.linkedDocId || '',
-              ...selection
-            });
+{target && (() => {
+        const language = snapshot?.languages?.[target.className] || '';
 
-            if (result) {
-              setTarget(null);
+        // Only an actual common-item relationship is used.
+        // Do not guess a relationship from similar assessment names.
+        const otherLanguageCopies = target.commonId &&
+          ['en', 'zh'].includes(language)
+          ? (snapshot?.boundCopies || []).filter(copy => {
+              const otherLanguage =
+                snapshot.languages?.[copy.className] || '';
 
-              setMessage(
-                'Document linked to the original Marks assessment. ' +
-                'Its name, marks and settings were kept.'
+              return (
+                copy.commonId === target.commonId &&
+                copy.key !== target.key &&
+                copy.linkedDocId &&
+                ['en', 'zh'].includes(otherLanguage) &&
+                otherLanguage !== language
               );
-            }
-          }}
-        />
-      )}
+            })
+          : [];
+
+        const recommendations = [
+          ...new Map(
+            otherLanguageCopies.map(copy => [
+              copy.linkedDocId,
+              {
+                linkedDocId: copy.linkedDocId,
+                from: copy.className.replace(/\u200B/g, '')
+              }
+            ])
+          ).values()
+        ];
+
+        return (
+          <DesignatedDocumentLinker
+            archives={archives}
+            loading={busy || archiveLoading}
+            error={archiveError}
+            selectedId={target.linkedDocId}
+            recommendations={recommendations}
+            preferredLanguage={language}
+            initialTitle={target.name || ''}
+            category={target.category || 'Assignments'}
+            allowArchiveEditing={Boolean(
+              snapshot?.owner || target.uploadAllowed
+            )}
+            onClose={() => setTarget(null)}
+            onSelect={async selection => {
+              const result = await perform('link', {
+                key: target.key,
+                expectedLink: target.linkedDocId || '',
+                ...selection
+              });
+
+              if (result) {
+                setTarget(null);
+
+                setMessage(
+                  'Document linked to the original Marks assessment. ' +
+                  'Its name, marks and settings were kept.'
+                );
+              }
+            }}
+          />
+        );
+      })()}
     </Context.Provider>
   );
 }

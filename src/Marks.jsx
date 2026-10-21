@@ -26,6 +26,12 @@ import { loadLinkedAssessmentMarks } from './linkedAssessmentMarks.js';
 import LinkedMarksValue from './LinkedMarksValue.jsx';
 import useMarksTermPreference from './useMarksTermPreference.js';
 import { DesignatedDocumentLinker } from './DesignatedItemTools.jsx';
+import {
+  assessmentUsesScaling,
+  getSectionRawFullMark,
+  getAssessmentFullMark,
+  calculateAssessmentTotal
+} from './assessmentScoring.js';
 
 function getMarksAttachmentUrl(parent, isAnswer, language) {
   if (!parent) return '';
@@ -515,7 +521,8 @@ export default function Marks() {
   const [newAssessmentName, setNewAssessmentName] = useState('');
   const [newAssessmentDate, setNewAssessmentDate] = useState(new Date().toISOString().split('T')[0]);
   const [fullMark, setFullMark] = useState(100);
-  const [paperFullMark, setPaperFullMark] = useState(100);
+const [paperFullMark, setPaperFullMark] = useState(100);
+  const [scaleTotalTo100, setScaleTotalTo100] = useState(false);
   const [formTerm, setFormTerm] = useState('');
   const [linkedDocId, setLinkedDocId] = useState('');
   const [forceMultiSection, setForceMultiSection] = useState(false); // NEW: Force multi-section for any item
@@ -558,9 +565,9 @@ export default function Marks() {
   // Student View State
   const [studentView, setStudentView] = useState(false);
 
-  // Deduct & Total View State
+// Deduction column visibility.
+  // The assessment's saved setting controls raw/scaled totals.
   const [showDeduct, setShowDeduct] = useState(false);
-  const [showRawTotal, setShowRawTotal] = useState(false);
 
   // Term Score Calculator State
   const [showTermScoreModal, setShowTermScoreModal] = useState(false);
@@ -1545,8 +1552,11 @@ export default function Marks() {
     setNewAssessmentDate(new Date().toISOString().split('T')[0]);
     setFullMark(100);
     setPaperFullMark(100);
-    setLinkedDocId('');
+setLinkedDocId('');
     setForceMultiSection(categoryDefaultsToMultiSection);
+    setScaleTotalTo100(
+      ['Uniform Test', 'Exam'].includes(selectedCategory)
+    );
 
     setSectionsConfig([
       {
@@ -1587,7 +1597,10 @@ export default function Marks() {
       (selectedAssessment.designatedPending ? '' : 100)
     );
 
-    setLinkedDocId(selectedAssessment.linkedDocId || '');
+setLinkedDocId(selectedAssessment.linkedDocId || '');
+    setScaleTotalTo100(
+      assessmentUsesScaling(selectedAssessment)
+    );
 
     // Determine the form format from this item, not from another item
     // or a previously opened form.
@@ -1776,10 +1789,13 @@ export default function Marks() {
       return;
     }
 
-    let savedSections = null;
+let savedSections = null;
 
     if (useSections) {
-      if (!isPositiveNumber(paperFullMark)) {
+      if (
+        scaleTotalTo100 &&
+        !isPositiveNumber(paperFullMark)
+      ) {
         alert('The paper full mark must be a number greater than zero.');
         return;
       }
@@ -1790,15 +1806,24 @@ export default function Marks() {
       }
 
       for (const section of sectionsConfig) {
+        if (!section.name?.trim()) {
+          alert('Each section needs a name.');
+          return;
+        }
+
         if (
-          !section.name?.trim() ||
-          !isPositiveNumber(section.fullMark) ||
+          (scaleTotalTo100 || !section.hasSubSections) &&
+          !isPositiveNumber(section.fullMark)
+        ) {
+          alert('Each section needs a full mark greater than zero.');
+          return;
+        }
+
+        if (
+          scaleTotalTo100 &&
           !isNonNegativeNumber(section.weight)
         ) {
-          alert(
-            'Each section needs a name, a full mark greater than zero, ' +
-            'and a weight of zero or greater.'
-          );
+          alert('Each section weight must be zero or greater.');
           return;
         }
 
@@ -1808,7 +1833,8 @@ export default function Marks() {
           if (
             subSections.length === 0 ||
             subSections.some(sub =>
-              !sub.name?.trim() || !isPositiveNumber(sub.fullMark)
+              !sub.name?.trim() ||
+              !isPositiveNumber(sub.fullMark)
             )
           ) {
             alert(
@@ -1819,15 +1845,33 @@ export default function Marks() {
         }
       }
 
+      if (
+        scaleTotalTo100 &&
+        sectionsConfig.reduce(
+          (sum, section) => sum + Number(section.weight),
+          0
+        ) <= 0
+      ) {
+        alert(
+          'At least one section needs a positive weight when conversion to 100 is enabled.'
+        );
+        return;
+      }
+
       savedSections = sectionsConfig.map(section => ({
         ...section,
         name: section.name.trim(),
-        fullMark: Number(section.fullMark),
-        weight: Number(section.weight),
+        fullMark: scaleTotalTo100
+          ? Number(section.fullMark)
+          : getSectionRawFullMark(section),
+        // Retain weights when raw mode is selected so conversion can
+        // be enabled again later without losing the configuration.
+        weight: isNonNegativeNumber(section.weight)
+          ? Number(section.weight)
+          : 0,
         subSections: (section.subSections || []).map(sub => ({
           ...sub,
           name: (sub.name || '').trim(),
-          // Retain unused subsection settings without forcing a conversion.
           fullMark: section.hasSubSections
             ? Number(sub.fullMark)
             : sub.fullMark
@@ -1844,8 +1888,18 @@ export default function Marks() {
         term: formTerm,
         name: finalName,
         date: newAssessmentDate,
-        fullMark: useSections ? null : Number(fullMark),
-        paperFullMark: useSections ? Number(paperFullMark) : null,
+fullMark: useSections ? null : Number(fullMark),
+        paperFullMark: useSections
+          ? (
+            scaleTotalTo100
+              ? Number(paperFullMark)
+              : savedSections.reduce(
+                (sum, section) => sum + getSectionRawFullMark(section),
+                0
+              )
+          )
+          : null,
+        scaleTotalTo100: useSections ? scaleTotalTo100 : false,
         sectionsConfig: savedSections,
         linkedDocId: linkedDocId || null,
 ...(isEditingAssessment && (
@@ -2262,26 +2316,11 @@ export default function Marks() {
     return hasValidMark ? parseFloat(total.toFixed(1)) : null;
   };
 
-  const calculateScaledTotal = (studentMarks, config) => {
-    if (!studentMarks || typeof studentMarks !== 'object' || !config) return null;
-    let total = 0;
-    let hasValidMark = false;
-
-    config.forEach(sec => {
-      const secRawTotal = calculateSectionRawTotal(studentMarks, sec);
-      if (secRawTotal !== null) {
-        const secFullMark = parseFloat(sec.fullMark);
-        const weight = parseFloat(sec.weight);
-
-        if (secFullMark > 0 && !isNaN(weight)) {
-          total += (secRawTotal / secFullMark) * weight;
-          hasValidMark = true;
-        }
-      }
-    });
-
-    return hasValidMark ? parseFloat(total.toFixed(1)) : null;
-  };
+// Kept under the existing local name to minimize changes elsewhere.
+  // The whole assessment is now passed in, so its saved marking
+  // method controls whether the result is raw or converted to 100.
+  const calculateScaledTotal = (studentMarks, assessment) =>
+    calculateAssessmentTotal(studentMarks, assessment);
 
   // Calculate overall stats for all classes modal
   const allClassesStatsData = useMemo(() => {
@@ -2291,13 +2330,13 @@ export default function Marks() {
     allClassesStudents.forEach(student => {
       const studentMarks = marksData[student.id];
       const rawTotal = calculateTotal(studentMarks);
-      const scaledTotal = hasSections ? calculateScaledTotal(studentMarks, selectedAssessment.sectionsConfig) : rawTotal;
+      const scaledTotal = hasSections ? calculateScaledTotal(studentMarks, selectedAssessment) : rawTotal;
       const deduction = parseFloat(marksData[`${student.id}_deduction`]) || 0;
       if (scaledTotal !== null) {
         marks.push(scaledTotal - deduction);
       }
     });
-    const fullMark = hasSections ? 100 : (selectedAssessment.fullMark || 100);
+const fullMark = getAssessmentFullMark(selectedAssessment);
     return { marks, fullMark };
   }, [allClassesStudents, marksData, selectedAssessment, showAllClassesModal]);
 
@@ -2307,8 +2346,11 @@ export default function Marks() {
   const allScaledTotals = [];
 
   // Calculate Stats Data
-  const statsData = {
-    final: { marks: [], fullMark: selectedAssessment?.fullMark || 100 }
+const statsData = {
+    final: {
+      marks: [],
+      fullMark: getAssessmentFullMark(selectedAssessment)
+    }
   };
 
   if (selectedAssessment) {
@@ -2323,7 +2365,10 @@ export default function Marks() {
           statsData[sec.id] = { marks: [], fullMark: parseFloat(sec.fullMark) };
         }
       });
-      statsData.scaledTotal = { marks: [], fullMark: 100 };
+statsData.scaledTotal = {
+        marks: [],
+        fullMark: getAssessmentFullMark(selectedAssessment)
+      };
     } else {
       statsData.main = { marks: [], fullMark: selectedAssessment.fullMark || 100 };
     }
@@ -2334,7 +2379,7 @@ export default function Marks() {
       .map(s => {
         const studentMarks = marksData[s.id];
         const rawTotal = calculateTotal(studentMarks);
-        const scaledTotal = hasSections ? calculateScaledTotal(studentMarks, selectedAssessment.sectionsConfig) : rawTotal;
+        const scaledTotal = hasSections ? calculateScaledTotal(studentMarks, selectedAssessment) : rawTotal;
         const deduction = parseFloat(marksData[`${s.id}_deduction`]) || 0;
 
         let finalTotal = null;
@@ -2449,7 +2494,7 @@ export default function Marks() {
     const totalsList = currentClassStudents.map(student => {
       const studentMarks = marksData[student.id];
       const rawTotal = calculateTotal(studentMarks);
-      const scaledTotal = hasSections ? calculateScaledTotal(studentMarks, selectedAssessment.sectionsConfig) : rawTotal;
+      const scaledTotal = hasSections ? calculateScaledTotal(studentMarks, selectedAssessment) : rawTotal;
       const deduction = parseFloat(marksData[`${student.id}_deduction`]) || 0;
 
       let finalTotal = null;
@@ -2470,14 +2515,26 @@ export default function Marks() {
   };
 
   // Generate data for the SD Graph Modal
-  const getGraphData = () => {
-    const bins = Array(10).fill(0).map((_, i) => ({ name: `${i * 10}-${i * 10 + 9}`, count: 0 }));
-    bins[9].name = '90-100'; // Adjust the last bin to include 100
+const getGraphData = () => {
+    const bins = Array.from({ length: 10 }, (_, index) => ({
+      name: index === 9
+        ? '90–100%'
+        : `${index * 10}–<${(index + 1) * 10}%`,
+      count: 0
+    }));
+
+    const fullMark = getAssessmentFullMark(selectedAssessment);
+
+    if (fullMark <= 0) return bins;
 
     allScaledTotals.forEach(score => {
-      let index = Math.floor(score / 10);
-      if (index >= 10) index = 9;
-      if (index < 0) index = 0;
+      const percentage = (score / fullMark) * 100;
+
+      const index = Math.max(
+        0,
+        Math.min(9, Math.floor(percentage / 10))
+      );
+
       bins[index].count++;
     });
 
@@ -2661,17 +2718,15 @@ export default function Marks() {
           const deduction = parseFloat(marks[`${student.id}_deduction`]) || 0;
           const isMulti = assessment.sectionsConfig && assessment.sectionsConfig.length > 0;
 
-          if (isMulti) {
-            const scaled = calculateScaledTotal(studentMark, assessment.sectionsConfig);
-            const actualMark = scaled !== null ? scaled : 0;
-            totalRaw += (actualMark - deduction);
-            totalFull += 100;
-          } else {
-            const raw = calculateTotal(studentMark);
-            const actualMark = raw !== null ? raw : 0;
-            totalRaw += (actualMark - deduction);
-            totalFull += (assessment.fullMark || 100);
-          }
+const total = calculateAssessmentTotal(
+            studentMark,
+            assessment
+          );
+
+          const actualMark = total !== null ? total : 0;
+
+          totalRaw += actualMark - deduction;
+          totalFull += getAssessmentFullMark(assessment);
         });
         return { raw: totalRaw, full: totalFull };
       };
@@ -3224,12 +3279,12 @@ export default function Marks() {
               sec.subSections.forEach(sub => {
                 html += `<th>(/${sub.fullMark})</th>`;
               });
-              html += `<th style="background-color:#f9fafb;">(/${sec.fullMark})</th>`;
+html += `<th style="background-color:#f9fafb;">(/${getSectionRawFullMark(sec)})</th>`;
             } else {
               html += `<th>(/${sec.fullMark})</th>`;
             }
           });
-          html += `<th style="background-color:#f3f4f6; font-weight:bold;">(/100)</th>`;
+html += `<th style="background-color:#f3f4f6; font-weight:bold;">(/${getAssessmentFullMark(item)})</th>`;
         } else {
           html += `<th>(/${item.fullMark || 100})</th>`;
         }
@@ -3315,7 +3370,7 @@ export default function Marks() {
               }
             });
 
-            const scaled = calculateScaledTotal(studentMark, item.sectionsConfig);
+            const scaled = calculateScaledTotal(studentMark, item);
             if (scaled !== null) {
               finalMark = scaled - deduction;
               html += `<td style="background-color:#f3f4f6; font-weight:bold;">${finalMark.toFixed(1)}</td>`;
@@ -3332,9 +3387,9 @@ export default function Marks() {
             }
           }
 
-          if (finalMark !== null) {
+if (finalMark !== null) {
             catRawTotal += finalMark;
-            catFullTotal += (item.fullMark || 100);
+            catFullTotal += getAssessmentFullMark(item);
           }
         });
 
@@ -3402,13 +3457,9 @@ export default function Marks() {
 
   if (!selectedAssessment && assessments.length > 0) {
     assessments.forEach(a => {
-      overviewStats[a.id] = {
+overviewStats[a.id] = {
         marks: [],
-        fullMark: a.designatedPending
-          ? 0
-          : a.sectionsConfig?.length
-            ? 100
-            : (a.fullMark || 100)
+        fullMark: getAssessmentFullMark(a)
       };
       overviewTotalStats.fullMark += overviewStats[a.id].fullMark;
     });
@@ -3425,7 +3476,7 @@ export default function Marks() {
 
         let finalMark = null;
         if (isMulti) {
-          const scaled = calculateScaledTotal(studentMark, a.sectionsConfig);
+          const scaled = calculateScaledTotal(studentMark, a);
           if (scaled !== null) finalMark = scaled - deduction;
         } else {
           const raw = calculateTotal(studentMark);
@@ -4634,12 +4685,9 @@ export default function Marks() {
                         <th key={a.id} className="p-3 border-b w-32 text-center border-r border-gray-200">
                           <div className="truncate" title={a.name}>{a.name}</div>
                           <div className="text-[10px] text-gray-400 normal-case font-normal mt-1">
-                            {a.designatedPending
+{a.designatedPending
                               ? 'Configuration required'
-                              : `Full: ${a.sectionsConfig?.length
-                                ? 100
-                                : (a.fullMark || 100)
-                              }`}
+                              : `Full: ${getAssessmentFullMark(a)}`}
                           </div>
                         </th>
                       ))}
@@ -4678,7 +4726,7 @@ export default function Marks() {
 
                                 let finalMark = null;
                                 if (isMulti) {
-                                  const scaled = calculateScaledTotal(studentMark, a.sectionsConfig);
+                                  const scaled = calculateScaledTotal(studentMark, a);
                                   if (scaled !== null) finalMark = scaled - deduction;
                                 } else {
                                   const raw = calculateTotal(studentMark);
@@ -4956,7 +5004,9 @@ export default function Marks() {
                             <th colSpan={sec.hasSubSections ? sec.subSections.length + 1 : 1} className="p-2 border-r border-gray-200 text-center bg-gray-100">
                               <div className="font-bold text-gray-700">{sec.name}</div>
                               <div className="text-[10px] text-gray-500 normal-case font-normal">
-                                Full: {sec.fullMark} | Weight: {sec.weight}%
+{assessmentUsesScaling(selectedAssessment)
+                                  ? `Full: ${sec.fullMark} | Weight: ${sec.weight}%`
+                                  : `Full: ${getSectionRawFullMark(sec)} | Raw marks`}
                               </div>
                             </th>
                             {isLastInGroup && (
@@ -5007,17 +5057,16 @@ export default function Marks() {
                             </React.Fragment>
                           );
                         })}
-                        <th className="p-3 border-b w-28 text-gray-700 font-bold align-top text-center">
+<th className="p-3 border-b w-28 text-gray-700 font-bold align-top text-center">
                           <div className="flex flex-col items-center justify-center">
-                            <span>Total ({showRawTotal ? selectedAssessment.paperFullMark : '100%'})</span>
-                            <button
-                              onClick={() => setShowRawTotal(!showRawTotal)}
-                              className="flex items-center mt-1 text-[10px] font-semibold text-gray-500 hover:text-blue-600 transition-colors bg-gray-100 px-2 py-0.5 rounded-full border border-gray-200"
-                              title="Toggle Total Mark View"
-                            >
-                              {showRawTotal ? <ToggleRight className="w-3 h-3 mr-1 text-blue-600" /> : <ToggleLeft className="w-3 h-3 mr-1" />}
-                              {showRawTotal ? 'Raw' : '100%'}
-                            </button>
+                            <span>
+                              Total / {getAssessmentFullMark(selectedAssessment)}
+                            </span>
+                            <span className="mt-1 text-[10px] font-normal normal-case text-gray-500">
+                              {assessmentUsesScaling(selectedAssessment)
+                                ? 'Converted to 100'
+                                : 'Raw marks'}
+                            </span>
                           </div>
                         </th>
                       </>
@@ -5088,19 +5137,17 @@ export default function Marks() {
                           hasMark = studentMarks && studentMarks.toString().trim() !== '';
                         }
 
-                        const rawTotal = calculateTotal(studentMarks);
-                        const scaledTotal = hasSections ? calculateScaledTotal(studentMarks, selectedAssessment.sectionsConfig) : rawTotal;
-                        const rawPaperTotal = hasSections ? calculatePaperRawTotal(studentMarks, selectedAssessment.sectionsConfig) : rawTotal;
+const rawTotal = calculateTotal(studentMarks);
+                        const scaledTotal = hasSections
+                          ? calculateScaledTotal(studentMarks, selectedAssessment)
+                          : rawTotal;
 
-                        const deduction = parseFloat(marksData[`${s.id}_deduction`]) || 0;
-                        let finalTotal = null;
-                        if (scaledTotal !== null) {
-                          if (showRawTotal && hasSections) {
-                            finalTotal = rawPaperTotal - deduction;
-                          } else {
-                            finalTotal = scaledTotal - deduction;
-                          }
-                        }
+                        const deduction =
+                          parseFloat(marksData[`${s.id}_deduction`]) || 0;
+
+                        const finalTotal = scaledTotal !== null
+                          ? scaledTotal - deduction
+                          : null;
 
                         const isTopMark = topStudentIds.has(s.id);
                         let globalColIndex = 0;
@@ -5194,8 +5241,12 @@ export default function Marks() {
                                     </React.Fragment>
                                   );
                                 })}
-                                <td className={`p-3 font-semibold text-center text-gray-600 ${scaledTotal === null ? 'bg-red-50' : ''}`}>
-                                  {scaledTotal === null ? '-' : (studentView ? '***' : (showRawTotal ? rawPaperTotal.toFixed(1) : scaledTotal.toFixed(1)))}
+<td className={`p-3 font-semibold text-center text-gray-600 ${scaledTotal === null ? 'bg-red-50' : ''}`}>
+                                  {scaledTotal === null
+                                    ? '-'
+                                    : studentView
+                                      ? '***'
+                                      : scaledTotal.toFixed(1)}
                                 </td>
                               </>
                             ) : (
@@ -5254,11 +5305,26 @@ export default function Marks() {
 
                                   const compMarks = compAss.marks?.[s.id];
                                   const compDeduct = parseFloat(compAss.marks?.[`${s.id}_deduction`]) || 0;
-                                  const compScaled = calculateScaledTotal(compMarks, compAss.sectionsConfig);
+                                  const compScaled = calculateScaledTotal(compMarks, compAss);
                                   if (compScaled === null) return <span className="text-gray-300">-</span>;
 
-                                  const compFinal = compScaled - compDeduct;
-                                  const diff = finalTotal - compFinal;
+const compFinal = compScaled - compDeduct;
+                                  const currentFull =
+                                    getAssessmentFullMark(selectedAssessment);
+                                  const comparisonFull =
+                                    getAssessmentFullMark(compAss);
+
+                                  if (
+                                    currentFull <= 0 ||
+                                    comparisonFull <= 0
+                                  ) {
+                                    return <span className="text-gray-300">-</span>;
+                                  }
+
+                                  // Compare equivalent percentages.
+                                  const diff =
+                                    (finalTotal / currentFull) * 100 -
+                                    (compFinal / comparisonFull) * 100;
 
                                   // Determine visual cues
                                   const isPositive = diff > 0;
@@ -5518,9 +5584,36 @@ export default function Marks() {
                   </div>
                 </div>
 
-                {/* Multi-Section Config */}
+{/* Multi-Section Config */}
                 {isMultiSectionForm && (
                   <div className="border-t border-gray-200 pt-6 mt-6">
+                    <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 p-4">
+                      <label className="flex items-start gap-3 text-sm font-semibold text-gray-800">
+                        <input
+                          type="checkbox"
+                          checked={scaleTotalTo100}
+                          onChange={event =>
+                            setScaleTotalTo100(event.target.checked)
+                          }
+                          className="mt-1 rounded text-blue-600 focus:ring-blue-500"
+                        />
+                        <span>
+                          Convert total to 100 using section weights
+                        </span>
+                      </label>
+
+                      <p className="mt-2 text-xs leading-relaxed text-gray-600">
+                        {scaleTotalTo100
+                          ? 'ON: section weights are applied and normalized to a maximum of 100. Example: 5 raw marks out of 15 becomes 33.3/100.'
+                          : 'OFF: section weights are ignored. The total and maximum are the sums of the enabled sections/subsections. Example: 5/15.'}
+                      </p>
+
+                      <p className="mt-2 text-xs text-gray-500">
+                        This choice is saved for this assessment.
+                        Changing it does not rewrite entered component marks.
+                        Deduction is applied in the selected total’s units.
+                      </p>
+                    </div>
                     <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-4 gap-4">
                       <div>
                         <h3 className="text-lg font-bold text-gray-800">Paper & Sections Configuration</h3>
@@ -5555,16 +5648,37 @@ export default function Marks() {
                           }} className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs font-bold hover:bg-purple-200 transition-colors">4DBQ + 2Essay</button>
                         </div>
                       </div>
-                      <div className="flex items-center space-x-2">
-                        <label className="text-sm font-semibold text-gray-700">Paper Full Mark:</label>
+<div className="flex items-center space-x-2">
+                        <label className="text-sm font-semibold text-gray-700">
+                          Paper Full Mark:
+                        </label>
                         <input
                           type="number"
-                          value={paperFullMark}
-                          onChange={(e) => setPaperFullMark(e.target.value)}
-                          data-gramm="false" data-gramm_editor="false"
-                          className="w-20 border border-gray-300 rounded p-1.5 text-sm outline-none focus:ring-2 focus:ring-blue-500 text-center font-bold"
+                          value={
+                            scaleTotalTo100
+                              ? paperFullMark
+                              : sectionsConfig.reduce(
+                                (sum, section) =>
+                                  sum + getSectionRawFullMark(section),
+                                0
+                              )
+                          }
+                          onChange={event =>
+                            setPaperFullMark(event.target.value)
+                          }
+                          disabled={!scaleTotalTo100}
+                          data-gramm="false"
+                          data-gramm_editor="false"
+                          className="w-20 border border-gray-300 rounded p-1.5 text-sm outline-none focus:ring-2 focus:ring-blue-500 text-center font-bold disabled:bg-gray-100"
                         />
-                        <button type="button" onClick={autoCalculateWeights} className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200 border border-gray-300">Auto Weights</button>
+                        <button
+                          type="button"
+                          onClick={autoCalculateWeights}
+                          disabled={!scaleTotalTo100}
+                          className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200 border border-gray-300 disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          Auto Weights
+                        </button>
                       </div>
                     </div>
 
@@ -5580,13 +5694,57 @@ export default function Marks() {
                               <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase">Group (Optional)</label>
                               <input type="text" value={sec.groupName || ''} onChange={(e) => updateSection(sec.id, 'groupName', e.target.value)} placeholder="e.g. DBQ" data-gramm="false" data-gramm_editor="false" className="w-full border border-gray-300 rounded p-2 text-sm" />
                             </div>
-                            <div className="w-20">
-                              <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase">Full Mark</label>
-                              <input type="number" step="any" value={sec.fullMark} onChange={(e) => updateSection(sec.id, 'fullMark', e.target.value)} data-gramm="false" data-gramm_editor="false" className="w-full border border-gray-300 rounded p-2 text-sm" required />
+<div className="w-20">
+                              <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase">
+                                Full Mark
+                              </label>
+                              <input
+                                type="number"
+                                step="any"
+                                value={
+                                  !scaleTotalTo100 && sec.hasSubSections
+                                    ? getSectionRawFullMark(sec)
+                                    : sec.fullMark
+                                }
+                                onChange={event =>
+                                  updateSection(
+                                    sec.id,
+                                    'fullMark',
+                                    event.target.value
+                                  )
+                                }
+                                disabled={
+                                  !scaleTotalTo100 && sec.hasSubSections
+                                }
+                                data-gramm="false"
+                                data-gramm_editor="false"
+                                className="w-full border border-gray-300 rounded p-2 text-sm disabled:bg-gray-100"
+                                required={
+                                  scaleTotalTo100 || !sec.hasSubSections
+                                }
+                              />
                             </div>
                             <div className="w-20">
-                              <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase">Weight (%)</label>
-                              <input type="number" step="any" value={sec.weight} onChange={(e) => updateSection(sec.id, 'weight', e.target.value)} data-gramm="false" data-gramm_editor="false" className="w-full border border-gray-300 rounded p-2 text-sm" required />
+                              <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase">
+                                Weight (%)
+                              </label>
+                              <input
+                                type="number"
+                                step="any"
+                                value={sec.weight}
+                                onChange={event =>
+                                  updateSection(
+                                    sec.id,
+                                    'weight',
+                                    event.target.value
+                                  )
+                                }
+                                disabled={!scaleTotalTo100}
+                                data-gramm="false"
+                                data-gramm_editor="false"
+                                className="w-full border border-gray-300 rounded p-2 text-sm disabled:bg-gray-100 disabled:text-gray-400"
+                                required={scaleTotalTo100}
+                              />
                             </div>
                             <div className="flex items-center h-[38px] space-x-2">
                               <button type="button" onClick={() => { setDocLinkerTarget(sec.id); setShowDocLinker(true); }} className={`px-3 py-2 rounded text-sm font-medium border ${sec.linkedDocId ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`} title={sec.linkedDocId ? "Change Linked Doc" : "Link Doc"}>
@@ -5704,7 +5862,7 @@ export default function Marks() {
                     allClassesStudents.map(student => {
                       const studentMarks = marksData[student.id];
                       const rawTotal = calculateTotal(studentMarks);
-                      const scaledTotal = hasSections ? calculateScaledTotal(studentMarks, selectedAssessment.sectionsConfig) : rawTotal;
+                      const scaledTotal = hasSections ? calculateScaledTotal(studentMarks, selectedAssessment) : rawTotal;
                       const deduction = parseFloat(marksData[`${student.id}_deduction`]) || 0;
                       let finalTotal = null;
                       if (scaledTotal !== null) {
@@ -5811,7 +5969,7 @@ export default function Marks() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {amendRows.map((row, idx) => {
-                    const scaledTotal = row.student ? calculateScaledTotal(row.marks, selectedAssessment.sectionsConfig) : null;
+                    const scaledTotal = row.student ? calculateScaledTotal(row.marks, selectedAssessment) : null;
                     const deduction = row.student ? (parseFloat(marksData[`${row.student.id}_deduction`]) || 0) : 0;
                     const finalTotal = scaledTotal !== null ? scaledTotal - deduction : null;
 
@@ -6074,7 +6232,7 @@ export default function Marks() {
 
                 {revealStep >= 2 && (() => {
                   const sortedTotals = currentClassStudents.map(s => {
-                    const scaled = hasSections ? calculateScaledTotal(marksData[s.id], selectedAssessment.sectionsConfig) : calculateTotal(marksData[s.id]);
+                    const scaled = hasSections ? calculateScaledTotal(marksData[s.id], selectedAssessment) : calculateTotal(marksData[s.id]);
                     const deduction = parseFloat(marksData[`${s.id}_deduction`]) || 0;
                     return { student: s, total: scaled !== null ? scaled - deduction : null };
                   }).filter(s => s.total !== null).sort((a, b) => b.total - a.total);

@@ -21,6 +21,12 @@ import { getUserClassAccess } from './classAccess.js';
 import { loadAssignedClassAssessments } from './dashboardAccessClient.js';
 import { loadAccessibleArchives } from './archiveAccessClient.js';
 import { dashboardItemCanAppear } from './dashboardItemVisibility.js';
+import {
+    assessmentHasSections,
+    getAssessmentFullMark,
+    getAssessmentStudentTotal,
+    formatAssessmentMark
+} from './assessmentScoring.js';
 
 import {
     loadClassAssessments,
@@ -937,117 +943,211 @@ const filtered = allItems
     };
 
     // --- GRAPH LOGIC ---
-    const getStudentTotal = (item, studentId) => {
-        const markVal = item.marks?.[studentId];
-        if (markVal === undefined || markVal === null || markVal === '') return null;
-        const deduction = parseFloat(item.marks[`${studentId}_deduction`]) || 0;
-
-        if (typeof markVal === 'object' && item.sectionsConfig) {
-            let scaledTotal = 0;
-            let hasValidMark = false;
-            item.sectionsConfig.forEach(sec => {
-                let secRawTotal = 0;
-                let secHasMark = false;
-                if (sec.hasSubSections) {
-                    sec.subSections.forEach(sub => {
-                        const m = parseFloat(markVal[sub.id]);
-                        if (!isNaN(m)) { secRawTotal += m; secHasMark = true; }
-                    });
-                } else {
-                    const m = parseFloat(markVal[sec.id]);
-                    if (!isNaN(m)) { secRawTotal += m; secHasMark = true; }
-                }
-                if (secHasMark) {
-                    const weight = parseFloat(sec.weight);
-                    const full = parseFloat(sec.fullMark);
-                    if (full > 0 && !isNaN(weight)) {
-                        scaledTotal += (secRawTotal / full) * weight;
-                        hasValidMark = true;
-                    }
-                }
-            });
-            return hasValidMark ? scaledTotal - deduction : null;
-        } else if (typeof markVal === 'object') {
-            let total = 0;
-            Object.values(markVal).forEach(v => {
-                if (v && !isNaN(parseFloat(v))) total += parseFloat(v);
-            });
-            return total - deduction;
-        } else {
-            const parsed = parseFloat(markVal);
-            return !isNaN(parsed) ? parsed - deduction : null;
-        }
-    };
+ const getStudentTotal = (item, studentId) =>
+        getAssessmentStudentTotal(item, studentId);
 
     const calculateItemStats = (item) => {
-        let percentage = null;
-        let percentile = null;
-        const fullMark = item.paperFullMark || item.fullMark || 100;
+        const fullMark = getAssessmentFullMark(item);
 
-        if (!item.marks) return { percentage, percentile };
+        const emptyResult = {
+            total: null,
+            fullMark,
+            percentage: null,
+            percentile: null
+        };
+
+        if (fullMark <= 0) return emptyResult;
+
+        // Keep generated dummy-account results consistent with the table.
+        if (!user?.isAdmin && currentStudentData?.isDummy) {
+            const id = String(item.id || '');
+            const first = id.charCodeAt(0) || 0;
+            const last = id.charCodeAt(id.length - 1) || 0;
+            const percentage = (first + last) % 41 + 60;
+
+            return {
+                total: (percentage / 100) * fullMark,
+                fullMark,
+                percentage,
+                percentile: Math.max(
+                    0,
+                    Math.min(
+                        100,
+                        percentage + ((id.charCodeAt(1) || 0) % 20) - 10
+                    )
+                )
+            };
+        }
+
+        if (!item.marks) return emptyResult;
 
         const allTotals = Object.keys(item.marks)
-            .filter(k =>
-                !k.includes('_') &&
+            .filter(studentId =>
+                !studentId.endsWith('_deduction') &&
+                !studentId.endsWith('_comment') &&
                 (
                     !user?.isAdmin ||
-                    Object.prototype.hasOwnProperty.call(studentMap, k)
+                    Object.prototype.hasOwnProperty.call(
+                        studentMap,
+                        studentId
+                    )
                 )
             )
-            .map(k => getStudentTotal(item, k))
-            .filter(v => v !== null);
+            .map(studentId =>
+                getAssessmentStudentTotal(item, studentId)
+            )
+            .filter(total =>
+                total !== null && Number.isFinite(total)
+            );
 
         if (user?.isAdmin) {
-            // Admin: Calculate Class Average
-            if (allTotals.length > 0) {
-                const sum = allTotals.reduce((a, b) => a + b, 0);
-                const avgTotal = sum / allTotals.length;
-                percentage = item.sectionsConfig ? avgTotal : (avgTotal / fullMark) * 100;
-            }
-            return { percentage, percentile: null }; // Percentile meaningless for class average
-        } else {
-            // Student: Calculate Individual
-            if (currentStudentData?.isDummy) {
-                const pseudoRandom = (item.id.charCodeAt(0) + item.id.charCodeAt(item.id.length - 1)) % 41 + 60;
-                return { percentage: pseudoRandom, percentile: Math.min(100, pseudoRandom + ((item.id.charCodeAt(1) || 0) % 20) - 10) };
-            }
-            const myTotal = getStudentTotal(item, currentStudentId);
-            if (myTotal === null) return { percentage, percentile };
+            if (allTotals.length === 0) return emptyResult;
 
-            percentage = item.sectionsConfig ? myTotal : (myTotal / fullMark) * 100;
-            if (allTotals.length > 0) {
-                const below = allTotals.filter(v => v < myTotal).length;
-                const equal = allTotals.filter(v => v === myTotal).length;
-                percentile = ((below + (0.5 * equal)) / allTotals.length) * 100;
-            }
-            return { percentage, percentile };
+            const total = allTotals.reduce(
+                (sum, mark) => sum + mark,
+                0
+            ) / allTotals.length;
+
+            return {
+                total,
+                fullMark,
+                percentage: (total / fullMark) * 100,
+                percentile: null
+            };
         }
-    };
 
-    const graphData = React.useMemo(() => {
-        if (!items || items.length === 0) return [];
+        if (!currentStudentId) return emptyResult;
 
-        // Filter by selected categories and exclude "Corr"
-        let filtered = items.filter(i =>
-            graphCategories.includes(i.category) &&
-            !(i.name || '').toLowerCase().includes('corr')
+        // Exactly the same scoring helper used by the dashboard table.
+        const total = getAssessmentStudentTotal(
+            item,
+            currentStudentId
         );
 
-        // Sort ascending (oldest first) for chronological graph
+        if (total === null || !Number.isFinite(total)) {
+            return emptyResult;
+        }
+
+        let percentile = null;
+
+        if (allTotals.length > 0) {
+            const below = allTotals.filter(
+                mark => mark < total
+            ).length;
+
+            const equal = allTotals.filter(
+                mark => mark === total
+            ).length;
+
+            percentile =
+                ((below + 0.5 * equal) / allTotals.length) * 100;
+        }
+
+        return {
+            total,
+            fullMark,
+            percentage: (total / fullMark) * 100,
+            percentile
+        };
+    };
+
+const graphData = React.useMemo(() => {
+        if (!items || items.length === 0) return [];
+
+        const filtered = items.filter(item => {
+            if (!graphCategories.includes(item.category)) {
+                return false;
+            }
+
+            if (
+                (item.name || '').toLowerCase().includes('corr')
+            ) {
+                return false;
+            }
+
+            // Administrators retain their class-average graph.
+            if (user?.isAdmin) return true;
+
+            // Match the disclosure logic used by the student work list.
+            const linkedDoc = linkableDocs.find(
+                archive => archive.id === item.linkedDocId
+            );
+
+            const linkedSections = (item.sectionsConfig || [])
+                .filter(section => section.linkedDocId);
+
+            const sectionDocuments = linkedSections.map(
+                section => linkableDocs.find(
+                    archive =>
+                        archive.id === section.linkedDocId
+                )
+            );
+
+            const hasLinkedDoc =
+                Boolean(linkedDoc) ||
+                sectionDocuments.some(Boolean);
+
+            let isTierUnlocked = false;
+
+            if (linkedDoc) {
+                isTierUnlocked =
+                    linkedDoc.archiveAccess?.tierUnlocked === true;
+            } else if (linkedSections.length > 0) {
+                isTierUnlocked = sectionDocuments.every(
+                    archive =>
+                        archive?.archiveAccess?.tierUnlocked === true
+                );
+            }
+
+            const isEffectivelyDisclosed =
+                item.isDisclosed !== false ||
+                (hasLinkedDoc && isTierUnlocked);
+
+            // Exclude hidden assessments entirely.
+            // They must not expose marks or percentiles through
+            // graph points, connecting lines or hover information.
+            // This also applies to dummy student accounts.
+            return isEffectivelyDisclosed;
+        });
+
         const sorted = [...filtered].sort(
             (a, b) => compareDashboardItems(b, a)
         );
 
         return sorted.map(item => {
             const stats = calculateItemStats(item);
+
             return {
-                name: item.name,
-                term: item.term,
-                percentage: stats.percentage !== null ? parseFloat(stats.percentage.toFixed(1)) : null,
-                percentile: stats.percentile !== null ? parseFloat(stats.percentile.toFixed(1)) : null,
+                // Use the record ID, never its potentially repeated name.
+                assessmentId: item.id,
+                name: item.name || 'Untitled assessment',
+                category: item.category || '',
+                term: item.term || '',
+                date: item.date || '',
+                total: stats.total,
+                fullMark: stats.fullMark,
+                percentage: stats.percentage !== null
+                    ? Number(stats.percentage.toFixed(1))
+                    : null,
+                percentile: stats.percentile !== null
+                    ? Number(stats.percentile.toFixed(1))
+                    : null
             };
-        }).filter(d => excludeNoMarks ? (d.percentage !== null && d.percentage > 0) : true);
-    }, [items, graphCategories, excludeNoMarks, currentStudentId, currentStudentData, user?.isAdmin, studentMap]);
+        }).filter(point =>
+            excludeNoMarks
+                ? point.percentage !== null
+                : true
+        );
+    }, [
+        items,
+        linkableDocs,
+        graphCategories,
+        excludeNoMarks,
+        currentStudentId,
+        currentStudentData,
+        user?.isAdmin,
+        studentMap
+    ]);
 
     const topicStats = React.useMemo(() => {
         if (!user?.isAdmin && !currentStudentId && !currentStudentData?.isDummy) return [];
@@ -1944,8 +2044,8 @@ const filteredItems = allItems.filter(item => {
                     let typeCounter = 1;
 
                     groupItems.forEach(item => {
-                        const marks =
-                            item.fullMark || item.paperFullMark || '';
+const marks =
+                            getAssessmentFullMark(item) || '';
 
                         const typeName = tr(
                             group.typeEn,
@@ -1985,7 +2085,7 @@ const filteredItems = allItems.filter(item => {
 
                         let typeCounters = { 'Assignments': 1, 'Quizzes': 1, 'Others': 1 };
                         topicItems.forEach(item => {
-                            const marks = item.fullMark || item.paperFullMark || '';
+                            const marks = getAssessmentFullMark(item) || '';
                             let typeNameEn = item.category === 'Assignments' ? 'Practice' : (item.category === 'Quizzes' ? 'Quiz' : 'Task');
                             let typeName = tr(typeNameEn, typeZhMap[typeNameEn]);
                             drawRow(formatDate(item.date), `${typeName} ${typeCounters[item.category]++}`, item.name, marks ? `/${marks}` : '');
@@ -2338,36 +2438,154 @@ const filteredItems = allItems.filter(item => {
                                 {t("No data available for the selected categories.")}
                             </div>
                         ) : (
-                            <ResponsiveContainer width="100%" height="100%">
-                                <LineChart data={graphData} margin={{ top: 5, right: 20, bottom: 25, left: 0 }}>
-                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+<ResponsiveContainer width="100%" height="100%">
+                                <LineChart
+                                    data={graphData}
+                                    margin={{
+                                        top: 5,
+                                        right: 20,
+                                        bottom: 15,
+                                        left: 0
+                                    }}
+                                >
+                                    <CartesianGrid
+                                        strokeDasharray="3 3"
+                                        vertical={false}
+                                        stroke="#e2e8f0"
+                                    />
+
                                     <XAxis
-                                        dataKey="name"
-                                        tick={{ fontSize: 10, fill: '#64748b' }}
+                                        dataKey="assessmentId"
+                                        type="category"
+                                        allowDuplicatedCategory={false}
+                                        tickFormatter={assessmentId => {
+                                            const point = graphData.find(
+                                                entry =>
+                                                    entry.assessmentId ===
+                                                    assessmentId
+                                            );
+
+                                            return point
+                                                ? `${point.name} · ${t(point.category)}`
+                                                : '';
+                                        }}
+                                        tick={{
+                                            fontSize: 10,
+                                            fill: '#64748b'
+                                        }}
                                         tickMargin={10}
                                         angle={-25}
                                         textAnchor="end"
-                                        height={50}
+                                        height={75}
+                                        minTickGap={12}
                                     />
+
                                     <YAxis
                                         domain={[0, 100]}
-                                        tick={{ fontSize: 12, fill: '#64748b' }}
-                                        tickFormatter={(val) => `${val}${graphMetric === 'percentage' ? '%' : ''}`}
+                                        tick={{
+                                            fontSize: 12,
+                                            fill: '#64748b'
+                                        }}
+                                        tickFormatter={value =>
+                                            `${value}${
+                                                graphMetric === 'percentage'
+                                                    ? '%'
+                                                    : ''
+                                            }`
+                                        }
                                     />
+
                                     <Tooltip
-                                        contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                                        formatter={(value) => [`${value}${graphMetric === 'percentage' ? '%' : ''}`, graphMetric === 'percentage' ? t('Score') : t('Percentile')]}
-                                        labelStyle={{ fontWeight: 'bold', color: '#334155', marginBottom: '4px' }}
+                                        filterNull={true}
+                                        content={({ active, payload }) => {
+                                            if (!active || !payload?.length) {
+                                                return null;
+                                            }
+
+                                            // Read the actual hovered record,
+                                            // not another record with its name.
+                                            const point = payload[0]?.payload;
+
+                                            if (!point) return null;
+
+                                            const metricValue =
+                                                point[graphMetric];
+
+                                            if (
+                                                metricValue === null ||
+                                                metricValue === undefined
+                                            ) {
+                                                return null;
+                                            }
+
+                                            return (
+                                                <div className="max-w-xs rounded-lg border border-slate-200 bg-white p-3 text-sm shadow-lg">
+                                                    <div className="font-bold text-slate-800">
+                                                        {point.name}
+                                                    </div>
+
+                                                    <div className="mt-1 text-xs text-slate-500">
+                                                        {t(point.category)}
+                                                        {point.term
+                                                            ? ` · ${point.term}`
+                                                            : ''}
+                                                    </div>
+
+                                                    {point.date && (
+                                                        <div className="mt-1 text-xs text-slate-500">
+                                                            {point.date}
+                                                        </div>
+                                                    )}
+
+                                                    <div className="mt-2 font-semibold text-blue-700">
+                                                        {graphMetric === 'percentage'
+                                                            ? `${t('Score')}: ${formatAssessmentMark(metricValue)}%`
+                                                            : `${t('Percentile')}: ${formatAssessmentMark(metricValue)}`}
+                                                    </div>
+
+                                                    {point.total !== null && (
+                                                        <div className="mt-1 text-slate-700">
+                                                            {user?.isAdmin
+                                                                ? t('Class Average')
+                                                                : t('Mark')}
+                                                            {': '}
+                                                            {formatAssessmentMark(point.total)}
+                                                            {' / '}
+                                                            {formatAssessmentMark(point.fullMark)}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        }}
                                     />
-                                    <Legend wrapperStyle={{ paddingTop: '20px' }} />
+
+                                    <Legend
+                                        wrapperStyle={{ paddingTop: '10px' }}
+                                    />
+
                                     <Line
-                                        type="monotone"
+                                        type="linear"
                                         dataKey={graphMetric}
-                                        name={graphMetric === 'percentage' ? t('Score (%)') : t('Percentile')}
+                                        name={
+                                            graphMetric === 'percentage'
+                                                ? t('Score (%)')
+                                                : t('Percentile')
+                                        }
                                         stroke="#2563eb"
                                         strokeWidth={3}
-                                        dot={{ r: 4, fill: '#2563eb', strokeWidth: 2, stroke: '#fff' }}
-                                        activeDot={{ r: 6, fill: '#1d4ed8', strokeWidth: 0 }}
+                                        connectNulls={false}
+                                        isAnimationActive={false}
+                                        dot={{
+                                            r: 4,
+                                            fill: '#2563eb',
+                                            strokeWidth: 2,
+                                            stroke: '#fff'
+                                        }}
+                                        activeDot={{
+                                            r: 6,
+                                            fill: '#1d4ed8',
+                                            strokeWidth: 0
+                                        }}
                                     />
                                 </LineChart>
                             </ResponsiveContainer>
@@ -2636,7 +2854,7 @@ const filteredItems = allItems.filter(item => {
                                     } else {
                                         // Generate a pseudo-random mark (60% to 100%) based on the assessment ID length/characters so it stays consistent on refresh
                                         const pseudoRandom = (item.id.charCodeAt(0) + item.id.charCodeAt(item.id.length - 1)) % 41 + 60;
-                                        const fullMark = item.paperFullMark || item.fullMark || 100;
+                               const fullMark = getAssessmentFullMark(item);
                                         const generatedMark = ((pseudoRandom / 100) * fullMark).toFixed(1);
 
                                         studentMark = (
@@ -2661,69 +2879,83 @@ const filteredItems = allItems.filter(item => {
                                         const markVal = item.marks[currentStudentId];
                                         const deduction = parseFloat(item.marks[`${currentStudentId}_deduction`]) || 0;
 
-                                        if (typeof markVal === 'object' && item.sectionsConfig) {
-                                            // Multi-section assessment (e.g., UT / Exam)
-                                            let breakdown = [];
-                                            let scaledTotal = 0;
-                                            let hasValidMark = false;
+const finalTotal = getStudentTotal(
+                                            item,
+                                            currentStudentId
+                                        );
 
-                                            item.sectionsConfig.forEach(sec => {
-                                                let secRawTotal = 0;
-                                                let secHasMark = false;
+                                        if (
+                                            typeof markVal === 'object' &&
+                                            assessmentHasSections(item)
+                                        ) {
+                                            const breakdown = [];
 
-                                                if (sec.hasSubSections) {
-                                                    sec.subSections.forEach(sub => {
-                                                        const m = parseFloat(markVal[sub.id]);
-                                                        if (!isNaN(m)) {
-                                                            secRawTotal += m;
-                                                            secHasMark = true;
-                                                            breakdown.push(`${sub.name}: ${m}/${sub.fullMark}`);
-                                                        }
-                                                    });
-                                                } else {
-                                                    const m = parseFloat(markVal[sec.id]);
-                                                    if (!isNaN(m)) {
-                                                        secRawTotal += m;
-                                                        secHasMark = true;
-                                                        breakdown.push(`${sec.name}: ${m}/${sec.fullMark}`);
+                                            item.sectionsConfig.forEach(section => {
+                                                const parts = section.hasSubSections
+                                                    ? section.subSections || []
+                                                    : [section];
+
+                                                parts.forEach(part => {
+                                                    const value = markVal[part.id];
+
+                                                    if (
+                                                        value === undefined ||
+                                                        value === null ||
+                                                        String(value).trim() === ''
+                                                    ) {
+                                                        return;
                                                     }
-                                                }
 
-                                                if (secHasMark) {
-                                                    const weight = parseFloat(sec.weight);
-                                                    const full = parseFloat(sec.fullMark);
-                                                    if (full > 0 && !isNaN(weight)) {
-                                                        scaledTotal += (secRawTotal / full) * weight;
-                                                        hasValidMark = true;
-                                                    }
-                                                }
+                                                    const mark = Number(value);
+
+                                                    if (!Number.isFinite(mark)) return;
+
+                                                    const label = section.hasSubSections
+                                                        ? `${section.name} - ${part.name}`
+                                                        : section.name;
+
+                                                    breakdown.push(
+                                                        `${label}: ${formatAssessmentMark(mark)}/${formatAssessmentMark(part.fullMark)}`
+                                                    );
+                                                });
                                             });
 
-                                            if (hasValidMark) {
-                                                const finalTotal = scaledTotal - deduction;
+                                            if (finalTotal !== null) {
                                                 studentMark = (
                                                     <div className="flex flex-col items-center justify-center text-[10px] md:text-sm leading-tight">
-                                                        <span className="font-bold text-blue-700 text-[11px] md:text-base mb-0.5 md:mb-0">{finalTotal.toFixed(1)} / {item.paperFullMark || 100}%</span>
+                                                        <span className="font-bold text-blue-700 text-[11px] md:text-base mb-0.5 md:mb-0">
+                                                            {formatAssessmentMark(finalTotal)}
+                                                            {' / '}
+                                                            {formatAssessmentMark(getAssessmentFullMark(item))}
+                                                        </span>
+
                                                         <div className="flex flex-col text-[8px] md:text-xs text-slate-500 font-normal mt-0.5 md:mt-1 gap-0.5">
-                                                            {breakdown.map((b, i) => (
-                                                                <span key={i} className="whitespace-nowrap">{b}</span>
+                                                            {breakdown.map((text, partIndex) => (
+                                                                <span
+                                                                    key={partIndex}
+                                                                    className="whitespace-nowrap"
+                                                                >
+                                                                    {text}
+                                                                </span>
                                                             ))}
                                                         </div>
-                                                        {deduction > 0 && <span className="text-[8px] md:text-xs text-red-500 mt-0.5">- {deduction} {t("(Deduction)")}</span>}
+
+                                                        {deduction > 0 && (
+                                                            <span className="text-[8px] md:text-xs text-red-500 mt-0.5">
+                                                                - {formatAssessmentMark(deduction)} {t("(Deduction)")}
+                                                            </span>
+                                                        )}
                                                     </div>
                                                 );
                                             }
-                                        } else if (typeof markVal === 'object') {
-                                            // Fallback for objects without sectionsConfig
-                                            let total = 0;
-                                            Object.values(markVal).forEach(v => {
-                                                if (v && !isNaN(parseFloat(v))) total += parseFloat(v);
-                                            });
-                                            studentMark = (total - deduction).toFixed(1);
                                         } else {
-                                            // Single number/string
-                                            const parsed = parseFloat(markVal);
-                                            studentMark = !isNaN(parsed) ? (parsed - deduction).toFixed(1) : markVal;
+                                            studentMark = finalTotal !== null
+                                                ? formatAssessmentMark(finalTotal)
+                                                : (
+                                                    typeof markVal === 'object'
+                                                        ? '-'
+                                                        : markVal
+                                                );
                                         }
                                     }
                                 }
@@ -2810,7 +3042,11 @@ const filteredItems = allItems.filter(item => {
                                             )}
                                         </td>
                                         <td className="p-1 md:p-4 text-center font-bold text-blue-700 text-[9px] md:text-base align-top md:align-middle">
-                                            {React.isValidElement(studentMark) ? studentMark : (studentMark !== '-' ? `${studentMark} / ${item.fullMark || 100}` : '-')}
+                                          {React.isValidElement(studentMark)
+                                                ? studentMark
+                                                : studentMark !== '-'
+                                                    ? `${studentMark} / ${formatAssessmentMark(getAssessmentFullMark(item))}`
+                                                    : '-'}
                                         </td>
                                         <td className="p-1 md:p-4 text-center align-top md:align-middle">
                                             <div className="flex flex-col md:flex-row items-center justify-center gap-1 md:gap-3">

@@ -150,13 +150,30 @@ export default function DesignatedAssessments() {
     const [englishFile, setEnglishFile] = useState(null);
     const [chineseFile, setChineseFile] = useState(null);
 
-    const lock = useRef(false);
+const lock = useRef(false);
     const loadSequence = useRef(0);
 
-    const apply = useCallback(result => {
+    const currentDraftState = useRef({});
+    currentDraftState.current = { data, configDraft };
+
+    const apply = useCallback((result, preserveDrafts = false) => {
+        const current = currentDraftState.current;
+
+        const sameLevel = current.data?.level === result.level;
+
+        const configHasUnsavedChanges = Boolean(
+            sameLevel &&
+            current.configDraft &&
+            JSON.stringify(current.configDraft) !==
+            JSON.stringify(current.data?.config)
+        );
+
         setData(result);
         setLevel(result.level || 'S4');
-        setConfigDraft(JSON.parse(JSON.stringify(result.config)));
+
+        if (!(preserveDrafts && configHasUnsavedChanges)) {
+            setConfigDraft(JSON.parse(JSON.stringify(result.config)));
+        }
     }, []);
 
     const load = useCallback(async requestedLevel => {
@@ -175,7 +192,7 @@ export default function DesignatedAssessments() {
 
             if (sequence !== loadSequence.current) return;
 
-            apply(response.data);
+apply(response.data, true);
         } catch (failure) {
             if (sequence === loadSequence.current) {
                 setError(failure.message || 'Could not load the list.');
@@ -203,8 +220,24 @@ export default function DesignatedAssessments() {
         let cancelled = false;
         let sequence = 0;
 
-        const refresh = async () => {
+const refresh = async event => {
             const current = ++sequence;
+
+            // Show documents saved by the embedded editor immediately.
+            // A subsequent server-catalogue failure must not lose this result.
+            const saved = event?.detail?.archives;
+
+            if (Array.isArray(saved)) {
+                setArchives(previous => {
+                    const combined = new Map(
+                        previous.map(value => [value.id, value])
+                    );
+
+                    saved.forEach(value => combined.set(value.id, value));
+
+                    return [...combined.values()];
+                });
+            }
 
             setArchiveLoading(true);
             setArchiveError('');
@@ -549,9 +582,11 @@ export default function DesignatedAssessments() {
     }
 
     return (
-        <DesignatedIncomingProvider
+<DesignatedIncomingProvider
             data={data}
             archives={archives}
+            archiveLoading={archiveLoading}
+            archiveError={archiveError}
             onCommonChanged={() => load(level)}
         >
             <main
@@ -618,16 +653,15 @@ export default function DesignatedAssessments() {
                         type="button"
                         disabled={busy}
                         className={buttonClass}
-                        onClick={() => {
-                            if (
-                                draft &&
-                                !window.confirm('Discard the open draft and reload?')
-                            ) return;
-
-                            setDraft(null);
-
+onClick={() => {
+                            // Explicitly reload both independent data sources.
+                            // Keep the assessment draft and browser UI state.
                             window.dispatchEvent(
                                 new Event('designated-refresh-archives')
+                            );
+
+                            window.dispatchEvent(
+                                new Event('designated-refresh-incoming')
                             );
 
                             load(level);
@@ -675,11 +709,14 @@ export default function DesignatedAssessments() {
                 )}
 
                 {showDocumentLinker && draft && data?.owner && (
-                    <DesignatedDocumentLinker
+<DesignatedDocumentLinker
                         archives={archives}
                         loading={archiveLoading}
                         error={archiveError}
                         selectedId={draft.linkedDocId}
+                        initialTitle={draft.name || ''}
+                        category={draft.category || 'Assignments'}
+                        allowArchiveEditing={true}
                         onClose={() => setShowDocumentLinker(false)}
                         onSelect={selection => {
                             setDraft(previous => ({

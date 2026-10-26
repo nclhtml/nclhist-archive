@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   BookOpen, Plus, Save, Calendar, Users,
-  ChevronRight, Loader2, FileText, CheckCircle,
+  Loader2, FileText, CheckCircle,
   PlusCircle, Trash2, ClipboardPaste, FormInput, Calculator,
   Layers, X, BarChart2, Copy, Eye, EyeOff, Settings, Edit2, Edit,
-  ChevronUp, ChevronDown, MinusCircle, ToggleLeft, ToggleRight, Percent, Info,
-  Link as LinkIcon, ExternalLink, Search, Download, ArrowLeft, Tag, Edit3
+  ChevronUp, ChevronDown, MinusCircle, Percent, Info,
+  Link as LinkIcon, ExternalLink, Download, ArrowLeft, Tag, Edit3,
+  LayoutGrid, GripVertical, AlertTriangle, ChevronLeft
 } from 'lucide-react';
 import {
   collection, getDocs, doc, setDoc, updateDoc,
@@ -14,7 +15,7 @@ import {
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { loadAccessibleArchives } from './archiveAccessClient.js';
-import { useAuth } from './main.jsx'; // NEW IMPORT
+import { useAuth } from './main.jsx';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer
@@ -33,6 +34,9 @@ import {
   calculateAssessmentTotal
 } from './assessmentScoring.js';
 
+// ============================================================================
+// SMALL HELPERS
+// ============================================================================
 function getMarksAttachmentUrl(parent, isAnswer, language) {
   if (!parent) return '';
 
@@ -79,11 +83,9 @@ function MarksPdfAttachment({ fileUrl, title }) {
   return renderPdf(fileUrl);
 }
 
-// Helper to generate unique IDs for sections/subsections
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
 // Reveal the highest two positions, including ties at the cutoff.
-// Missing values are never treated as zero.
 const marksIsTopTwo = (value, values) => {
   if (
     value === null ||
@@ -125,6 +127,8 @@ const MARKS_DEFAULT_MULTI_CATEGORIES = [
   'Exam'
 ];
 
+const SUPER_ADMIN_EMAIL = 'clng@ktls.edu.hk';
+
 const marksUniqueNames = values =>
   [...new Set(
     (Array.isArray(values) ? values : [])
@@ -132,7 +136,6 @@ const marksUniqueNames = values =>
   )];
 
 // Do not trim or remove invisible characters from class identities.
-// Your application uses those characters to distinguish different classes.
 const marksClassCategoryKey = className =>
   `class:${encodeURIComponent(className)}`;
 
@@ -140,6 +143,120 @@ const marksAssessmentBelongsToClass = (assessment, className) =>
   Array.isArray(assessment.classes)
     ? assessment.classes.includes(className)
     : assessment.className === className;
+
+const cleanClassName = name => String(name || '').replace(/\u200B/g, '');
+
+const marksValueFilled = value =>
+  value !== undefined && value !== null && String(value).trim() !== '';
+
+const marksCountEntered = (marks, studentIds) =>
+  studentIds.filter(id => {
+    const value = marks?.[id];
+    if (value && typeof value === 'object') {
+      return Object.values(value).some(marksValueFilled);
+    }
+    return marksValueFilled(value);
+  }).length;
+
+const sortMarksAssessments = (a, b) => {
+  const difference = (a.order ?? -1) - (b.order ?? -1);
+  if (difference) return difference;
+  return (Date.parse(b.date || '') || 0) - (Date.parse(a.date || '') || 0);
+};
+
+// Learning Attitude calculations are now separate buttons, not presets.
+const LEGACY_LA_PRESET_IDS = ['la-hw-preset', 'la-lesson-preset'];
+
+const isLegacyLearningAttitudePreset = preset =>
+  LEGACY_LA_PRESET_IDS.includes(preset?.id) ||
+  String(preset?.name || '').startsWith('Learning Attitude');
+
+const marksVisiblePresets = (allPresets, email) =>
+  (Array.isArray(allPresets) ? allPresets : [])
+    .filter(preset => !isLegacyLearningAttitudePreset(preset))
+    .filter(preset =>
+      email === SUPER_ADMIN_EMAIL ||
+      preset.isShared ||
+      preset.owner === email
+    );
+
+const describePresetFormula = preset => {
+  if (!preset) return '';
+  if (preset.name === 'JS Geography') {
+    return 'Score = (Assignments + Quizzes) ÷ their full marks × 50 + Uniform Test ÷ full mark × 50';
+  }
+  const parts = Object.entries(preset.weights || {})
+    .filter(([, weight]) => Number(weight) > 0)
+    .map(([category, weight]) => `${category} × ${weight}%`);
+  return parts.length ? `Score = ${parts.join(' + ')}` : 'No weights configured.';
+};
+
+const LA_HOMEWORK_FORMULA =
+  'Learning Attitude (Homework) = round( total Assignments ÷ total full marks × 5 )';
+const LA_LESSON_FORMULA =
+  'Learning Attitude (Lesson) = 4 + 1 (if Assignments > 90%) − floor(records ÷ 2); max 3 if Assignments < 60%; range 0–5';
+
+// Quick section presets for multi-section items.
+const buildDbq = (number, weight) => ({
+  id: generateId(),
+  name: `DBQ ${number}`,
+  groupName: 'DBQ',
+  fullMark: 15,
+  weight,
+  hasSubSections: true,
+  subSections: [
+    { id: generateId(), name: 'a', fullMark: '' },
+    { id: generateId(), name: 'b', fullMark: '' },
+    { id: generateId(), name: 'c', fullMark: 8 }
+  ]
+});
+
+const buildEssay = (count, fullMark, weight) => ({
+  id: generateId(),
+  name: 'Essay',
+  groupName: 'Essay',
+  fullMark,
+  weight,
+  hasSubSections: true,
+  subSections: Array.from({ length: count }, (_, index) => ({
+    id: generateId(),
+    name: String(index + 1),
+    fullMark: 25
+  }))
+});
+
+const SECTION_PRESETS = [
+  {
+    label: '2 DBQ',
+    paperFullMark: 30,
+    build: () => [buildDbq(1, 50), buildDbq(2, 50)]
+  },
+  {
+    label: '2 DBQ + 1 Essay',
+    paperFullMark: 55,
+    build: () => [buildDbq(1, 30), buildDbq(2, 30), buildEssay(2, 25, 40)]
+  },
+  {
+    label: '4 DBQ + 2 Essay',
+    paperFullMark: 110,
+    build: () => [
+      buildDbq(1, 15),
+      buildDbq(2, 15),
+      buildDbq(3, 15),
+      buildDbq(4, 15),
+      buildEssay(5, 50, 40)
+    ]
+  }
+];
+
+const newDefaultSection = () => ({
+  id: generateId(),
+  name: 'Paper 1',
+  fullMark: 100,
+  weight: 100,
+  hasSubSections: false,
+  subSections: []
+});
 
 // Read every term for ONE class, supporting both current and legacy records.
 async function readMarksClassAssessments(className) {
@@ -187,8 +304,6 @@ function getMarksClassCategoryConfig(
     classAssessments.map(assessment => assessment.category)
   );
 
-  // Old per-user category lists are deliberately NOT imported.
-  // Only categories actually used by this class are discovered from old data.
   const list = marksUniqueNames([
     ...MARKS_DEFAULT_CATEGORIES,
     ...(keepSavedEmptyCategories
@@ -225,10 +340,161 @@ const getDefaultTerms = (className) => {
   return ['Term 1', 'Term 2'];
 };
 
+// ============================================================================
+// SHARED STYLES
+// ============================================================================
+const MARKS_CSS = `
+.marks-page { box-sizing: border-box; font-size: 14px; }
+.marks-page *, .marks-page *::before, .marks-page *::after { box-sizing: border-box; }
+.marks-page button { touch-action: manipulation; }
+.marks-page button:focus-visible, .marks-page select:focus-visible { outline: 2px solid #2563eb; outline-offset: 1px; }
+
+.mk-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mk-label { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #64748b; }
+.mk-input { height: 34px; min-width: 0; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; padding: 0 10px; font-size: 13px; color: #0f172a; }
+.mk-input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+.mk-input:disabled { background: #f1f5f9; color: #94a3b8; }
+textarea.mk-input { height: auto; padding: 8px 10px; }
+
+.mk-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 34px; padding: 0 12px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; color: #334155; font-size: 13px; font-weight: 600; line-height: 1; white-space: nowrap; transition: background-color .15s, border-color .15s, color .15s; }
+.mk-btn:hover:not(:disabled) { background: #f8fafc; border-color: #cbd5e1; }
+.mk-btn:disabled { opacity: .45; cursor: not-allowed; }
+.mk-btn svg { width: 16px; height: 16px; flex-shrink: 0; }
+.mk-btn-sm { height: 28px; padding: 0 9px; font-size: 12px; border-radius: 7px; }
+.mk-btn-sm svg { width: 14px; height: 14px; }
+.mk-btn-icon { width: 34px; padding: 0; }
+.mk-btn-sm.mk-btn-icon { width: 28px; }
+.mk-btn-primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+.mk-btn-primary:hover:not(:disabled) { background: #1d4ed8; border-color: #1d4ed8; }
+.mk-btn-purple { background: #7c3aed; border-color: #7c3aed; color: #fff; }
+.mk-btn-purple:hover:not(:disabled) { background: #6d28d9; border-color: #6d28d9; }
+.mk-btn-emerald { background: #059669; border-color: #059669; color: #fff; }
+.mk-btn-emerald:hover:not(:disabled) { background: #047857; border-color: #047857; }
+.mk-btn-orange { background: #ea580c; border-color: #ea580c; color: #fff; }
+.mk-btn-orange:hover:not(:disabled) { background: #c2410c; border-color: #c2410c; }
+.mk-btn-soft { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+.mk-btn-soft:hover:not(:disabled) { background: #dbeafe; border-color: #93c5fd; }
+.mk-btn-soft-purple { background: #f5f3ff; border-color: #ddd6fe; color: #6d28d9; }
+.mk-btn-soft-purple:hover:not(:disabled) { background: #ede9fe; border-color: #c4b5fd; }
+.mk-btn-warn { background: #fffbeb; border-color: #fcd34d; color: #92400e; }
+.mk-btn-warn:hover:not(:disabled) { background: #fef3c7; border-color: #fbbf24; }
+.mk-btn-ok { background: #f0fdf4; border-color: #86efac; color: #166534; }
+.mk-btn-ok:hover:not(:disabled) { background: #dcfce7; border-color: #4ade80; }
+.mk-btn-danger { color: #dc2626; }
+.mk-btn-danger:hover:not(:disabled) { background: #fef2f2; border-color: #fecaca; }
+.mk-btn-ghost { border-color: transparent; background: transparent; }
+
+.mk-seg { display: inline-flex; padding: 2px; gap: 2px; border: 1px solid #e2e8f0; border-radius: 9px; background: #f1f5f9; }
+.mk-seg button { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 7px; font-size: 12px; font-weight: 600; color: #64748b; white-space: nowrap; }
+.mk-seg button svg { width: 14px; height: 14px; }
+.mk-seg button.is-active { background: #fff; color: #1d4ed8; box-shadow: 0 1px 2px rgba(15,23,42,.1); }
+.mk-seg button:disabled { opacity: .55; cursor: not-allowed; }
+
+.mk-divider { width: 1px; height: 22px; background: #e2e8f0; margin: 0 2px; }
+.mk-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; }
+.mk-section-title { font-size: 13px; font-weight: 700; color: #0f172a; margin-bottom: 12px; }
+.mk-help { font-size: 12px; color: #64748b; line-height: 1.5; }
+
+.mk-chip { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 999px; background: #f1f5f9; color: #475569; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.mk-chip svg { width: 12px; height: 12px; }
+.mk-chip-blue { background: #eff6ff; color: #1d4ed8; }
+.mk-chip-purple { background: #f5f3ff; color: #6d28d9; }
+.mk-chip-yellow { background: #fef9c3; color: #854d0e; }
+.mk-chip-green { background: #dcfce7; color: #166534; }
+.mk-chip-red { background: #fee2e2; color: #991b1b; }
+.mk-count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: #e2e8f0; color: #475569; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+
+.mk-dot { width: 9px; height: 9px; border-radius: 999px; flex-shrink: 0; background: #cbd5e1; display: inline-block; }
+.mk-dot-done { background: #22c55e; }
+.mk-dot-pending { background: #eab308; }
+
+.mk-item { display: block; width: 100%; text-align: left; padding: 10px 12px; border: 1px solid #e2e8f0; border-left-width: 4px; border-radius: 10px; background: #fff; transition: box-shadow .15s, border-color .15s; }
+.mk-item:hover { box-shadow: 0 2px 8px rgba(15,23,42,.08); }
+.mk-item.is-done { border-left-color: #22c55e; }
+.mk-item.is-pending { border-left-color: #eab308; }
+.mk-item.is-empty { border-left-color: #cbd5e1; }
+.mk-item.is-compulsory.is-pending { background: #fefce8; border-color: #fde047; border-left-color: #eab308; }
+.mk-item.is-compulsory.is-done { background: #f0fdf4; border-color: #bbf7d0; border-left-color: #22c55e; }
+
+.mk-rail-item { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; padding: 7px 8px; border-radius: 8px; border: 1px solid transparent; }
+.mk-rail-item:hover { background: #f8fafc; }
+.mk-rail-item.is-compulsory.is-pending { background: #fefce8; }
+.mk-rail-item.is-compulsory.is-done { background: #f0fdf4; }
+.mk-rail-item.is-active { background: #eff6ff; border-color: #93c5fd; }
+.mk-grip { width: 14px; height: 14px; color: #cbd5e1; flex-shrink: 0; cursor: grab; }
+.mk-drop-target { box-shadow: inset 0 2px 0 #3b82f6; border-radius: 8px; }
+
+.mk-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
+.mk-table thead { position: sticky; top: 0; z-index: 3; }
+.mk-table th { background: #f8fafc; color: #475569; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: 8px 10px; border-bottom: 1px solid #e2e8f0; white-space: nowrap; text-align: center; vertical-align: bottom; }
+.mk-table th .mk-sub { display: block; margin-top: 2px; font-size: 10px; font-weight: 500; text-transform: none; letter-spacing: 0; color: #94a3b8; }
+.mk-table td { padding: 6px 10px; border-bottom: 1px solid #f1f5f9; white-space: nowrap; text-align: center; color: #334155; }
+.mk-table tbody tr { background: #fff; }
+.mk-table tbody tr:hover { background: #f8fafc; }
+.mk-table .mk-left { text-align: left; }
+.mk-table .mk-sticky-no { position: sticky; left: 0; z-index: 1; width: 52px; min-width: 52px; background: inherit; }
+.mk-table .mk-sticky-name { position: sticky; left: 52px; z-index: 1; min-width: 190px; text-align: left; background: inherit; border-right: 1px solid #e2e8f0; }
+.mk-table thead .mk-sticky-no, .mk-table thead .mk-sticky-name { z-index: 4; background: #f8fafc; }
+.mk-table .mk-sep { border-left: 1px solid #e2e8f0; }
+.mk-table .mk-group-row th { background: #f1f5f9; color: #334155; font-size: 12px; }
+.mk-table tfoot td { position: sticky; bottom: 0; z-index: 2; background: #eff6ff; border-top: 2px solid #bfdbfe; border-bottom: 0; font-size: 11px; vertical-align: top; }
+.mk-table tfoot .mk-sticky-no, .mk-table tfoot .mk-sticky-name { z-index: 3; background: #eff6ff; }
+.mk-table .mk-final { font-weight: 700; color: #1d4ed8; background: rgba(239,246,255,.7); }
+.mk-table .mk-top { background: #fef08a; color: #713f12; font-weight: 700; }
+.mk-table .mk-gap { color: #cbd5e1; }
+.mk-table .mk-missing-cell { background: #fff7f7; }
+
+.mk-cell-input { width: 64px; height: 30px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; text-align: center; font-size: 13px; color: #0f172a; }
+.mk-cell-input.is-wide { width: 150px; }
+.mk-cell-input.is-text { text-align: left; padding: 0 8px; }
+.mk-cell-input.is-missing { background: #fff5f5; border-color: #fca5a5; border-style: dashed; }
+.mk-cell-input:disabled { background: #f8fafc; color: #94a3b8; }
+.mk-cell-input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+
+.mk-backdrop { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(15,23,42,.55); }
+.mk-modal { display: flex; flex-direction: column; width: 100%; max-height: calc(100dvh - 32px); background: #fff; border-radius: 14px; box-shadow: 0 25px 50px -12px rgba(15,23,42,.35); overflow: hidden; }
+.mk-modal-head { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; border-bottom: 1px solid #e2e8f0; background: #fff; }
+.mk-modal-head h2 { font-size: 16px; font-weight: 700; color: #0f172a; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.mk-modal-head h2 svg { width: 18px; height: 18px; flex-shrink: 0; }
+.mk-modal-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 20px; }
+.mk-modal-foot { flex-shrink: 0; display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding: 12px 20px; border-top: 1px solid #e2e8f0; background: #f8fafc; }
+
+.mk-section-grid { display: grid; gap: 12px; grid-template-columns: minmax(0,2fr) minmax(0,1.5fr) 110px 110px; }
+@media (max-width: 640px) { .mk-section-grid { grid-template-columns: minmax(0,1fr) minmax(0,1fr); } }
+
+.mk-step { width: 26px; height: 26px; border-radius: 6px; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.mk-step-minus { background: #fee2e2; color: #b91c1c; }
+.mk-step-minus:hover { background: #fecaca; }
+.mk-step-plus { background: #dcfce7; color: #15803d; }
+.mk-step-plus:hover { background: #bbf7d0; }
+
+.mk-reveal-title { font-size: clamp(1.75rem, 4vw, 3.25rem); line-height: 1.15; font-weight: 800; color: #3730a3; }
+.mk-reveal-card { width: min(100%, 22rem); background: #fff; border-radius: 24px; padding: 28px; box-shadow: 0 20px 40px rgba(49,46,129,.15); border: 1px solid #e0e7ff; }
+.mk-reveal-num { font-size: clamp(3rem, 8vw, 5.5rem); line-height: 1; font-weight: 800; }
+.mk-reveal-btn { padding: 14px 32px; border-radius: 999px; background: #4f46e5; color: #fff; font-size: clamp(1rem, 2vw, 1.3rem); font-weight: 700; box-shadow: 0 12px 24px rgba(79,70,229,.3); transition: transform .2s, background-color .2s; }
+.mk-reveal-btn:hover { background: #4338ca; transform: scale(1.04); }
+
+.mk-tab { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border-radius: 8px; font-size: 13px; font-weight: 600; color: #475569; text-align: left; white-space: nowrap; }
+.mk-tab svg { width: 16px; height: 16px; flex-shrink: 0; }
+.mk-tab:hover { background: #eef2f7; }
+.mk-tab.is-active { background: #fff; color: #1d4ed8; box-shadow: 0 1px 2px rgba(15,23,42,.1); }
+
+@media (max-width: 767px) {
+  .marks-page input:not([type="checkbox"]):not([type="radio"]), .marks-page select, .marks-page textarea { font-size: 16px; }
+  .mk-backdrop { padding: 8px; }
+  .mk-modal { max-height: calc(100dvh - 16px); }
+  .mk-modal-body { padding: 14px; }
+}
+`;
+
+// ============================================================================
+// COMPONENT
+// ============================================================================
 export default function Marks() {
-  const { user } = useAuth(); // NEW: Extract user
+  const { user } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [saveFlash, setSaveFlash] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
   const [termCopySuccess, setTermCopySuccess] = useState(false);
 
@@ -251,10 +517,9 @@ export default function Marks() {
   });
 
   const [isCategorySaving, setIsCategorySaving] = useState(false);
-  const categoryOperationLock = React.useRef(false);
-  const selectedCategoryClassRef = React.useRef('');
+  const categoryOperationLock = useRef(false);
+  const selectedCategoryClassRef = useRef('');
 
-  const [mobileMarksPanel, setMobileMarksPanel] = useState('filters');
   const [archives, setArchives] = useState([]);
 
   // Terms State
@@ -267,11 +532,17 @@ export default function Marks() {
   const [selectedCategory, setSelectedCategory] = useState('Assignments');
   const [selectedAssessment, setSelectedAssessment] = useState(null);
 
+  // 'home' = all items board, 'overview' = category table, 'item' = marks entry
+  const [view, setView] = useState('home');
+  const pendingSelectRef = useRef('');
+  const dragIndexRef = useRef(null);
+  const [dragOverIndex, setDragOverIndex] = useState(null);
+
   const [isAssessmentsLoading, setIsAssessmentsLoading] = useState(false);
   const [assessmentsError, setAssessmentsError] = useState('');
   const [isSavingAssessment, setIsSavingAssessment] = useState(false);
 
-  // Firebase-backed preference, separately for every account and class.
+  // Firebase-backed preference: remembers the last viewed term per class.
   const {
     selectedTerm,
     setSelectedTerm,
@@ -285,18 +556,18 @@ export default function Marks() {
     enabled: !isLoading && Boolean(user?.email && selectedClass)
   });
 
-  // Term Management State
-  const [showTermManager, setShowTermManager] = useState(false);
+  // Settings State
+  const [showSettings, setShowSettings] = useState(false);
+  const [settingsTab, setSettingsTab] = useState('general');
   const [newTermName, setNewTermName] = useState('');
   const [editingTerm, setEditingTerm] = useState(null);
   const [editTermName, setEditTermName] = useState('');
 
-  // Form State
   const [newCategoryName, setNewCategoryName] = useState('');
-  const [showAddCategory, setShowAddCategory] = useState(false);
   const [newCategoryIsMulti, setNewCategoryIsMulti] = useState(false);
   const [editingCategory, setEditingCategory] = useState(null);
   const [editCategoryName, setEditCategoryName] = useState('');
+
   const categoryIdentity = JSON.stringify([
     user?.email || '',
     user?.role || ''
@@ -331,27 +602,26 @@ export default function Marks() {
     !categoryLoadError
   );
 
+  const classItemsAllTerms =
+    classCategoryState.key === categoryRequestKey
+      ? classCategoryState.items
+      : [];
+
   const classCategoryConfig = useMemo(() => {
     const settings =
       categorySettingsState.identity === categoryIdentity
         ? categorySettingsState.data
         : {};
 
-    const classItems =
-      classCategoryState.key === categoryRequestKey
-        ? classCategoryState.items
-        : [];
-
     return getMarksClassCategoryConfig(
       settings,
       selectedClass,
-      classItems
+      classItemsAllTerms
     );
   }, [
     categorySettingsState,
-    classCategoryState,
     categoryIdentity,
-    categoryRequestKey,
+    classItemsAllTerms,
     selectedClass
   ]);
 
@@ -366,13 +636,12 @@ export default function Marks() {
     user?.isAdmin &&
     selectedClassInfo &&
     (
-      user.email === 'clng@ktls.edu.hk' ||
+      user.email === SUPER_ADMIN_EMAIL ||
       selectedClassInfo.owner === user.email
     )
   );
 
-  // Shared settings: every administrator viewing the same class
-  // reads the same class-specific category configuration.
+  // Shared category settings for every administrator.
   useEffect(() => {
     if (!user?.email) return;
 
@@ -406,8 +675,7 @@ export default function Marks() {
     );
   }, [categoryIdentity]);
 
-  // Discover categories from ALL terms in the selected class.
-  // This also discovers categories created by a different administrator.
+  // Live list of ALL items (every term) for the selected class.
   useEffect(() => {
     let cancelled = false;
 
@@ -462,7 +730,7 @@ export default function Marks() {
         key: categoryRequestKey,
         items: [],
         ready: false,
-        error: 'Could not load this class’s categories. Refresh after checking your connection and permissions.'
+        error: 'Could not load this class’s items. Refresh after checking your connection and permissions.'
       });
     };
 
@@ -502,12 +770,13 @@ export default function Marks() {
 
   useEffect(() => {
     selectedCategoryClassRef.current = selectedClass;
+    pendingSelectRef.current = '';
 
     setSelectedCategory('Assignments');
     setEditingCategory(null);
-    setShowAddCategory(false);
     setNewCategoryName('');
     setNewCategoryIsMulti(false);
+    setView('home');
   }, [selectedClass]);
 
   useEffect(() => {
@@ -516,91 +785,64 @@ export default function Marks() {
     }
   }, [categoriesReady, categories, selectedCategory]);
 
+  // Add/Edit form state
   const [showAddAssessment, setShowAddAssessment] = useState(false);
   const [isEditingAssessment, setIsEditingAssessment] = useState(false);
+  const [formCategory, setFormCategory] = useState('Assignments');
   const [newAssessmentName, setNewAssessmentName] = useState('');
   const [newAssessmentDate, setNewAssessmentDate] = useState(new Date().toISOString().split('T')[0]);
   const [fullMark, setFullMark] = useState(100);
-const [paperFullMark, setPaperFullMark] = useState(100);
+  const [paperFullMark, setPaperFullMark] = useState(100);
   const [scaleTotalTo100, setScaleTotalTo100] = useState(false);
   const [formTerm, setFormTerm] = useState('');
   const [linkedDocId, setLinkedDocId] = useState('');
-  const [forceMultiSection, setForceMultiSection] = useState(false); // NEW: Force multi-section for any item
-
-  // Multi-section State for UT/Exam
-  const [sectionsConfig, setSectionsConfig] = useState([
-    {
-      id: generateId(),
-      name: 'Paper 1',
-      fullMark: 100,
-      weight: 100,
-      hasSubSections: false,
-      subSections: []
-    }
-  ]);
-
+  const [forceMultiSection, setForceMultiSection] = useState(false);
+  const [sectionsConfig, setSectionsConfig] = useState([newDefaultSection()]);
   const [selectedClassesForNew, setSelectedClassesForNew] = useState([]);
 
   // Marks State
   const [marksData, setMarksData] = useState({});
-
-  // Input Method State
   const [inputMethod, setInputMethod] = useState('individual');
   const [bulkText, setBulkText] = useState('');
 
-  // Mark Overview & Graph Modal State
+  // Overview & Graph Modal
   const [showOverviewModal, setShowOverviewModal] = useState(false);
   const [revealStep, setRevealStep] = useState(0);
   const [classPresetsMap, setClassPresetsMap] = useState({});
 
-  // All Classes Modal State
+  // All Classes Modal
   const [showAllClassesModal, setShowAllClassesModal] = useState(false);
   const [allClassesStudentView, setAllClassesStudentView] = useState(true);
 
-  // Amend Mark Modal State
+  // Amend Modal
   const [showAmendModal, setShowAmendModal] = useState(false);
   const [amendRows, setAmendRows] = useState([]);
   const [hasUnsavedAmendments, setHasUnsavedAmendments] = useState(false);
 
-  // Student View State
+  // Student View
   const [studentView, setStudentView] = useState(false);
-
-// Deduction column visibility.
-  // The assessment's saved setting controls raw/scaled totals.
   const [showDeduct, setShowDeduct] = useState(false);
 
-  // Term Score Calculator State
+  // Term Score Calculator
   const [showTermScoreModal, setShowTermScoreModal] = useState(false);
   const [presets, setPresets] = useState([]);
   const [selectedPresetId, setSelectedPresetId] = useState('');
   const [termScoresData, setTermScoresData] = useState([]);
-  const [isCalculatingScores, setIsCalculatingScores] = useState(false);
-  const [showPresetManager, setShowPresetManager] = useState(false);
+  const [termResultMode, setTermResultMode] = useState('');
+  const [calculatingMode, setCalculatingMode] = useState('');
+  const [classPickerOpen, setClassPickerOpen] = useState(false);
   const [newPresetName, setNewPresetName] = useState('');
   const [newPresetWeights, setNewPresetWeights] = useState({});
   const [isSharedPreset, setIsSharedPreset] = useState(false);
-
-  // Modal specific selections
   const [modalClasses, setModalClasses] = useState([]);
   const [modalTerm, setModalTerm] = useState('');
 
-  // Document Linker State
+  // Document Linker
   const [showDocLinker, setShowDocLinker] = useState(false);
   const [docLinkerTarget, setDocLinkerTarget] = useState(null);
-  const [docFilterOrigin, setDocFilterOrigin] = useState('');
-  const [docFilterYear, setDocFilterYear] = useState('');
-  const [docSearchTerm, setDocSearchTerm] = useState('');
-  const [docFilterMode, setDocFilterMode] = useState('full');
   const [docCatalogueLoading, setDocCatalogueLoading] = useState(false);
   const [docCatalogueError, setDocCatalogueError] = useState('');
 
-  // Refresh while the linker is open:
-  // - immediately through the first revision snapshot;
-  // - after archive saves in another tab/device;
-  // - when returning to this browser tab.
-  //
-  // If another change arrives during a request, run again afterwards
-  // rather than publishing an older request as the final catalogue.
   useEffect(() => {
     if (!showDocLinker || !user?.isAuthorized || !user?.email) {
       return;
@@ -632,8 +874,6 @@ const [paperFullMark, setPaperFullMark] = useState(100);
 
           if (cancelled) return;
 
-          // A revision arrived while this request was in flight.
-          // Fetch again before offering its results for selection.
           if (!rerun) {
             setArchives(documents);
           }
@@ -704,7 +944,7 @@ const [paperFullMark, setPaperFullMark] = useState(100);
     user?.isAuthorized
   ]);
 
-  // Preview Modal State
+  // Preview Modal
   const [previewItem, setPreviewItem] = useState(null);
   const [viewingAnswer, setViewingAnswer] = useState(false);
   const [previewLanguage, setPreviewLanguage] = useState('en');
@@ -715,29 +955,26 @@ const [paperFullMark, setPaperFullMark] = useState(100);
     previewLanguage
   );
 
-  // Linked Marks Modal State
+  // Linked Marks Modal
   const [showMarksModal, setShowMarksModal] = useState(false);
   const [linkedMarksData, setLinkedMarksData] = useState([]);
   const [isLoadingMarks, setIsLoadingMarks] = useState(false);
   const [currentMarksDocTitle, setCurrentMarksDocTitle] = useState('');
   const [linkedMarksError, setLinkedMarksError] = useState('');
   const [linkedMarksMode, setLinkedMarksMode] = useState('total');
-  const linkedMarksRequestRef = React.useRef(0);
+  const linkedMarksRequestRef = useRef(0);
 
-  // Export to Excel State
+  // Export
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportPresetId, setExportPresetId] = useState('');
   const [exportAssessmentsMap, setExportAssessmentsMap] = useState({});
 
-  // Comparison State
-  const [compareAssessmentsList, setCompareAssessmentsList] = useState([]);
+  // Comparison
   const [selectedCompareId, setSelectedCompareId] = useState('');
 
-  // Category defaults are used only when creating a new assessment.
   const categoryDefaultsToMultiSection =
     multiSectionCategories.includes(selectedCategory);
 
-  // The existing assessment's own configuration controls its marks display.
   const selectedAssessmentHasSections =
     Array.isArray(selectedAssessment?.sectionsConfig) &&
     selectedAssessment.sectionsConfig.length > 0;
@@ -746,43 +983,75 @@ const [paperFullMark, setPaperFullMark] = useState(100);
     ? selectedAssessmentHasSections
     : categoryDefaultsToMultiSection;
 
-  // The add/edit form has its own independent layout state.
   const isMultiSectionForm = forceMultiSection;
 
-  // Fetch Comparison Assessments
-  useEffect(() => {
-    const fetchCompareList = async () => {
-      if (!selectedClass || !isMultiSectionCategory || !selectedAssessment) return;
-      const snap = await getDocs(collection(db, "assessments"));
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-        .filter(a => {
-          const matchesClass = (a.classes && Array.isArray(a.classes)) ? a.classes.includes(selectedClass) : a.className === selectedClass;
-          return matchesClass && ['Uniform Test', 'Exam'].includes(a.category) && a.id !== selectedAssessment.id;
-        });
-      setCompareAssessmentsList(list);
-    };
-    fetchCompareList();
-  }, [selectedClass, selectedAssessment, isMultiSectionCategory]);
+  // Students of the selected class
+  const currentClassStudents = useMemo(() => {
+    return students
+      .filter(s => s.className === selectedClass)
+      .sort((a, b) => String(a.classNumber).localeCompare(String(b.classNumber), undefined, { numeric: true }));
+  }, [students, selectedClass]);
 
-  const handleMoveAssessment = async (index, direction, e) => {
-    e.stopPropagation();
-    const newAssessments = [...assessments];
-    if (direction === 'up' && index > 0) {
-      [newAssessments[index - 1], newAssessments[index]] = [newAssessments[index], newAssessments[index - 1]];
-    } else if (direction === 'down' && index < newAssessments.length - 1) {
-      [newAssessments[index + 1], newAssessments[index]] = [newAssessments[index], newAssessments[index + 1]];
-    } else return;
+  const currentStudentIds = useMemo(
+    () => currentClassStudents.map(student => student.id),
+    [currentClassStudents]
+  );
 
-    newAssessments.forEach((a, i) => a.order = i);
-    setAssessments(newAssessments);
+  const firstTerm = terms[0] || '';
 
-    try {
-      const updates = newAssessments.map(a => updateDoc(doc(db, "assessments", a.id), { order: a.order }));
-      await Promise.all(updates);
-    } catch (err) {
-      console.error("Error updating order", err);
-    }
-  };
+  // All items of the selected term grouped by category (main board)
+  const termBoard = useMemo(() => {
+    if (!categoriesReady || !selectedTerm) return null;
+
+    const termItems = classItemsAllTerms.filter(item =>
+      item.term === selectedTerm ||
+      (!item.term && selectedTerm === firstTerm)
+    );
+
+    const boardCategories = marksUniqueNames([
+      ...categories,
+      ...termItems.map(item => item.category)
+    ]);
+
+    return boardCategories.map(category => ({
+      category,
+      items: termItems
+        .filter(item => item.category === category)
+        .sort(sortMarksAssessments)
+    }));
+  }, [
+    categoriesReady,
+    selectedTerm,
+    firstTerm,
+    classItemsAllTerms,
+    categories
+  ]);
+
+  const termCountByCategory = useMemo(() => {
+    const counts = {};
+    (termBoard || []).forEach(group => {
+      counts[group.category] = group.items.length;
+    });
+    return counts;
+  }, [termBoard]);
+
+  const allTermCountByCategory = useMemo(() => {
+    const counts = {};
+    classItemsAllTerms.forEach(item => {
+      counts[item.category] = (counts[item.category] || 0) + 1;
+    });
+    return counts;
+  }, [classItemsAllTerms]);
+
+  // Comparison candidates come from the live class list (no extra reads)
+  const compareAssessmentsList = useMemo(() => {
+    if (!selectedAssessment || !isMultiSectionCategory) return [];
+    return classItemsAllTerms.filter(item =>
+      ['Uniform Test', 'Exam'].includes(item.category) &&
+      item.id !== selectedAssessment.id &&
+      !item.designatedPending
+    );
+  }, [classItemsAllTerms, selectedAssessment, isMultiSectionCategory]);
 
   // ============================================================================
   // 1. INITIAL DATA FETCH
@@ -791,31 +1060,22 @@ const [paperFullMark, setPaperFullMark] = useState(100);
     const fetchInitialData = async () => {
       setIsLoading(true);
       try {
-        // Fetch role mappings first
         const configSnap = await getDoc(doc(db, "system_settings", "config"));
         const roleClasses = configSnap.exists() ? (configSnap.data().roleClasses || {}) : {};
 
-        const classDocRef = doc(db, "settings", "classes");
-        const classDocSnap = await getDoc(classDocRef);
+        const classDocSnap = await getDoc(doc(db, "settings", "classes"));
         let loadedClasses = [];
         let loadedArchivedClasses = [];
         if (classDocSnap.exists()) {
           const rawList = classDocSnap.data().list || [];
-          // Preserve the exact saved identity of every class.
-          // Opening Marks must never rename database classes.
           const classObjects = rawList
             .map(c =>
               typeof c === 'string'
-                ? {
-                  name: c,
-                  owner: 'clng@ktls.edu.hk',
-                  isArchived: false
-                }
+                ? { name: c, owner: SUPER_ADMIN_EMAIL, isArchived: false }
                 : c
             )
             .filter(c => c && typeof c.name === 'string');
 
-          // Fetch user role if not present on the user object
           let currentUserRole = user?.role;
           if (!currentUserRole && user?.email) {
             const userDocSnap = await getDoc(doc(db, "user_roles", user.email));
@@ -826,20 +1086,16 @@ const [paperFullMark, setPaperFullMark] = useState(100);
             }
           }
 
-          // Strict Owner & Role Filter
           let visibleClasses = classObjects;
-          if (user?.email !== 'clng@ktls.edu.hk') {
+          if (user?.email !== SUPER_ADMIN_EMAIL) {
             if (user?.isAdmin || currentUserRole === 'admin') {
-              // Admins see their own created classes
               visibleClasses = classObjects.filter(c => c.owner === user?.email);
             } else {
-              // Non-admins see the class assigned to their role
               const allowed = roleClasses[currentUserRole] || [];
               visibleClasses = classObjects.filter(c => allowed.includes(c.name));
             }
           }
 
-          // Keep as objects for grouping in dropdowns
           loadedClasses = visibleClasses.filter(c => !c.isArchived);
           loadedArchivedClasses = visibleClasses.filter(c => c.isArchived);
 
@@ -872,8 +1128,7 @@ const [paperFullMark, setPaperFullMark] = useState(100);
           }
         }
 
-        const termDocRef = doc(db, "settings", "terms");
-        const termDocSnap = await getDoc(termDocRef);
+        const termDocSnap = await getDoc(doc(db, "settings", "terms"));
         let loadedTermsMap = {};
         if (termDocSnap.exists()) {
           if (termDocSnap.data().map) {
@@ -886,23 +1141,16 @@ const [paperFullMark, setPaperFullMark] = useState(100);
         }
         setTermsMap(loadedTermsMap);
 
-        // Categories are loaded separately for the selected class.
-        // Do not load or combine old per-administrator category lists here.
-
-        const presetsRef = doc(db, "settings", "presets");
-        const presetsSnap = await getDoc(presetsRef);
+        const presetsSnap = await getDoc(doc(db, "settings", "presets"));
         let allPresets = [];
         if (presetsSnap.exists() && presetsSnap.data().list) {
           allPresets = presetsSnap.data().list;
         }
 
-        const classPresetsRef = doc(db, "settings", "classPresets");
-        const classPresetsSnap = await getDoc(classPresetsRef);
+        const classPresetsSnap = await getDoc(doc(db, "settings", "classPresets"));
         if (classPresetsSnap.exists() && classPresetsSnap.data().map) {
           setClassPresetsMap(classPresetsSnap.data().map);
         }
-
-        let presetsUpdated = false;
 
         if (!allPresets.some(p => p.name === 'JS Geography')) {
           allPresets.push({
@@ -911,45 +1159,14 @@ const [paperFullMark, setPaperFullMark] = useState(100);
             weights: { 'Assignments': 0, 'Quizzes': 0, 'Uniform Test': 50 },
             isCustom: true,
             isShared: true,
-            owner: 'clng@ktls.edu.hk'
+            owner: SUPER_ADMIN_EMAIL
           });
-          presetsUpdated = true;
-        }
-
-        if (!allPresets.some(p => p.name === 'Learning Attitude (Homework)')) {
-          allPresets.push({
-            id: 'la-hw-preset',
-            name: 'Learning Attitude (Homework)',
-            weights: {},
-            isCustom: true,
-            isShared: true,
-            owner: 'clng@ktls.edu.hk'
-          });
-          presetsUpdated = true;
-        }
-
-        if (!allPresets.some(p => p.name === 'Learning Attitude (Lesson)')) {
-          allPresets.push({
-            id: 'la-lesson-preset',
-            name: 'Learning Attitude (Lesson)',
-            weights: {},
-            isCustom: true,
-            isShared: true,
-            owner: 'clng@ktls.edu.hk'
-          });
-          presetsUpdated = true;
-        }
-
-        if (presetsUpdated) {
           await setDoc(doc(db, "settings", "presets"), { list: allPresets }, { merge: true });
         }
 
-        // Filter presets for current user (show shared ones OR ones they own)
-        // Normal admins will no longer see old presets without an owner unless they are shared
-        const visiblePresets = allPresets.filter(p => {
-          if (user?.email === 'clng@ktls.edu.hk') return true; // Super admin sees all
-          return p.isShared || p.owner === user?.email;
-        });
+        // Learning Attitude is now calculated with its own buttons,
+        // so old Learning Attitude presets are hidden (not deleted).
+        const visiblePresets = marksVisiblePresets(allPresets, user?.email);
         setPresets(visiblePresets);
 
         if (visiblePresets.length > 0) {
@@ -957,19 +1174,16 @@ const [paperFullMark, setPaperFullMark] = useState(100);
         }
 
         const querySnapshot = await getDocs(collection(db, "students"));
-        // Filter out dummy and deleted students so they don't affect stats or appear in the list
         const studentsList = querySnapshot.docs
-          .map(doc => ({ id: doc.id, ...doc.data() }))
+          .map(d => ({ id: d.id, ...d.data() }))
           .filter(student => !student.isDummy && !student.isDeleted);
         setStudents(studentsList);
 
-        // Fetch the archive catalogue through the shared access service.
         const archivesList = await loadAccessibleArchives({
           effectiveEmail: user.email
         });
 
         setArchives(archivesList);
-
       } catch (error) {
         console.error("Error fetching initial data:", error);
       }
@@ -996,14 +1210,7 @@ const [paperFullMark, setPaperFullMark] = useState(100);
       : getDefaultTerms(selectedClass);
 
     setTerms(classTerms);
-
-    // The preference hook restores the term from Firebase.
-    // Do not write a first-term default here while restoration is pending.
-  }, [
-    isLoading,
-    selectedClass,
-    termsMap
-  ]);
+  }, [isLoading, selectedClass, termsMap]);
 
   useEffect(() => {
     if (selectedTerm) {
@@ -1012,17 +1219,14 @@ const [paperFullMark, setPaperFullMark] = useState(100);
   }, [selectedTerm]);
 
   // ============================================================================
-  // 2. FETCH ASSESSMENTS WHEN CLASS, TERM OR CATEGORY CHANGES
+  // 2. LIVE ITEMS OF THE SELECTED CATEGORY
   // ============================================================================
-  const firstTerm = terms[0] || '';
-
   useEffect(() => {
     setAssessments([]);
     setSelectedAssessment(null);
     setMarksData({});
     setBulkText('');
     setSelectedCompareId('');
-    setCompareAssessmentsList([]);
     setAssessmentsError('');
 
     if (
@@ -1061,29 +1265,27 @@ const [paperFullMark, setPaperFullMark] = useState(100);
 
             return matchesClass && matchesTerm;
           })
-          .sort((a, b) => {
-            const difference = (a.order ?? -1) - (b.order ?? -1);
+          .sort(sortMarksAssessments);
 
-            if (difference) return difference;
-
-            return (Date.parse(b.date || '') || 0) -
-              (Date.parse(a.date || '') || 0);
-          });
+        // An item chosen from another category waits for this list.
+        const wantedId = pendingSelectRef.current;
+        const wantedItem = wantedId
+          ? loaded.find(item => item.id === wantedId) || null
+          : null;
+        if (wantedId) pendingSelectRef.current = '';
 
         setAssessments(loaded);
         setAssessmentsError('');
         setIsAssessmentsLoading(false);
 
         setSelectedAssessment(previous => {
+          if (wantedItem) return wantedItem;
           if (!previous) return null;
 
           const current = loaded.find(item => item.id === previous.id);
 
           if (!current) return null;
 
-          // Preserve the marks reference when only source metadata
-          // changed, so an unrelated name/link sync does not reset
-          // locally edited mark inputs.
           const sameMarks =
             JSON.stringify(current.marks || {}) ===
             JSON.stringify(previous.marks || {});
@@ -1112,6 +1314,18 @@ const [paperFullMark, setPaperFullMark] = useState(100);
     firstTerm
   ]);
 
+  // If the open item disappears (deleted / moved), go back to the board.
+  useEffect(() => {
+    if (
+      view === 'item' &&
+      !selectedAssessment &&
+      !isAssessmentsLoading &&
+      !pendingSelectRef.current
+    ) {
+      setView('home');
+    }
+  }, [view, selectedAssessment, isAssessmentsLoading]);
+
   const selectedAssessmentId = selectedAssessment?.id || '';
   const selectedAssessmentMarks = selectedAssessment?.marks;
 
@@ -1119,6 +1333,71 @@ const [paperFullMark, setPaperFullMark] = useState(100);
     setMarksData(selectedAssessmentMarks || {});
     setBulkText('');
   }, [selectedAssessmentId, selectedAssessmentMarks]);
+
+  const marksDirty =
+    view === 'item' &&
+    Boolean(selectedAssessment) &&
+    !selectedAssessment.designatedPending &&
+    JSON.stringify(marksData || {}) !== JSON.stringify(selectedAssessment.marks || {});
+
+  const guardUnsaved = () =>
+    !marksDirty ||
+    window.confirm('You have unsaved marks for this item. Leave without saving?');
+
+  // ============================================================================
+  // NAVIGATION
+  // ============================================================================
+  const goHome = () => {
+    if (!guardUnsaved()) return;
+    pendingSelectRef.current = '';
+    setSelectedAssessment(null);
+    setView('home');
+  };
+
+  const openItem = item => {
+    if (view === 'item' && selectedAssessment?.id === item.id) return;
+    if (!guardUnsaved()) return;
+
+    const category = item.category || selectedCategory;
+    setView('item');
+
+    if (category !== selectedCategory) {
+      pendingSelectRef.current = item.id;
+      setSelectedCategory(category);
+    } else {
+      pendingSelectRef.current = '';
+      setSelectedAssessment(assessments.find(a => a.id === item.id) || item);
+    }
+  };
+
+  const openOverview = (category = selectedCategory) => {
+    if (!guardUnsaved()) return;
+    pendingSelectRef.current = '';
+    setSelectedAssessment(null);
+    if (category !== selectedCategory) setSelectedCategory(category);
+    setView('overview');
+  };
+
+  const reorderAssessments = async (from, to) => {
+    if (from === null || to === null || from === undefined || to === undefined || from === to) return;
+
+    const next = [...assessments];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    const withOrder = next.map((item, index) => ({ ...item, order: index }));
+    setAssessments(withOrder);
+
+    try {
+      await Promise.all(
+        withOrder.map(item =>
+          updateDoc(doc(db, 'assessments', item.id), { order: item.order })
+        )
+      );
+    } catch (error) {
+      console.error('Error updating order', error);
+      alert('Could not save the new order.');
+    }
+  };
 
   // ============================================================================
   // 3. TERM & CATEGORY MANAGEMENT
@@ -1147,7 +1426,7 @@ const [paperFullMark, setPaperFullMark] = useState(100);
   };
 
   const handleDeleteTerm = (tName) => {
-    if (!window.confirm(`Are you sure you want to delete "${tName}" for ${selectedClass}?`)) return;
+    if (!window.confirm(`Are you sure you want to delete "${tName}" for ${cleanClassName(selectedClass)}?`)) return;
     const updated = terms.filter(t => t !== tName);
     saveTerms(updated);
     if (selectedTerm === tName) {
@@ -1213,7 +1492,6 @@ const [paperFullMark, setPaperFullMark] = useState(100);
     setIsCategorySaving(true);
 
     try {
-      // Server read: an assessment in another term still counts as an item.
       const classItems = await readMarksClassAssessments(targetClass);
       const settingsRef = doc(db, 'settings', 'categories');
 
@@ -1259,8 +1537,6 @@ const [paperFullMark, setPaperFullMark] = useState(100);
         return next;
       });
 
-      // Immediately reflect the committed class setting locally.
-      // The shared listener also delivers it to other open sessions.
       setCategorySettingsState(previous => {
         if (previous.identity !== categoryIdentity) return previous;
 
@@ -1318,8 +1594,6 @@ const [paperFullMark, setPaperFullMark] = useState(100);
       () => {
         setNewCategoryName('');
         setNewCategoryIsMulti(false);
-        setShowAddCategory(false);
-        setSelectedCategory(name);
       }
     );
   };
@@ -1334,7 +1608,7 @@ const [paperFullMark, setPaperFullMark] = useState(100);
 
     if (!window.confirm(
       `Remove the empty category "${name}" from ` +
-      `${selectedClass.replace(/\u200B/g, '')} only?\n\n` +
+      `${cleanClassName(selectedClass)} only?\n\n` +
       'A category with assessments in any term cannot be removed.'
     )) return;
 
@@ -1419,7 +1693,7 @@ const [paperFullMark, setPaperFullMark] = useState(100);
   const handleCleanClassCategories = async () => {
     if (!window.confirm(
       `Remove empty custom categories from ` +
-      `${selectedClass.replace(/\u200B/g, '')}?\n\n` +
+      `${cleanClassName(selectedClass)}?\n\n` +
       'The six defaults and every category with an assessment in ANY term will remain.\n' +
       'No assessments or marks will be deleted.'
     )) return;
@@ -1448,7 +1722,7 @@ const [paperFullMark, setPaperFullMark] = useState(100);
   };
 
   const handleCleanAllClassCategories = async () => {
-    if (user?.email !== 'clng@ktls.edu.hk') return;
+    if (user?.email !== SUPER_ADMIN_EMAIL) return;
     if (categoryOperationLock.current) return;
 
     if (!window.confirm(
@@ -1510,8 +1784,6 @@ const [paperFullMark, setPaperFullMark] = useState(100);
             );
         });
 
-        // Preserve old legacy fields as an unused backup.
-        // This version of Marks never reads their per-user category lists.
         transaction.set(settingsRef, {
           ...settings,
           schemaVersion: 2,
@@ -1539,36 +1811,58 @@ const [paperFullMark, setPaperFullMark] = useState(100);
     }
   };
 
+  const handleRevealAllClasses = async () => {
+    if (!window.confirm("Are you sure you want to GLOBALLY disclose ALL hidden assessments across ALL classes and terms?")) return;
+    try {
+      const q = query(collection(db, "assessments"), where("isDisclosed", "==", false));
+      const snap = await getDocs(q);
+      if (snap.empty) {
+        alert("No hidden assessments found.");
+        return;
+      }
+      await Promise.all(snap.docs.map(d => updateDoc(doc(db, "assessments", d.id), { isDisclosed: true })));
+      setAssessments(previous => previous.map(a => a.isDisclosed === false ? { ...a, isDisclosed: true } : a));
+      alert(`Successfully disclosed ${snap.docs.length} hidden assessments globally.`);
+    } catch (e) {
+      console.error(e);
+      alert("Failed to disclose assessments.");
+    }
+  };
+
+  const handleSaveDefaultPreset = async value => {
+    const newMap = { ...classPresetsMap, [selectedClass]: value };
+    setClassPresetsMap(newMap);
+    try {
+      await setDoc(doc(db, "settings", "classPresets"), { map: newMap }, { merge: true });
+    } catch (error) {
+      console.error(error);
+      alert('Could not save the default term score method.');
+    }
+  };
+
+  const openSettings = (tab = 'general') => {
+    setSettingsTab(tab);
+    setShowSettings(true);
+  };
+
   // ============================================================================
   // 4. ASSESSMENT MANAGEMENT & CONFIG
   // ============================================================================
-  const openAddModal = () => {
-    if (!selectedClass || !selectedTerm || !selectedCategory) {
-      alert('Please select a class, term, and category first.');
+  const openAddModal = (category = selectedCategory) => {
+    if (!selectedClass || !selectedTerm || !category) {
+      alert('Please select a class and term first.');
       return;
     }
 
+    setFormCategory(category);
     setNewAssessmentName('');
     setNewAssessmentDate(new Date().toISOString().split('T')[0]);
     setFullMark(100);
     setPaperFullMark(100);
-setLinkedDocId('');
-    setForceMultiSection(categoryDefaultsToMultiSection);
-    setScaleTotalTo100(
-      ['Uniform Test', 'Exam'].includes(selectedCategory)
-    );
-
-    setSectionsConfig([
-      {
-        id: generateId(),
-        name: 'Paper 1',
-        fullMark: 100,
-        weight: 100,
-        hasSubSections: false,
-        subSections: []
-      }
-    ]);
-
+    setLinkedDocId('');
+    setForceMultiSection(multiSectionCategories.includes(category));
+    setScaleTotalTo100(['Uniform Test', 'Exam'].includes(category));
+    setSectionsConfig([newDefaultSection()]);
     setSelectedClassesForNew([selectedClass]);
     setFormTerm(selectedTerm);
     setIsEditingAssessment(false);
@@ -1582,6 +1876,7 @@ setLinkedDocId('');
       ? selectedAssessment.sectionsConfig
       : [];
 
+    setFormCategory(selectedAssessment.category || selectedCategory);
     setNewAssessmentName(selectedAssessment.name || '');
     setNewAssessmentDate(
       selectedAssessment.date || new Date().toISOString().split('T')[0]
@@ -1597,33 +1892,24 @@ setLinkedDocId('');
       (selectedAssessment.designatedPending ? '' : 100)
     );
 
-setLinkedDocId(selectedAssessment.linkedDocId || '');
-    setScaleTotalTo100(
-      assessmentUsesScaling(selectedAssessment)
-    );
+    setLinkedDocId(selectedAssessment.linkedDocId || '');
+    setScaleTotalTo100(assessmentUsesScaling(selectedAssessment));
 
-    // Determine the form format from this item, not from another item
-    // or a previously opened form.
-    setForceMultiSection(existingSections.length > 0);
+    setForceMultiSection(
+      existingSections.length > 0 ||
+      (
+        selectedAssessment.designatedPending &&
+        multiSectionCategories.includes(selectedAssessment.category)
+      )
+    );
 
     setSectionsConfig(
       existingSections.length > 0
         ? existingSections.map(section => ({
           ...section,
-          subSections: (section.subSections || []).map(sub => ({
-            ...sub
-          }))
+          subSections: (section.subSections || []).map(sub => ({ ...sub }))
         }))
-        : [
-          {
-            id: generateId(),
-            name: 'Paper 1',
-            fullMark: 100,
-            weight: 100,
-            hasSubSections: false,
-            subSections: []
-          }
-        ]
+        : [newDefaultSection()]
     );
 
     setSelectedClassesForNew(
@@ -1739,15 +2025,16 @@ setLinkedDocId(selectedAssessment.linkedDocId || '');
     if (isSavingAssessment) return;
 
     const useSections = isMultiSectionForm;
+    const category = formCategory;
 
     const finalName =
       newAssessmentName.trim() ||
-      (useSections ? `${formTerm} ${selectedCategory}` : '');
+      (useSections ? `${formTerm} ${category}` : '');
 
     if (
       !finalName ||
       selectedClassesForNew.length === 0 ||
-      !selectedCategory ||
+      !category ||
       !formTerm ||
       !newAssessmentDate
     ) {
@@ -1760,8 +2047,6 @@ setLinkedDocId(selectedAssessment.linkedDocId || '');
       return;
     }
 
-    // Changing an existing item's mark-storage format could make its
-    // existing marks unreadable. Full marks and weights remain editable.
     if (
       isEditingAssessment &&
       !selectedAssessment?.designatedPending &&
@@ -1789,13 +2074,10 @@ setLinkedDocId(selectedAssessment.linkedDocId || '');
       return;
     }
 
-let savedSections = null;
+    let savedSections = null;
 
     if (useSections) {
-      if (
-        scaleTotalTo100 &&
-        !isPositiveNumber(paperFullMark)
-      ) {
+      if (scaleTotalTo100 && !isPositiveNumber(paperFullMark)) {
         alert('The paper full mark must be a number greater than zero.');
         return;
       }
@@ -1819,10 +2101,7 @@ let savedSections = null;
           return;
         }
 
-        if (
-          scaleTotalTo100 &&
-          !isNonNegativeNumber(section.weight)
-        ) {
+        if (scaleTotalTo100 && !isNonNegativeNumber(section.weight)) {
           alert('Each section weight must be zero or greater.');
           return;
         }
@@ -1837,9 +2116,7 @@ let savedSections = null;
               !isPositiveNumber(sub.fullMark)
             )
           ) {
-            alert(
-              'Each enabled subsection needs a name and a full mark greater than zero.'
-            );
+            alert('Each enabled subsection needs a name and a full mark greater than zero.');
             return;
           }
         }
@@ -1847,14 +2124,9 @@ let savedSections = null;
 
       if (
         scaleTotalTo100 &&
-        sectionsConfig.reduce(
-          (sum, section) => sum + Number(section.weight),
-          0
-        ) <= 0
+        sectionsConfig.reduce((sum, section) => sum + Number(section.weight), 0) <= 0
       ) {
-        alert(
-          'At least one section needs a positive weight when conversion to 100 is enabled.'
-        );
+        alert('At least one section needs a positive weight when conversion to 100 is enabled.');
         return;
       }
 
@@ -1864,8 +2136,6 @@ let savedSections = null;
         fullMark: scaleTotalTo100
           ? Number(section.fullMark)
           : getSectionRawFullMark(section),
-        // Retain weights when raw mode is selected so conversion can
-        // be enabled again later without losing the configuration.
         weight: isNonNegativeNumber(section.weight)
           ? Number(section.weight)
           : 0,
@@ -1884,11 +2154,11 @@ let savedSections = null;
     try {
       const assessmentData = {
         classes: [...selectedClassesForNew],
-        category: selectedCategory,
+        category,
         term: formTerm,
         name: finalName,
         date: newAssessmentDate,
-fullMark: useSections ? null : Number(fullMark),
+        fullMark: useSections ? null : Number(fullMark),
         paperFullMark: useSections
           ? (
             scaleTotalTo100
@@ -1902,7 +2172,7 @@ fullMark: useSections ? null : Number(fullMark),
         scaleTotalTo100: useSections ? scaleTotalTo100 : false,
         sectionsConfig: savedSections,
         linkedDocId: linkedDocId || null,
-...(isEditingAssessment && (
+        ...(isEditingAssessment && (
           selectedAssessment?.designatedSource ||
           selectedAssessment?.designatedPending
         )
@@ -1913,33 +2183,23 @@ fullMark: useSections ? null : Number(fullMark),
       if (isEditingAssessment) {
         const assessmentId = selectedAssessment.id;
 
-        await updateDoc(
-          doc(db, 'assessments', assessmentId),
-          assessmentData
-        );
+        await updateDoc(doc(db, 'assessments', assessmentId), assessmentData);
 
         const updatedAssessment = {
           ...selectedAssessment,
           ...assessmentData
         };
 
-        const remainsInCurrentClass =
-          selectedClassesForNew.includes(selectedClass);
-
-        const remainsInCurrentView =
-          remainsInCurrentClass && formTerm === selectedTerm;
+        const remainsInCurrentClass = selectedClassesForNew.includes(selectedClass);
+        const remainsInCurrentView = remainsInCurrentClass && formTerm === selectedTerm;
 
         setAssessments(previous =>
           remainsInCurrentView
-            ? previous.map(a =>
-              a.id === assessmentId ? { ...a, ...assessmentData } : a
-            )
+            ? previous.map(a => a.id === assessmentId ? { ...a, ...assessmentData } : a)
             : previous.filter(a => a.id !== assessmentId)
         );
 
-        setSelectedAssessment(
-          remainsInCurrentView ? updatedAssessment : null
-        );
+        setSelectedAssessment(remainsInCurrentView ? updatedAssessment : null);
 
         if (remainsInCurrentClass && formTerm !== selectedTerm) {
           setSelectedTerm(formTerm);
@@ -1951,10 +2211,7 @@ fullMark: useSections ? null : Number(fullMark),
           isDisclosed: false
         };
 
-        const docRef = await addDoc(
-          collection(db, 'assessments'),
-          newData
-        );
+        const docRef = await addDoc(collection(db, 'assessments'), newData);
 
         const addedAssessment = {
           id: docRef.id,
@@ -1965,8 +2222,14 @@ fullMark: useSections ? null : Number(fullMark),
           selectedClassesForNew.includes(selectedClass) &&
           formTerm === selectedTerm
         ) {
-          setAssessments(previous => [addedAssessment, ...previous]);
-          setSelectedAssessment(addedAssessment);
+          if (category === selectedCategory) {
+            setAssessments(previous => [addedAssessment, ...previous]);
+            setSelectedAssessment(addedAssessment);
+          } else {
+            pendingSelectRef.current = docRef.id;
+            setSelectedCategory(category);
+          }
+          setView('item');
         }
       }
 
@@ -1998,7 +2261,7 @@ fullMark: useSections ? null : Number(fullMark),
 
     try {
       await deleteDoc(doc(db, "assessments", id));
-      setAssessments(assessments.filter(a => a.id !== id));
+      setAssessments(previous => previous.filter(a => a.id !== id));
       if (selectedAssessment?.id === id) {
         setSelectedAssessment(null);
         setMarksData({});
@@ -2006,6 +2269,20 @@ fullMark: useSections ? null : Number(fullMark),
     } catch (error) {
       console.error("Error deleting assessment:", error);
       alert("Failed to delete assessment.");
+    }
+  };
+
+  const toggleDisclosure = async () => {
+    if (!selectedAssessment) return;
+    const newStatus = !selectedAssessment.isDisclosed;
+    try {
+      await updateDoc(doc(db, "assessments", selectedAssessment.id), { isDisclosed: newStatus });
+      const updated = { ...selectedAssessment, isDisclosed: newStatus };
+      setSelectedAssessment(updated);
+      setAssessments(previous => previous.map(a => a.id === updated.id ? updated : a));
+    } catch (e) {
+      console.error(e);
+      alert("Failed to update disclosure status.");
     }
   };
 
@@ -2076,6 +2353,11 @@ fullMark: useSections ? null : Number(fullMark),
     setMarksData(newMarks);
   };
 
+  const flashSaved = () => {
+    setSaveFlash(true);
+    setTimeout(() => setSaveFlash(false), 2000);
+  };
+
   const handleSaveMarks = async () => {
     if (!selectedAssessment) return;
 
@@ -2087,16 +2369,14 @@ fullMark: useSections ? null : Number(fullMark),
     setIsSaving(true);
 
     try {
-      const assessmentRef = doc(db, "assessments", selectedAssessment.id);
-      await updateDoc(assessmentRef, {
+      await updateDoc(doc(db, "assessments", selectedAssessment.id), {
         marks: marksData
       });
 
       const updatedAssessment = { ...selectedAssessment, marks: marksData };
       setSelectedAssessment(updatedAssessment);
-      setAssessments(assessments.map(a => a.id === updatedAssessment.id ? updatedAssessment : a));
-
-      alert("Marks saved successfully!");
+      setAssessments(previous => previous.map(a => a.id === updatedAssessment.id ? updatedAssessment : a));
+      flashSaved();
     } catch (error) {
       console.error("Error saving marks:", error);
       alert("Failed to save marks.");
@@ -2109,7 +2389,7 @@ fullMark: useSections ? null : Number(fullMark),
     let nextRow = rowIndex;
     let nextCol = colIndex;
 
-    if (e.key === 'ArrowDown') nextRow++;
+    if (e.key === 'ArrowDown' || e.key === 'Enter') nextRow++;
     else if (e.key === 'ArrowUp') nextRow--;
     else if (e.key === 'ArrowRight') nextCol++;
     else if (e.key === 'ArrowLeft') nextCol--;
@@ -2124,7 +2404,7 @@ fullMark: useSections ? null : Number(fullMark),
   };
 
   // ============================================================================
-  // AMEND MARKS LOGIC
+  // AMEND MARKS
   // ============================================================================
   const openAmendModal = () => {
     const initialRows = Array.from({ length: 8 }).map(() => ({
@@ -2156,19 +2436,10 @@ fullMark: useSections ? null : Number(fullMark),
     setAmendRows(prev => prev.filter(r => r.id !== id));
   };
 
-  // Main table only displays the selected class by default
-  const currentClassStudents = useMemo(() => {
-    return students
-      .filter(s => s.className === selectedClass)
-      .sort((a, b) => String(a.classNumber).localeCompare(String(b.classNumber), undefined, { numeric: true }));
-  }, [students, selectedClass]);
-
-  // Determine if selected assessment is shared across multiple classes
   const assessmentClasses = useMemo(() => {
     return selectedAssessment?.classes || (selectedAssessment?.className ? [selectedAssessment.className] : []);
   }, [selectedAssessment]);
 
-  // All classes students for the combined modal
   const allClassesStudents = useMemo(() => {
     if (!selectedAssessment || assessmentClasses.length <= 1) return [];
     return students
@@ -2179,15 +2450,14 @@ fullMark: useSections ? null : Number(fullMark),
       });
   }, [students, selectedAssessment, assessmentClasses]);
 
-  const handleAmendQueryChange = (rowId, query) => {
+  const handleAmendQueryChange = (rowId, queryText) => {
     let foundStudent = null;
-    const q = query.trim().toUpperCase();
+    const q = queryText.trim().toUpperCase();
     if (q) {
-      // Search in all classes linked to this assessment, or just current class if not shared
       const searchPool = assessmentClasses.length > 1 ? allClassesStudents : currentClassStudents;
 
       foundStudent = searchPool.find(s => {
-        const match1 = s.classNumber.toString() === q && s.className === selectedClass;
+        const match1 = String(s.classNumber) === q && s.className === selectedClass;
         const match2 = `${s.className}${s.classNumber}`.replace(/\s/g, '').toUpperCase() === q;
         return match1 || match2;
       });
@@ -2195,10 +2465,11 @@ fullMark: useSections ? null : Number(fullMark),
 
     setAmendRows(prev => prev.map(r => {
       if (r.id === rowId) {
-        const initialMarks = foundStudent ? JSON.parse(JSON.stringify(marksData[foundStudent.id] || {})) : {};
+        const source = foundStudent ? marksData[foundStudent.id] : null;
+        const initialMarks = source && typeof source === 'object' ? JSON.parse(JSON.stringify(source)) : {};
         return {
           ...r,
-          query,
+          query: queryText,
           student: foundStudent,
           marks: initialMarks,
           originalMarks: JSON.parse(JSON.stringify(initialMarks))
@@ -2213,7 +2484,7 @@ fullMark: useSections ? null : Number(fullMark),
     setAmendRows(prev => prev.map(r => {
       if (r.id === rowId && r.student) {
         const currentVal = parseFloat(r.marks[subId]) || 0;
-        const newVal = Math.max(0, currentVal + amount);
+        const newVal = Math.max(0, Number((currentVal + amount).toFixed(2)));
         return {
           ...r,
           marks: { ...r.marks, [subId]: newVal.toString() }
@@ -2221,6 +2492,15 @@ fullMark: useSections ? null : Number(fullMark),
       }
       return r;
     }));
+  };
+
+  const setAmendMark = (rowId, subId, value) => {
+    setHasUnsavedAmendments(true);
+    setAmendRows(prev => prev.map(r =>
+      r.id === rowId && r.student
+        ? { ...r, marks: { ...r.marks, [subId]: value } }
+        : r
+    ));
   };
 
   const saveAmendments = async () => {
@@ -2241,24 +2521,22 @@ fullMark: useSections ? null : Number(fullMark),
 
     setIsSaving(true);
     try {
-      const assessmentRef = doc(db, "assessments", selectedAssessment.id);
-      await updateDoc(assessmentRef, { marks: updatedMarksData });
+      await updateDoc(doc(db, "assessments", selectedAssessment.id), { marks: updatedMarksData });
 
       const updatedAssessment = { ...selectedAssessment, marks: updatedMarksData };
       setSelectedAssessment(updatedAssessment);
-      setAssessments(assessments.map(a => a.id === updatedAssessment.id ? updatedAssessment : a));
+      setAssessments(previous => previous.map(a => a.id === updatedAssessment.id ? updatedAssessment : a));
       setMarksData(updatedMarksData);
 
       setHasUnsavedAmendments(false);
       setShowAmendModal(false);
-      alert("Amendments saved successfully!");
+      flashSaved();
     } catch (error) {
       console.error("Error saving amendments:", error);
       alert("Failed to save amendments.");
     }
     setIsSaving(false);
   };
-
 
   // ============================================================================
   // CALCULATIONS & STATS
@@ -2300,53 +2578,68 @@ fullMark: useSections ? null : Number(fullMark),
     return hasMark ? total : null;
   };
 
-  const calculatePaperRawTotal = (studentMarks, config) => {
-    if (!studentMarks || typeof studentMarks !== 'object' || !config) return null;
-    let total = 0;
-    let hasValidMark = false;
-
-    config.forEach(sec => {
-      const secRawTotal = calculateSectionRawTotal(studentMarks, sec);
-      if (secRawTotal !== null) {
-        total += secRawTotal;
-        hasValidMark = true;
-      }
-    });
-
-    return hasValidMark ? parseFloat(total.toFixed(1)) : null;
-  };
-
-// Kept under the existing local name to minimize changes elsewhere.
-  // The whole assessment is now passed in, so its saved marking
-  // method controls whether the result is raw or converted to 100.
   const calculateScaledTotal = (studentMarks, assessment) =>
     calculateAssessmentTotal(studentMarks, assessment);
 
-  // Calculate overall stats for all classes modal
+  // Final (after deduction) mark of any saved item for one student.
+  const getSavedFinalMark = (assessment, studentId) => {
+    const marks = assessment?.marks || {};
+    const studentMark = marks[studentId];
+    const deduction = parseFloat(marks[`${studentId}_deduction`]) || 0;
+    const multi = Array.isArray(assessment?.sectionsConfig) && assessment.sectionsConfig.length > 0;
+    const total = multi
+      ? calculateScaledTotal(studentMark, assessment)
+      : calculateTotal(studentMark);
+    return total === null ? null : total - deduction;
+  };
+
   const allClassesStatsData = useMemo(() => {
     if (!selectedAssessment || !showAllClassesModal) return null;
     const marks = [];
-    const hasSections = selectedAssessment.sectionsConfig && selectedAssessment.sectionsConfig.length > 0;
+    const sectioned = selectedAssessment.sectionsConfig && selectedAssessment.sectionsConfig.length > 0;
     allClassesStudents.forEach(student => {
       const studentMarks = marksData[student.id];
       const rawTotal = calculateTotal(studentMarks);
-      const scaledTotal = hasSections ? calculateScaledTotal(studentMarks, selectedAssessment) : rawTotal;
+      const scaledTotal = sectioned ? calculateScaledTotal(studentMarks, selectedAssessment) : rawTotal;
       const deduction = parseFloat(marksData[`${student.id}_deduction`]) || 0;
       if (scaledTotal !== null) {
         marks.push(scaledTotal - deduction);
       }
     });
-const fullMark = getAssessmentFullMark(selectedAssessment);
-    return { marks, fullMark };
+    return { marks, fullMark: getAssessmentFullMark(selectedAssessment) };
   }, [allClassesStudents, marksData, selectedAssessment, showAllClassesModal]);
 
-  let topStudentIds = new Set();
-  const hasSections = selectedAssessment?.sectionsConfig && selectedAssessment.sectionsConfig.length > 0;
+  // Modal Terms Logic
+  const modalTermsList = useMemo(() => {
+    if (modalClasses.length === 0) return [];
+    const refClass = modalClasses[0];
+    return termsMap[refClass] && termsMap[refClass].length > 0
+      ? termsMap[refClass]
+      : getDefaultTerms(refClass);
+  }, [modalClasses, termsMap]);
 
+  useEffect(() => {
+    if (modalClasses.length > 0 && !modalTermsList.includes(modalTerm)) {
+      setModalTerm(modalTermsList[0] || '');
+    }
+  }, [modalClasses, modalTermsList, modalTerm]);
+
+  const linkableDocs = useMemo(() => {
+    const items = [];
+    archives.forEach(a => {
+      items.push({ ...a, linkMode: 'full' });
+      a.subQuestions?.forEach(sq => {
+        items.push({ ...a, id: `${a.id}_${sq.id}`, title: `${a.title} Q${sq.label}`, linkMode: 'sub' });
+      });
+    });
+    return items;
+  }, [archives]);
+
+  const topStudentIds = new Set();
+  const hasSections = selectedAssessment?.sectionsConfig && selectedAssessment.sectionsConfig.length > 0;
   const allScaledTotals = [];
 
-  // Calculate Stats Data
-const statsData = {
+  const statsData = {
     final: {
       marks: [],
       fullMark: getAssessmentFullMark(selectedAssessment)
@@ -2365,7 +2658,7 @@ const statsData = {
           statsData[sec.id] = { marks: [], fullMark: parseFloat(sec.fullMark) };
         }
       });
-statsData.scaledTotal = {
+      statsData.scaledTotal = {
         marks: [],
         fullMark: getAssessmentFullMark(selectedAssessment)
       };
@@ -2384,7 +2677,7 @@ statsData.scaledTotal = {
 
         let finalTotal = null;
         if (scaledTotal !== null) {
-          finalTotal = (scaledTotal - deduction);
+          finalTotal = scaledTotal - deduction;
           statsData.final.marks.push(finalTotal);
         }
 
@@ -2393,22 +2686,20 @@ statsData.scaledTotal = {
 
           selectedAssessment.sectionsConfig.forEach(sec => {
             if (sec.hasSubSections) {
-              let secRawTotal = calculateSectionRawTotal(studentMarks, sec);
+              const secRawTotal = calculateSectionRawTotal(studentMarks, sec);
               if (secRawTotal !== null) statsData[`sec_${sec.id}`].marks.push(secRawTotal);
 
               sec.subSections.forEach(sub => {
                 const val = (studentMarks && typeof studentMarks === 'object') ? studentMarks[sub.id] : null;
-                if (val !== null && val !== '' && !isNaN(val)) statsData[sub.id].marks.push(parseFloat(val));
+                if (val !== null && val !== undefined && val !== '' && !isNaN(val)) statsData[sub.id].marks.push(parseFloat(val));
               });
             } else {
               const val = (studentMarks && typeof studentMarks === 'object') ? studentMarks[sec.id] : null;
-              if (val !== null && val !== '' && !isNaN(val)) statsData[sec.id].marks.push(parseFloat(val));
+              if (val !== null && val !== undefined && val !== '' && !isNaN(val)) statsData[sec.id].marks.push(parseFloat(val));
             }
           });
-        } else {
-          if (studentMarks !== null && studentMarks !== '' && !isNaN(studentMarks)) {
-            statsData.main.marks.push(parseFloat(studentMarks));
-          }
+        } else if (studentMarks !== null && studentMarks !== undefined && studentMarks !== '' && !isNaN(studentMarks)) {
+          statsData.main.marks.push(parseFloat(studentMarks));
         }
 
         if (finalTotal !== null) allScaledTotals.push(finalTotal);
@@ -2418,7 +2709,6 @@ statsData.scaledTotal = {
 
     if (totals.length > 0) {
       const values = totals.map(student => student.total);
-
       totals.forEach(student => {
         if (marksIsTopTwo(student.total, values)) {
           topStudentIds.add(student.id);
@@ -2427,7 +2717,7 @@ statsData.scaledTotal = {
     }
   }
 
-  const getStats = (marksArray, fullMark) => {
+  const getStats = (marksArray, fullMarkValue) => {
     const validMarks = marksArray.filter(m => m !== null && !isNaN(m)).map(Number).sort((a, b) => a - b);
     if (validMarks.length === 0) return null;
 
@@ -2437,7 +2727,7 @@ statsData.scaledTotal = {
     const mid = Math.floor(validMarks.length / 2);
     const median = validMarks.length % 2 !== 0 ? validMarks[mid].toFixed(1) : ((validMarks[mid - 1] + validMarks[mid]) / 2).toFixed(1);
 
-    const passThreshold = fullMark / 2;
+    const passThreshold = (Number(fullMarkValue) || 0) / 2;
     const passCount = validMarks.filter(m => m >= passThreshold).length;
 
     const max = validMarks[validMarks.length - 1].toFixed(1);
@@ -2446,49 +2736,24 @@ statsData.scaledTotal = {
     return { mean, median, passCount, total: validMarks.length, max, min };
   };
 
-  const StatCell = ({ stats, isBold, borderRight, borderLeft, bg }) => {
-    if (!stats) return <td className={`p-2 text-center text-xs text-gray-400 ${borderRight ? 'border-r border-gray-200' : ''} ${borderLeft ? 'border-l border-gray-200' : ''} ${bg || ''}`}>-</td>;
-    return (
-      <td className={`p-2 text-center text-xs ${isBold ? 'font-semibold text-blue-800' : 'text-gray-600'} ${borderRight ? 'border-r border-gray-200' : ''} ${borderLeft ? 'border-l border-gray-200' : ''} ${bg || ''}`}>
-        <div title="Mean">{stats.mean}</div>
-        <div title="Median" className="text-gray-500">{stats.median}</div>
-        <div title="Pass Count" className={`font-medium ${stats.passCount >= stats.total / 2 ? 'text-green-600' : 'text-red-500'}`}>
-          {stats.passCount}/{stats.total}
-        </div>
-      </td>
-    );
-  };
-
-  const renderStatCard = (title, stats, fullMark, isHighlight = false, isSubTotal = false) => {
-    if (!stats) return null;
-    return (
-      <div className={`bg-white border rounded-xl p-5 shadow-sm ${isHighlight ? 'border-indigo-300 ring-1 ring-indigo-100' : (isSubTotal ? 'border-blue-200 bg-blue-50/30' : 'border-gray-200')}`}>
-        <h3 className={`text-xl font-bold border-b pb-3 mb-4 ${isHighlight ? 'text-indigo-800 border-indigo-100' : 'text-gray-800 border-gray-100'}`}>
-          {title} <span className="text-base font-normal text-gray-500 ml-2">(Full: {fullMark})</span>
-        </h3>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
-          <div className="flex flex-col">
-            <span className="text-gray-500 text-sm uppercase tracking-wider font-semibold mb-1">Mean</span>
-            <span className="text-3xl font-bold text-blue-600">{stats.mean}</span>
-          </div>
-          <div className="flex flex-col">
-            <span className="text-gray-500 text-sm uppercase tracking-wider font-semibold mb-1">Median</span>
-            <span className="text-3xl font-bold text-blue-600">{stats.median}</span>
-          </div>
-          <div className="flex flex-col">
-            <span className="text-gray-500 text-sm uppercase tracking-wider font-semibold mb-1">Pass</span>
-            <span className={`text-3xl font-bold ${stats.passCount >= stats.total / 2 ? 'text-green-600' : 'text-red-500'}`}>
-              {stats.passCount}<span className="text-xl text-gray-400">/{stats.total}</span>
-            </span>
-          </div>
-          <div className="flex flex-col">
-            <span className="text-gray-500 text-sm uppercase tracking-wider font-semibold mb-1">Max</span>
-            <span className="text-3xl font-bold text-purple-600">{stats.max}</span>
+  const renderStatCell = (key, stats, { bold = false, className = '' } = {}) => (
+    <td key={key} className={className}>
+      {stats ? (
+        <div className="leading-tight space-y-0.5">
+          <div className={bold ? 'font-bold text-blue-800' : 'font-semibold text-slate-700'} title="Mean">{stats.mean}</div>
+          <div className="text-slate-500" title="Median">{stats.median}</div>
+          <div
+            title="Pass count"
+            className={`font-semibold ${stats.passCount >= stats.total / 2 ? 'text-green-600' : 'text-red-500'}`}
+          >
+            {stats.passCount}/{stats.total}
           </div>
         </div>
-      </div>
-    );
-  };
+      ) : (
+        <span className="mk-gap">–</span>
+      )}
+    </td>
+  );
 
   const handleCopyTotals = () => {
     const totalsList = currentClassStudents.map(student => {
@@ -2496,16 +2761,10 @@ statsData.scaledTotal = {
       const rawTotal = calculateTotal(studentMarks);
       const scaledTotal = hasSections ? calculateScaledTotal(studentMarks, selectedAssessment) : rawTotal;
       const deduction = parseFloat(marksData[`${student.id}_deduction`]) || 0;
-
-      let finalTotal = null;
-      if (scaledTotal !== null) {
-        finalTotal = (scaledTotal - deduction);
-      }
-      return finalTotal !== null ? finalTotal.toFixed(1) : '';
+      return scaledTotal !== null ? (scaledTotal - deduction).toFixed(1) : '';
     });
 
-    const textToCopy = totalsList.join('\n');
-    navigator.clipboard.writeText(textToCopy).then(() => {
+    navigator.clipboard.writeText(totalsList.join('\n')).then(() => {
       setCopySuccess(true);
       setTimeout(() => setCopySuccess(false), 2000);
     }).catch(err => {
@@ -2514,27 +2773,18 @@ statsData.scaledTotal = {
     });
   };
 
-  // Generate data for the SD Graph Modal
-const getGraphData = () => {
+  const getGraphData = () => {
     const bins = Array.from({ length: 10 }, (_, index) => ({
-      name: index === 9
-        ? '90–100%'
-        : `${index * 10}–<${(index + 1) * 10}%`,
+      name: index === 9 ? '90–100%' : `${index * 10}–${(index + 1) * 10}%`,
       count: 0
     }));
 
-    const fullMark = getAssessmentFullMark(selectedAssessment);
-
-    if (fullMark <= 0) return bins;
+    const full = getAssessmentFullMark(selectedAssessment);
+    if (full <= 0) return bins;
 
     allScaledTotals.forEach(score => {
-      const percentage = (score / fullMark) * 100;
-
-      const index = Math.max(
-        0,
-        Math.min(9, Math.floor(percentage / 10))
-      );
-
+      const percentage = (score / full) * 100;
+      const index = Math.max(0, Math.min(9, Math.floor(percentage / 10)));
       bins[index].count++;
     });
 
@@ -2542,7 +2792,7 @@ const getGraphData = () => {
   };
 
   // ============================================================================
-  // TERM OVERALL SCORE CALCULATOR
+  // TERM SCORE PRESETS
   // ============================================================================
   const handleAddPreset = async (e) => {
     e.preventDefault();
@@ -2550,27 +2800,25 @@ const getGraphData = () => {
 
     const presetData = {
       id: generateId(),
-      name: newPresetName,
+      name: newPresetName.trim(),
       weights: newPresetWeights,
       owner: user.email,
-      isShared: user.email === 'clng@ktls.edu.hk' ? isSharedPreset : false
+      isShared: user.email === SUPER_ADMIN_EMAIL ? isSharedPreset : false
     };
 
     try {
       const presetsRef = doc(db, "settings", "presets");
       const presetsSnap = await getDoc(presetsRef);
-      let allPresets = presetsSnap.exists() && presetsSnap.data().list ? presetsSnap.data().list : [];
+      const allPresets = presetsSnap.exists() && presetsSnap.data().list ? presetsSnap.data().list : [];
 
       allPresets.push(presetData);
       await setDoc(presetsRef, { list: allPresets }, { merge: true });
 
-      const visiblePresets = allPresets.filter(p => p.isShared || p.owner === user?.email || !p.owner);
-      setPresets(visiblePresets);
+      setPresets(marksVisiblePresets(allPresets, user?.email));
       setNewPresetName('');
       setNewPresetWeights({});
       setIsSharedPreset(false);
       setSelectedPresetId(presetData.id);
-      setShowPresetManager(false);
     } catch (error) {
       console.error("Error saving preset:", error);
       alert("Failed to save preset.");
@@ -2579,10 +2827,11 @@ const getGraphData = () => {
 
   const handleDeletePreset = async (id) => {
     const presetToDelete = presets.find(p => p.id === id);
-    if (presetToDelete?.isShared && presetToDelete?.owner !== user.email && user?.email !== 'clng@ktls.edu.hk') {
+    if (presetToDelete?.isShared && presetToDelete?.owner !== user.email && user?.email !== SUPER_ADMIN_EMAIL) {
       alert("You cannot delete a shared preset created by the super admin.");
       return;
     }
+    if (!window.confirm(`Delete the preset "${presetToDelete?.name || ''}"?`)) return;
 
     try {
       const presetsRef = doc(db, "settings", "presets");
@@ -2592,10 +2841,7 @@ const getGraphData = () => {
       allPresets = allPresets.filter(p => p.id !== id);
       await setDoc(presetsRef, { list: allPresets }, { merge: true });
 
-      const visiblePresets = allPresets.filter(p => {
-        if (user?.email === 'clng@ktls.edu.hk') return true;
-        return p.isShared || p.owner === user?.email;
-      });
+      const visiblePresets = marksVisiblePresets(allPresets, user?.email);
       setPresets(visiblePresets);
       if (selectedPresetId === id) {
         setSelectedPresetId(visiblePresets.length > 0 ? visiblePresets[0].id : '');
@@ -2614,11 +2860,7 @@ const getGraphData = () => {
       allPresets = allPresets.map(p => p.id === id ? { ...p, isShared: !currentShareStatus } : p);
       await setDoc(presetsRef, { list: allPresets }, { merge: true });
 
-      const visiblePresets = allPresets.filter(p => {
-        if (user?.email === 'clng@ktls.edu.hk') return true;
-        return p.isShared || p.owner === user?.email;
-      });
-      setPresets(visiblePresets);
+      setPresets(marksVisiblePresets(allPresets, user?.email));
     } catch (error) {
       console.error("Error toggling preset share status:", error);
     }
@@ -2636,17 +2878,14 @@ const getGraphData = () => {
     if (N < 3) return data;
     const sorted = [...data].sort((a, b) => parseFloat(b.overallScore) - parseFloat(a.overallScore));
 
-    // Top 3
     for (let i = 0; i < Math.min(3, N); i++) sorted[i].highlight = 'top';
 
-    // Middle 3
     const midTarget = Math.floor(N / 3);
     const midStart = Math.max(3, midTarget - 1);
     for (let i = midStart; i < Math.min(midStart + 3, N); i++) {
       if (!sorted[i].highlight) sorted[i].highlight = 'middle';
     }
 
-    // Bottom 3
     const botTarget = Math.floor((2 * N) / 3);
     const botStart = Math.max(midStart + 3, botTarget - 1);
     for (let i = botStart; i < Math.min(botStart + 3, N); i++) {
@@ -2659,19 +2898,23 @@ const getGraphData = () => {
     });
   };
 
-  const calculateTermScores = async () => {
-    if (!selectedPresetId || modalClasses.length === 0 || !modalTerm) return;
-    setIsCalculatingScores(true);
-
-    const preset = presets.find(p => p.id === selectedPresetId);
-    if (!preset) {
-      setIsCalculatingScores(false);
+  // mode: 'preset' | 'la-hw' | 'la-lesson'
+  const calculateTermScores = async (mode = 'preset') => {
+    if (modalClasses.length === 0 || !modalTerm) {
+      alert('Choose at least one class and a term.');
       return;
     }
 
+    const preset = presets.find(p => p.id === selectedPresetId);
+    if (mode === 'preset' && !preset) {
+      alert('Choose a calculation preset first.');
+      return;
+    }
+
+    setCalculatingMode(mode);
+
     try {
-      const q = query(collection(db, "assessments"));
-      const querySnapshot = await getDocs(q);
+      const querySnapshot = await getDocs(query(collection(db, "assessments")));
 
       const allTermAssessments = querySnapshot.docs
         .map(document => ({
@@ -2695,34 +2938,17 @@ const getGraphData = () => {
           return String(a.classNumber).localeCompare(String(b.classNumber), undefined, { numeric: true });
         });
 
-      let scoresData = [];
-
-      const sumAssessments = (assessments, student) => {
+      const sumAssessments = (list, student) => {
         let totalRaw = 0;
         let totalFull = 0;
 
-        assessments.forEach(assessment => {
-          // When multiple classes are selected, do not count another
-          // class's assessments in this student's full-mark denominator.
-          if (
-            !marksAssessmentBelongsToClass(
-              assessment,
-              student.className
-            )
-          ) {
-            return;
-          }
+        list.forEach(assessment => {
+          if (!marksAssessmentBelongsToClass(assessment, student.className)) return;
 
           const marks = assessment.marks || {};
           const studentMark = marks[student.id];
           const deduction = parseFloat(marks[`${student.id}_deduction`]) || 0;
-          const isMulti = assessment.sectionsConfig && assessment.sectionsConfig.length > 0;
-
-const total = calculateAssessmentTotal(
-            studentMark,
-            assessment
-          );
-
+          const total = calculateAssessmentTotal(studentMark, assessment);
           const actualMark = total !== null ? total : 0;
 
           totalRaw += actualMark - deduction;
@@ -2731,20 +2957,57 @@ const total = calculateAssessmentTotal(
         return { raw: totalRaw, full: totalFull };
       };
 
-      const utAssessmentsGlobal = allTermAssessments.filter(a => a.category === 'Uniform Test');
-      const examAssessmentsGlobal = allTermAssessments.filter(a => a.category === 'Exam');
+      const byCategory = category => allTermAssessments.filter(a => a.category === category);
+      const utAssessments = byCategory('Uniform Test');
+      const examAssessments = byCategory('Exam');
+      const assignAssessments = byCategory('Assignments');
 
-      if (preset.name === 'JS Geography') {
-        const assignAssessments = allTermAssessments.filter(a => a.category === 'Assignments');
-        const quizAssessments = allTermAssessments.filter(a => a.category === 'Quizzes');
+      let scoresData = [];
+
+      if (mode === 'la-hw') {
+        scoresData = modalStudents.map(student => {
+          const aStats = sumAssessments(assignAssessments, student);
+          const score = aStats.full > 0 ? Math.round((aStats.raw / aStats.full) * 5) : 0;
+          return {
+            student,
+            categoryScores: {
+              'Homework': { score, raw: aStats.raw, full: aStats.full, weight: 100 }
+            },
+            overallScore: score.toString(),
+            rawUT: sumAssessments(utAssessments, student).raw,
+            rawExam: sumAssessments(examAssessments, student).raw
+          };
+        });
+      } else if (mode === 'la-lesson') {
+        scoresData = modalStudents.map(student => {
+          const aStats = sumAssessments(assignAssessments, student);
+          const assignPercent = aStats.full > 0 ? (aStats.raw / aStats.full) : 0;
+          const recordCount = student.recordCount || 0;
+
+          const bonus = assignPercent > 0.9 ? 1 : 0;
+          let score = 4 + bonus - Math.floor(recordCount / 2);
+          if (assignPercent < 0.6) score = Math.min(score, 3);
+          score = Math.max(0, Math.min(5, score));
+
+          return {
+            student,
+            categoryScores: {
+              'Assignments %': { score: assignPercent * 100, raw: aStats.raw, full: aStats.full, weight: 0 },
+              'Records': { score: recordCount, raw: recordCount, full: 0, weight: 0 }
+            },
+            overallScore: score.toString(),
+            rawUT: sumAssessments(utAssessments, student).raw,
+            rawExam: sumAssessments(examAssessments, student).raw
+          };
+        });
+      } else if (preset.name === 'JS Geography') {
+        const quizAssessments = byCategory('Quizzes');
 
         scoresData = modalStudents.map(student => {
-          let categoryScores = {};
-
           const aStats = sumAssessments(assignAssessments, student);
           const qStats = sumAssessments(quizAssessments, student);
-          const utStats = sumAssessments(utAssessmentsGlobal, student);
-          const examStats = sumAssessments(examAssessmentsGlobal, student);
+          const utStats = sumAssessments(utAssessments, student);
+          const examStats = sumAssessments(examAssessments, student);
 
           const combinedAQRaw = aStats.raw + qStats.raw;
           const combinedAQFull = aStats.full + qStats.full;
@@ -2752,71 +3015,13 @@ const total = calculateAssessmentTotal(
           const aqScore = combinedAQFull > 0 ? (combinedAQRaw / combinedAQFull) * 50 : 0;
           const utScore = utStats.full > 0 ? (utStats.raw / utStats.full) * 50 : 0;
 
-          categoryScores['Assignments & Quizzes'] = { score: aqScore, raw: combinedAQRaw, full: combinedAQFull, weight: 50 };
-          categoryScores['Uniform Test'] = { score: utScore, raw: utStats.raw, full: utStats.full, weight: 50 };
-
-          const overallScore = aqScore + utScore;
-
           return {
             student,
-            categoryScores,
-            overallScore: overallScore.toFixed(1),
-            rawUT: utStats.raw,
-            rawExam: examStats.raw
-          };
-        });
-      } else if (preset.name === 'Learning Attitude (Homework)') {
-        const assignAssessments = allTermAssessments.filter(a => a.category === 'Assignments');
-
-        scoresData = modalStudents.map(student => {
-          const aStats = sumAssessments(assignAssessments, student);
-          const utStats = sumAssessments(utAssessmentsGlobal, student);
-          const examStats = sumAssessments(examAssessmentsGlobal, student);
-
-          let score = 0;
-          if (aStats.full > 0) {
-            score = Math.round((aStats.raw / aStats.full) * 5);
-          }
-
-          let categoryScores = {
-            'Homework': { score: score, raw: aStats.raw, full: aStats.full, weight: 100 }
-          };
-
-          return {
-            student,
-            categoryScores,
-            overallScore: score.toString(),
-            rawUT: utStats.raw,
-            rawExam: examStats.raw
-          };
-        });
-      } else if (preset.name === 'Learning Attitude (Lesson)') {
-        const assignAssessments = allTermAssessments.filter(a => a.category === 'Assignments');
-
-        scoresData = modalStudents.map(student => {
-          const aStats = sumAssessments(assignAssessments, student);
-          const utStats = sumAssessments(utAssessmentsGlobal, student);
-          const examStats = sumAssessments(examAssessmentsGlobal, student);
-
-          let assignPercent = aStats.full > 0 ? (aStats.raw / aStats.full) : 0;
-          let recordCount = student.recordCount || 0;
-
-          let bonus = assignPercent > 0.9 ? 1 : 0;
-          let score = 4 + bonus - Math.floor(recordCount / 2);
-
-          if (assignPercent < 0.6) {
-            score = Math.min(score, 3);
-          }
-          score = Math.max(0, Math.min(5, score));
-
-          let categoryScores = {
-            'Lesson Attitude': { score: score, raw: recordCount, full: 0, weight: 100 }
-          };
-
-          return {
-            student,
-            categoryScores,
-            overallScore: score.toString(),
+            categoryScores: {
+              'Assignments & Quizzes': { score: aqScore, raw: combinedAQRaw, full: combinedAQFull, weight: 50 },
+              'Uniform Test': { score: utScore, raw: utStats.raw, full: utStats.full, weight: 50 }
+            },
+            overallScore: (aqScore + utScore).toFixed(1),
             rawUT: utStats.raw,
             rawExam: examStats.raw
           };
@@ -2824,14 +3029,13 @@ const total = calculateAssessmentTotal(
       } else {
         scoresData = modalStudents.map(student => {
           let overallScore = 0;
-          let categoryScores = {};
+          const categoryScores = {};
 
           Object.keys(preset.weights || {}).forEach(cat => {
             const weight = Number(preset.weights?.[cat]) || 0;
             if (weight === 0) return;
 
-            const catAssessments = allTermAssessments.filter(a => a.category === cat);
-            const catStats = sumAssessments(catAssessments, student);
+            const catStats = sumAssessments(byCategory(cat), student);
 
             if (catStats.full > 0) {
               const catScore = (catStats.raw / catStats.full) * weight;
@@ -2842,33 +3046,30 @@ const total = calculateAssessmentTotal(
             }
           });
 
-          const utStats = sumAssessments(utAssessmentsGlobal, student);
-          const examStats = sumAssessments(examAssessmentsGlobal, student);
-
           return {
             student,
             categoryScores,
             overallScore: overallScore.toFixed(1),
-            rawUT: utStats.raw,
-            rawExam: examStats.raw
+            rawUT: sumAssessments(utAssessments, student).raw,
+            rawExam: sumAssessments(examAssessments, student).raw
           };
         });
       }
 
       setTermScoresData(assignHighlights(scoresData));
+      setTermResultMode(mode);
     } catch (error) {
       console.error("Error calculating term scores:", error);
       alert("Failed to calculate term scores.");
     }
 
-    setIsCalculatingScores(false);
+    setCalculatingMode('');
   };
 
   const displayCategories = termScoresData.length > 0 ? Object.keys(termScoresData[0].categoryScores) : [];
+  const termIsLearningAttitude = termResultMode === 'la-hw' || termResultMode === 'la-lesson';
 
-  const getTermPrefix = () => {
-    return modalTerm.includes('Term 2') ? 'T2' : 'T1';
-  };
+  const getTermPrefix = () => (modalTerm.includes('Term 2') ? 'T2' : 'T1');
 
   const handleCopyScores = (type) => {
     if (termScoresData.length === 0) return;
@@ -2882,8 +3083,7 @@ const total = calculateAssessmentTotal(
       rows = termScoresData.map(data => data.rawUT !== undefined ? data.rawUT.toFixed(1) : '');
     }
 
-    const textToCopy = rows.join('\n');
-    navigator.clipboard.writeText(textToCopy).then(() => {
+    navigator.clipboard.writeText(rows.join('\n')).then(() => {
       setTermCopySuccess(type);
       setTimeout(() => setTermCopySuccess(false), 2000);
     }).catch(err => {
@@ -2892,103 +3092,24 @@ const total = calculateAssessmentTotal(
     });
   };
 
-  // Modal Terms Logic
-  const modalTermsList = useMemo(() => {
-    if (modalClasses.length === 0) return [];
-    // Just use the first selected class to determine terms for simplicity
-    const refClass = modalClasses[0];
-    return termsMap[refClass] && termsMap[refClass].length > 0
-      ? termsMap[refClass]
-      : getDefaultTerms(refClass);
-  }, [modalClasses, termsMap]);
-
-  useEffect(() => {
-    if (modalClasses.length > 0 && !modalTermsList.includes(modalTerm)) {
-      setModalTerm(modalTermsList[0] || '');
-    }
-  }, [modalClasses, modalTermsList, modalTerm]);
+  const openTermScoreModal = () => {
+    setModalClasses(selectedClass ? [selectedClass] : []);
+    setModalTerm(selectedTerm);
+    const defaultPreset = classPresetsMap[selectedClass];
+    setSelectedPresetId(
+      presets.some(p => p.id === defaultPreset)
+        ? defaultPreset
+        : (presets.find(p => p.name === 'JS Geography')?.id || presets[0]?.id || '')
+    );
+    setTermScoresData([]);
+    setTermResultMode('');
+    setClassPickerOpen(false);
+    setShowTermScoreModal(true);
+  };
 
   // ============================================================================
-  // DOCUMENT LINKING LOGIC
+  // DOCUMENT PREVIEW & LINKED MARKS
   // ============================================================================
-  const linkableDocs = useMemo(() => {
-    let items = [];
-    archives.forEach(a => {
-      // Add the full paper option
-      items.push({ ...a, linkMode: 'full' });
-      // Add the sub-question options
-      a.subQuestions?.forEach(sq => {
-        items.push({ ...a, id: `${a.id}_${sq.id}`, title: `${a.title} Q${sq.label}`, linkMode: 'sub' });
-      });
-    });
-    return items;
-  }, [archives]);
-
-  const filteredArchives = useMemo(() => {
-    const searchTerms = [...new Set(
-      String(docSearchTerm || '')
-        .split(/[,，]/)
-        .map(value => value.trim().toLowerCase())
-        .filter(Boolean)
-    )];
-
-    return linkableDocs.filter(archive => {
-      const matchOrigin =
-        !docFilterOrigin || archive.origin === docFilterOrigin;
-
-      const matchYear =
-        !docFilterYear || String(archive.year) === docFilterYear;
-
-      const searchText = [
-        archive.title,
-        archive.year,
-        archive.origin,
-        archive.versionLabel,
-        ...(Array.isArray(archive.topic)
-          ? archive.topic
-          : [archive.topic]),
-        ...(archive.subQuestions || []).flatMap(child => [
-          child.content,
-          child.contentChi,
-          ...(Array.isArray(child.topic)
-            ? child.topic
-            : [child.topic]),
-          ...(Array.isArray(child.questionType)
-            ? child.questionType
-            : [child.questionType])
-        ])
-      ]
-        .filter(value => value !== undefined && value !== null)
-        .join(' ')
-        .toLowerCase();
-
-      const compactText = searchText.replace(/\s+/g, '');
-
-      const matchSearch =
-        searchTerms.length === 0 ||
-        searchTerms.some(term =>
-          searchText.includes(term) ||
-          compactText.includes(term.replace(/\s+/g, ''))
-        );
-
-      return (
-        matchOrigin &&
-        matchYear &&
-        matchSearch &&
-        archive.linkMode === docFilterMode
-      );
-    });
-  }, [
-    linkableDocs,
-    docFilterOrigin,
-    docFilterYear,
-    docSearchTerm,
-    docFilterMode
-  ]);
-
-  const uniqueOrigins = useMemo(() => [...new Set(linkableDocs.map(a => a.origin).filter(Boolean))], [linkableDocs]);
-  const uniqueYears = useMemo(() => [...new Set(linkableDocs.map(a => String(a.year)).filter(Boolean))].sort().reverse(), [linkableDocs]);
-
   const handleOpenPreview = (docId) => {
     let parentDoc = archives.find(archive => archive.id === docId);
     let childDoc = null;
@@ -3008,27 +3129,18 @@ const total = calculateAssessmentTotal(
     }
 
     if (!parentDoc) {
-      alert(
-        'This linked document is not in the loaded catalogue. ' +
-        'Refresh the page and try again.'
-      );
+      alert('This linked document is not in the loaded catalogue. Refresh the page and try again.');
       return;
     }
 
-    // Derive these display flags from actual saved URLs.
-    // Do not rely on an old hasFile/hasAnswer value.
     const parent = {
       ...parentDoc,
       hasFile: Boolean(parentDoc.fileUrl || parentDoc.fileUrlChi),
-      hasAnswer: Boolean(
-        parentDoc.answerFileUrl || parentDoc.answerFileUrlChi
-      )
+      hasAnswer: Boolean(parentDoc.answerFileUrl || parentDoc.answerFileUrlChi)
     };
 
     setViewingAnswer(false);
-    setPreviewLanguage(
-      !parent.fileUrl && parent.fileUrlChi ? 'zh' : 'en'
-    );
+    setPreviewLanguage(!parent.fileUrl && parent.fileUrlChi ? 'zh' : 'en');
 
     setPreviewItem({
       parent,
@@ -3037,7 +3149,6 @@ const total = calculateAssessmentTotal(
     });
   };
 
-  // Main links, section links and archive-child links share one reader.
   const handleViewLinkedMarks = async (docId, docTitle) => {
     if (!user?.isAdmin) return;
 
@@ -3052,15 +3163,11 @@ const total = calculateAssessmentTotal(
 
     try {
       const records = await loadLinkedAssessmentMarks(docId);
-
       if (requestId !== linkedMarksRequestRef.current) return;
-
       setLinkedMarksData(records);
     } catch (error) {
       if (requestId !== linkedMarksRequestRef.current) return;
-
       console.error('Error fetching linked assessment marks:', error);
-
       setLinkedMarksError(
         `${error.code || 'marks-load-error'}: ` +
         (error.message || 'The linked marks could not be loaded.')
@@ -3073,7 +3180,7 @@ const total = calculateAssessmentTotal(
   };
 
   // ============================================================================
-  // EXPORT TO EXCEL LOGIC
+  // EXPORT TO EXCEL
   // ============================================================================
   const openExportModal = async () => {
     if (!selectedClass || !selectedTerm) {
@@ -3081,9 +3188,7 @@ const total = calculateAssessmentTotal(
       return;
     }
 
-    // Fetch all assessments for this class and term
-    const q = query(collection(db, "assessments"));
-    const querySnapshot = await getDocs(q);
+    const querySnapshot = await getDocs(query(collection(db, "assessments")));
     const allTermAssessments = querySnapshot.docs
       .map(document => ({
         ...document.data(),
@@ -3099,10 +3204,8 @@ const total = calculateAssessmentTotal(
         return matchesClass && assessment.term === selectedTerm;
       });
 
-    // Sort oldest to newest by default so they appear top-to-bottom in the modal (left-to-right in Excel)
     allTermAssessments.sort((a, b) => new Date(a.date) - new Date(b.date));
 
-    // Include all default categories and this class's custom categories.
     const exportCategories = marksUniqueNames([
       ...MARKS_DEFAULT_CATEGORIES,
       ...categories,
@@ -3115,28 +3218,31 @@ const total = calculateAssessmentTotal(
 
     allTermAssessments.forEach(assessment => {
       const category = assessment.category || 'Others';
-
       if (!Object.prototype.hasOwnProperty.call(grouped, category)) {
         grouped[category] = [];
       }
-
       grouped[category].push(assessment);
     });
 
     setExportAssessmentsMap(grouped);
-    const defaultPreset = classPresetsMap[selectedClass] || (presets.length > 0 ? presets[0].id : '');
-    setExportPresetId(defaultPreset);
+    const defaultPreset = classPresetsMap[selectedClass];
+    setExportPresetId(
+      presets.some(p => p.id === defaultPreset)
+        ? defaultPreset
+        : (presets[0]?.id || '')
+    );
     setShowExportModal(true);
   };
 
   const moveExportItem = (category, index, direction) => {
     const newMap = { ...exportAssessmentsMap };
-    const list = newMap[category];
+    const list = [...newMap[category]];
     if (direction === 'up' && index > 0) {
       [list[index - 1], list[index]] = [list[index], list[index - 1]];
     } else if (direction === 'down' && index < list.length - 1) {
       [list[index + 1], list[index]] = [list[index], list[index + 1]];
     }
+    newMap[category] = list;
     setExportAssessmentsMap(newMap);
   };
 
@@ -3147,9 +3253,12 @@ const total = calculateAssessmentTotal(
     }
 
     const preset = presets.find(p => p.id === exportPresetId);
+    if (!preset) {
+      alert("Please select a calculation preset.");
+      return;
+    }
     const isJSGeog = preset.name === 'JS Geography';
 
-    // Determine which categories are actively used in the calculation
     const inCalc = (cat) => {
       if (isJSGeog) return ['Assignments', 'Quizzes', 'Uniform Test'].includes(cat);
       return (preset.weights?.[cat] || 0) > 0;
@@ -3165,7 +3274,6 @@ const total = calculateAssessmentTotal(
       ...Object.keys(preset.weights || {})
     ]).filter(category => category !== 'Exam');
 
-    // Include categories with items even if their term-score weight is zero.
     const activeCalcCategories = baseCategories.filter(category =>
       inCalc(category) ||
       (exportAssessmentsMap[category] || []).length > 0
@@ -3174,8 +3282,7 @@ const total = calculateAssessmentTotal(
     const examInCalc = inCalc('Exam');
     const hasExamItems = (exportAssessmentsMap['Exam'] || []).length > 0;
 
-    // Define the layout order
-    let layout = [...activeCalcCategories];
+    const layout = [...activeCalcCategories];
     if (examInCalc) {
       layout.push('Exam');
       layout.push('Total Term Score');
@@ -3190,7 +3297,6 @@ const total = calculateAssessmentTotal(
     let html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
     html += '<head><meta charset="UTF-8"><meta name="ProgId" content="Excel.Sheet"><!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Marks</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head><body><table border="1">';
 
-    // Header Row 1: Categories
     html += '<tr><th rowSpan="3">Class No.</th><th rowSpan="3">English Name</th>';
     layout.forEach(col => {
       if (col === 'Total Term Score') {
@@ -3205,21 +3311,17 @@ const total = calculateAssessmentTotal(
         items.forEach(item => {
           if (item.sectionsConfig && item.sectionsConfig.length > 0) {
             item.sectionsConfig.forEach(sec => {
-              if (sec.hasSubSections) {
-                colSpan += sec.subSections.length + 1; // sub-sections + section total
-              } else {
-                colSpan += 1;
-              }
+              colSpan += sec.hasSubSections ? sec.subSections.length + 1 : 1;
             });
-            colSpan += 1; // paper total
+            colSpan += 1;
           } else {
             colSpan += 1;
           }
         });
 
         let hasCatTotal = inCalc(cat);
-        if (isJSGeog && cat === 'Assignments') hasCatTotal = false; // Hide Assignment Total for JS Geog
-        if (hasCatTotal) colSpan += 1; // Category Total column
+        if (isJSGeog && cat === 'Assignments') hasCatTotal = false;
+        if (hasCatTotal) colSpan += 1;
 
         if (colSpan > 0) {
           html += `<th colSpan="${colSpan}" style="background-color:#f3f4f6; font-weight:bold; text-align:center;">${cat}</th>`;
@@ -3228,7 +3330,6 @@ const total = calculateAssessmentTotal(
     });
     html += '</tr>';
 
-    // Header Row 2: Items (Names only, no redundant prefixes, forced nowrap)
     html += '<tr>';
     layout.forEach(col => {
       if (col === 'Total Term Score' || col === 'Empty') return;
@@ -3264,7 +3365,6 @@ const total = calculateAssessmentTotal(
     });
     html += '</tr>';
 
-    // Header Row 3: Full Marks
     html += '<tr>';
     layout.forEach(col => {
       if (col === 'Total Term Score' || col === 'Empty') return;
@@ -3279,12 +3379,12 @@ const total = calculateAssessmentTotal(
               sec.subSections.forEach(sub => {
                 html += `<th>(/${sub.fullMark})</th>`;
               });
-html += `<th style="background-color:#f9fafb;">(/${getSectionRawFullMark(sec)})</th>`;
+              html += `<th style="background-color:#f9fafb;">(/${getSectionRawFullMark(sec)})</th>`;
             } else {
               html += `<th>(/${sec.fullMark})</th>`;
             }
           });
-html += `<th style="background-color:#f3f4f6; font-weight:bold;">(/${getAssessmentFullMark(item)})</th>`;
+          html += `<th style="background-color:#f3f4f6; font-weight:bold;">(/${getAssessmentFullMark(item)})</th>`;
         } else {
           html += `<th>(/${item.fullMark || 100})</th>`;
         }
@@ -3294,16 +3394,12 @@ html += `<th style="background-color:#f3f4f6; font-weight:bold;">(/${getAssessme
       if (isJSGeog && cat === 'Assignments') hasCatTotal = false;
       if (hasCatTotal) {
         let weightLabel = preset.weights?.[cat] || 0;
-        if (isJSGeog) {
-          if (cat === 'Quizzes') weightLabel = '50';
-          else if (cat === 'Uniform Test') weightLabel = '50';
-        }
+        if (isJSGeog && (cat === 'Quizzes' || cat === 'Uniform Test')) weightLabel = '50';
         html += `<th style="background-color:#e5e7eb;">(/${weightLabel})</th>`;
       }
     });
     html += '</tr>';
 
-    // Data Rows
     currentClassStudents.forEach(student => {
       html += `<tr><td>${student.classNumber}</td><td>${student.englishName}</td>`;
 
@@ -3334,16 +3430,13 @@ html += `<th style="background-color:#f3f4f6; font-weight:bold;">(/${getAssessme
           let finalMark = null;
 
           if (item.sectionsConfig && item.sectionsConfig.length > 0) {
-            let paperRawTotal = 0;
-            let hasPaperMark = false;
-
             item.sectionsConfig.forEach(sec => {
               if (sec.hasSubSections) {
                 let secRawTotal = 0;
                 let hasSecMark = false;
                 sec.subSections.forEach(sub => {
                   const val = (studentMark && typeof studentMark === 'object') ? studentMark[sub.id] : null;
-                  if (val !== null && val !== '' && !isNaN(val)) {
+                  if (val !== null && val !== undefined && val !== '' && !isNaN(val)) {
                     html += `<td>${parseFloat(val).toFixed(1)}</td>`;
                     secRawTotal += parseFloat(val);
                     hasSecMark = true;
@@ -3351,19 +3444,13 @@ html += `<th style="background-color:#f3f4f6; font-weight:bold;">(/${getAssessme
                     html += `<td>-</td>`;
                   }
                 });
-                if (hasSecMark) {
-                  html += `<td style="background-color:#f9fafb;">${secRawTotal.toFixed(1)}</td>`;
-                  paperRawTotal += secRawTotal;
-                  hasPaperMark = true;
-                } else {
-                  html += `<td style="background-color:#f9fafb;">-</td>`;
-                }
+                html += hasSecMark
+                  ? `<td style="background-color:#f9fafb;">${secRawTotal.toFixed(1)}</td>`
+                  : `<td style="background-color:#f9fafb;">-</td>`;
               } else {
                 const val = (studentMark && typeof studentMark === 'object') ? studentMark[sec.id] : null;
-                if (val !== null && val !== '' && !isNaN(val)) {
+                if (val !== null && val !== undefined && val !== '' && !isNaN(val)) {
                   html += `<td>${parseFloat(val).toFixed(1)}</td>`;
-                  paperRawTotal += parseFloat(val);
-                  hasPaperMark = true;
                 } else {
                   html += `<td>-</td>`;
                 }
@@ -3387,7 +3474,7 @@ html += `<th style="background-color:#f3f4f6; font-weight:bold;">(/${getAssessme
             }
           }
 
-if (finalMark !== null) {
+          if (finalMark !== null) {
             catRawTotal += finalMark;
             catFullTotal += getAssessmentFullMark(item);
           }
@@ -3402,33 +3489,23 @@ if (finalMark !== null) {
         if (isJSGeog && cat === 'Assignments') hasCatTotal = false;
 
         if (hasCatTotal) {
-          let catWeight = preset.weights?.[cat] || 0;
+          const catWeight = preset.weights?.[cat] || 0;
           let catScore = 0;
-          let displayScore = "0.0";
 
           if (isJSGeog) {
-            if (cat === 'Quizzes') {
-              if (jsGeogAQFull > 0) {
-                catScore = (jsGeogAQRaw / jsGeogAQFull) * 50;
-                totalTermScore += catScore;
-              }
-              displayScore = catScore.toFixed(1);
-            } else if (cat === 'Uniform Test') {
-              if (catFullTotal > 0) {
-                catScore = (catRawTotal / catFullTotal) * 50;
-                totalTermScore += catScore;
-              }
-              displayScore = catScore.toFixed(1);
-            }
-          } else {
-            if (catFullTotal > 0 && catWeight > 0) {
-              catScore = (catRawTotal / catFullTotal) * catWeight;
+            if (cat === 'Quizzes' && jsGeogAQFull > 0) {
+              catScore = (jsGeogAQRaw / jsGeogAQFull) * 50;
+              totalTermScore += catScore;
+            } else if (cat === 'Uniform Test' && catFullTotal > 0) {
+              catScore = (catRawTotal / catFullTotal) * 50;
               totalTermScore += catScore;
             }
-            displayScore = catScore.toFixed(1);
+          } else if (catFullTotal > 0 && catWeight > 0) {
+            catScore = (catRawTotal / catFullTotal) * catWeight;
+            totalTermScore += catScore;
           }
 
-          html += `<td style="background-color:#f9fafb;">${displayScore}</td>`;
+          html += `<td style="background-color:#f9fafb;">${catScore.toFixed(1)}</td>`;
         }
       });
       html += '</tr>';
@@ -3436,30 +3513,32 @@ if (finalMark !== null) {
 
     html += '</table></body></html>';
 
-    // Trigger Download using SheetJS
     const wb = XLSX.read(html, { type: 'string' });
-    XLSX.writeFile(wb, `${selectedClass}_${selectedTerm}_Marks.xlsx`);
+    XLSX.writeFile(wb, `${cleanClassName(selectedClass)}_${selectedTerm}_Marks.xlsx`);
 
     setShowExportModal(false);
   };
 
+  // ============================================================================
+  // RENDER
+  // ============================================================================
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center min-h-[60vh]">
+      <div className="flex items-center justify-center min-h-[60vh] flex-1">
         <Loader2 className="w-10 h-10 animate-spin text-blue-600" />
       </div>
     );
   }
 
-  // Calculate Overview Stats if no assessment is selected
-  let overviewStats = {};
-  let overviewTotalStats = { marks: [], fullMark: 0 };
+  // Overview stats for the selected category
+  const overviewStats = {};
+  const overviewTotalStats = { marks: [], fullMark: 0 };
 
-  if (!selectedAssessment && assessments.length > 0) {
+  if (view === 'overview' && assessments.length > 0) {
     assessments.forEach(a => {
-overviewStats[a.id] = {
+      overviewStats[a.id] = {
         marks: [],
-        fullMark: getAssessmentFullMark(a)
+        fullMark: a.designatedPending ? 0 : getAssessmentFullMark(a)
       };
       overviewTotalStats.fullMark += overviewStats[a.id].fullMark;
     });
@@ -3469,20 +3548,7 @@ overviewStats[a.id] = {
       let hasAnyMark = false;
 
       assessments.forEach(a => {
-        const marks = a.marks || {};
-        const studentMark = marks[student.id];
-        const deduction = parseFloat(marks[`${student.id}_deduction`]) || 0;
-        const isMulti = a.sectionsConfig && a.sectionsConfig.length > 0;
-
-        let finalMark = null;
-        if (isMulti) {
-          const scaled = calculateScaledTotal(studentMark, a);
-          if (scaled !== null) finalMark = scaled - deduction;
-        } else {
-          const raw = calculateTotal(studentMark);
-          if (raw !== null) finalMark = raw - deduction;
-        }
-
+        const finalMark = getSavedFinalMark(a, student.id);
         if (finalMark !== null) {
           overviewStats[a.id].marks.push(finalMark);
           studentTotal += finalMark;
@@ -3490,1674 +3556,943 @@ overviewStats[a.id] = {
         }
       });
 
-      if (hasAnyMark) {
-        overviewTotalStats.marks.push(studentTotal);
-      }
+      if (hasAnyMark) overviewTotalStats.marks.push(studentTotal);
     });
   }
 
-  return (
-    <div
-      className="marks-page marks-workspace bg-gray-50 font-sans w-full min-w-0"
-      data-mobile-panel={mobileMarksPanel}
-    >
-      <div
-        className="marks-mobile-tabs"
-        role="group"
-        aria-label="Marks workspace panels"
-      >
+  const itemStatus = item =>
+    item.designatedPending
+      ? 'pending'
+      : marksCountEntered(item.marks, currentStudentIds) > 0
+        ? 'done'
+        : 'empty';
+
+  const classOptions = (() => {
+    if (classes.length === 0 && archivedClasses.length === 0) {
+      return <option value="">No classes</option>;
+    }
+
+    const groupBy = (list, archived) => Object.entries(list.reduce((acc, c) => {
+      const owner = c.owner === user?.email ? 'you' : c.owner;
+      const key = `${archived ? 'Archived' : 'Active'} · created by ${owner}`;
+      (acc[key] = acc[key] || []).push(c);
+      return acc;
+    }, {}));
+
+    if (user?.email === SUPER_ADMIN_EMAIL) {
+      return [...groupBy(classes, false), ...groupBy(archivedClasses, true)].map(([group, items]) => (
+        <optgroup key={group} label={group}>
+          {items.map(c => (
+            <option key={c.name} value={c.name}>
+              {cleanClassName(c.name)}{c.isArchived ? ' (Archived)' : ''}
+            </option>
+          ))}
+        </optgroup>
+      ));
+    }
+
+    return (
+      <>
+        {classes.length > 0 && (
+          <optgroup label="Active classes">
+            {classes.map(c => <option key={c.name} value={c.name}>{cleanClassName(c.name)}</option>)}
+          </optgroup>
+        )}
+        {archivedClasses.length > 0 && (
+          <optgroup label="Archived classes">
+            {archivedClasses.map(c => <option key={c.name} value={c.name}>{cleanClassName(c.name)} (Archived)</option>)}
+          </optgroup>
+        )}
+      </>
+    );
+  })();
+
+  const renderItemCard = item => {
+    const status = itemStatus(item);
+    const entered = marksCountEntered(item.marks, currentStudentIds);
+    const multi = Array.isArray(item.sectionsConfig) && item.sectionsConfig.length > 0;
+
+    return (
+      <li key={item.id}>
         <button
           type="button"
-          aria-pressed={mobileMarksPanel === 'filters'}
-          onClick={() => setMobileMarksPanel('filters')}
-          className={
-            mobileMarksPanel === 'filters'
-              ? 'is-active'
-              : ''
-          }
+          onClick={() => openItem(item)}
+          className={`mk-item is-${status} ${item.designatedSource ? 'is-compulsory' : ''}`}
         >
-          <Settings size={15} />
-          Class / Categories / Items
-        </button>
-
-        <button
-          type="button"
-          aria-pressed={mobileMarksPanel === 'marks'}
-          onClick={() => setMobileMarksPanel('marks')}
-          className={
-            mobileMarksPanel === 'marks'
-              ? 'is-active'
-              : ''
-          }
-        >
-          <BookOpen size={15} />
-          Marks
-        </button>
-      </div>
-
-      <style>{`
-        .marks-page {
-          box-sizing: border-box;
-          max-width: 100%;
-        }
-
-        .marks-page *,
-        .marks-page *::before,
-        .marks-page *::after {
-          box-sizing: border-box;
-        }
-
-        .marks-page .flex,
-        .marks-page .flex-1,
-        .marks-page .grid,
-        .marks-page .flex > input,
-        .marks-page .flex > select {
-          min-width: 0;
-        }
-
-        .marks-page h1,
-        .marks-page h2,
-        .marks-page h3 {
-          min-width: 0;
-          overflow-wrap: anywhere;
-        }
-
-        .marks-page h2 > .flex,
-        .marks-page p.flex {
-          flex-wrap: wrap;
-          row-gap: 0.5rem;
-        }
-
-        .marks-page button {
-          touch-action: manipulation;
-        }
-
-        .marks-page button:focus-visible,
-        .marks-page summary:focus-visible {
-          outline: 2px solid #2563eb;
-          outline-offset: 2px;
-        }
-
-        .marks-page button > svg,
-        .marks-page h2 > svg {
-          flex-shrink: 0;
-        }
-
-        .marks-page .overflow-x-auto {
-          min-width: 0;
-          max-width: 100%;
-          overscroll-behavior-x: contain;
-          -webkit-overflow-scrolling: touch;
-        }
-
-        .marks-page table {
-          width: max-content;
-          min-width: 100%;
-        }
-
-        .marks-page table th,
-        .marks-page table td {
-          white-space: nowrap;
-        }
-
-        .marks-page > .fixed {
-          overflow: auto;
-          overscroll-behavior: contain;
-        }
-
-        .marks-page > .fixed > div {
-          min-width: 0;
-          min-height: 0;
-          max-width: 100%;
-          max-height: calc(100vh - 2rem);
-          max-height: calc(100dvh - 2rem);
-          overflow: hidden;
-        }
-
-        .marks-page > .fixed > div > .flex-1 {
-          min-height: 0;
-          min-width: 0;
-          overflow: auto;
-          -webkit-overflow-scrolling: touch;
-        }
-
-        .marks-page > .fixed > div > .p-6 {
-          min-height: 0;
-          min-width: 0;
-          overflow: auto;
-          -webkit-overflow-scrolling: touch;
-        }
-
-        .marks-page > .fixed > div > .border-b {
-          flex-shrink: 0;
-          flex-wrap: wrap;
-          gap: 0.75rem;
-        }
-
-        .marks-page > .fixed > div > .border-b h2 {
-          flex: 1 1 12rem;
-        }
-
-        .marks-page #assessment-form .flex {
-          flex-wrap: wrap;
-          row-gap: 0.5rem;
-        }
-
-        .marks-page #assessment-form input {
-          max-width: 100%;
-        }
-
-        @media (min-width: 768px) and (max-width: 1279px) {
-          .marks-page .marks-sidebar {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-            align-items: start;
-            gap: 1rem;
-          }
-
-          .marks-page .marks-sidebar > * {
-            margin-top: 0;
-          }
-
-          .marks-page .marks-sidebar > :first-child,
-          .marks-page .marks-sidebar > .marks-items {
-            grid-column: 1 / -1;
-          }
-        }
-
-        @media (max-width: 1279px) {
-          .marks-page .pl-8 {
-            padding-left: 0;
-          }
-
-          .marks-page .marks-reveal {
-            justify-content: flex-start;
-            padding: 1.25rem;
-            overflow-y: auto;
-          }
-
-          .marks-page .marks-reveal .gap-16 {
-            flex-wrap: wrap;
-            justify-content: center;
-            gap: 1rem;
-            width: 100%;
-          }
-
-          .marks-page .marks-reveal [class*="min-w-"] {
-            min-width: 0;
-            width: min(100%, 24rem);
-            max-width: 100%;
-            padding: 1.25rem;
-            transform: none !important;
-          }
-
-          .marks-page .marks-reveal h3 {
-            font-size: clamp(1.5rem, 5vw, 3rem);
-            line-height: 1.2;
-            margin-bottom: 1.5rem;
-          }
-
-          .marks-page .marks-reveal p[class*="text-["] {
-            font-size: clamp(2.5rem, 10vw, 5rem);
-          }
-
-          .marks-page .marks-reveal button {
-            max-width: 100%;
-            white-space: normal;
-            padding: 1rem 1.5rem;
-            font-size: 1.125rem;
-          }
-        }
-
-        @media (max-width: 767px) {
-          .marks-page input:not([type="checkbox"]):not([type="radio"]),
-          .marks-page select,
-          .marks-page textarea {
-            font-size: 16px;
-          }
-
-          .marks-page button,
-          .marks-page summary {
-            min-height: 44px;
-          }
-
-          .marks-page button {
-            min-width: 44px;
-          }
-
-          .marks-page > .fixed {
-            padding: 0.5rem;
-          }
-
-          .marks-page > .fixed > div {
-            max-height: calc(100vh - 1rem);
-            max-height: calc(100dvh - 1rem);
-            border-radius: 0.75rem;
-          }
-
-          .marks-page > .fixed > div > .p-6 {
-            padding: 1rem;
-          }
-
-          .marks-page > .fixed h2 {
-            font-size: 1.125rem;
-            line-height: 1.4;
-          }
-
-          .marks-page > .fixed .border-b > .flex {
-            flex-wrap: wrap;
-            gap: 0.5rem;
-          }
-
-          .marks-page > .fixed button.hidden,
-          .marks-page > .fixed a.hidden {
-            display: inline-flex;
-          }
-
-          .marks-page .custom-scrollbar {
-            max-height: 35vh;
-            max-height: 35dvh;
-          }
-
-          .marks-page iframe {
-            min-height: 50vh;
-            min-height: 50dvh;
-          }
-
-          .marks-page .marks-reveal .text-4xl,
-          .marks-page .marks-reveal .text-5xl {
-            font-size: 1.75rem;
-          }
-        }
-`}</style>
-
-      <style>{`
-        .marks-page.marks-workspace {
-          flex: 1 1 0%;
-          display: grid;
-          grid-template-columns: 280px minmax(0, 1fr);
-          grid-template-rows: minmax(0, 1fr);
-          gap: 12px;
-          min-height: 0;
-          height: 100%;
-          max-height: 100%;
-          overflow: hidden;
-          padding: 12px;
-        }
-
-        .marks-page.marks-workspace .marks-mobile-tabs {
-          display: none;
-        }
-
-        .marks-page.marks-workspace .marks-sidebar {
-          position: static;
-          display: grid;
-          grid-template-columns: minmax(0, 1fr);
-          grid-template-rows:
-            auto
-            minmax(0, 1.35fr)
-            minmax(0, 1fr)
-            minmax(0, 1.2fr);
-          align-items: stretch;
-          gap: 8px;
-          width: 100%;
-          height: 100%;
-          min-height: 0;
-          max-height: none;
-          padding: 0;
-          overflow: hidden;
-        }
-
-        .marks-page.marks-workspace .marks-sidebar > * {
-          grid-column: auto;
-          min-height: 0;
-          min-width: 0;
-          margin: 0;
-        }
-
-        .marks-page.marks-workspace .marks-sidebar-heading h1 {
-          font-size: 16px;
-          line-height: 1.25;
-          margin: 0;
-        }
-
-        .marks-page.marks-workspace .marks-sidebar-heading svg {
-          width: 20px;
-          height: 20px;
-          margin-right: 7px;
-        }
-
-        .marks-page.marks-workspace .marks-controls-scroll {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          align-content: start;
-          gap: 8px;
-          overflow: auto;
-          overscroll-behavior: contain;
-          padding: 10px;
-          scrollbar-gutter: stable;
-        }
-
-        .marks-page.marks-workspace .marks-controls-scroll > * {
-          margin: 0;
-          min-width: 0;
-        }
-
-        .marks-page.marks-workspace .marks-controls-scroll > :first-child,
-        .marks-page.marks-workspace .marks-controls-scroll > :nth-child(2) {
-          grid-column: 1 / -1;
-        }
-
-        .marks-page.marks-workspace .marks-controls-scroll > .pt-3 {
-          padding-top: 0;
-          border-top: 0;
-        }
-
-        .marks-page.marks-workspace .marks-controls-scroll label {
-          font-size: 11px;
-          margin-bottom: 3px;
-        }
-
-        .marks-page.marks-workspace .marks-controls-scroll select {
-          padding: 5px 7px;
-          font-size: 12px;
-          min-height: 30px;
-        }
-
-        .marks-page.marks-workspace .marks-controls-scroll button {
-          padding: 6px;
-          min-width: 28px;
-          min-height: 30px;
-          font-size: 11px;
-          line-height: 1.25;
-          box-shadow: none;
-          white-space: normal;
-        }
-
-        .marks-page.marks-workspace .marks-controls-scroll button svg {
-          width: 14px;
-          height: 14px;
-          margin-right: 4px;
-        }
-
-        .marks-page.marks-workspace .marks-categories {
-          display: flex;
-          flex-direction: column;
-          overflow: hidden;
-        }
-
-        .marks-page.marks-workspace .marks-category-header {
-          flex: 0 0 auto;
-          padding: 7px 9px;
-          border-bottom: 1px solid #e5e7eb;
-          background: #f3f4f6;
-        }
-
-        .marks-page.marks-workspace .marks-category-body {
-          flex: 1 1 0%;
-          min-height: 0;
-          overflow: auto;
-          overscroll-behavior: contain;
-        }
-
-        .marks-page.marks-workspace .marks-category-body button {
-          min-width: 28px;
-          min-height: 28px;
-        }
-
-        .marks-page.marks-workspace .marks-category-row {
-          display: flex;
-          align-items: center;
-          gap: 4px;
-          padding: 3px 6px;
-        }
-
-        .marks-page.marks-workspace .marks-category-select {
-          flex: 1 1 0%;
-          min-width: 0;
-          text-align: left;
-          padding: 4px 3px;
-          font-size: 12px;
-          font-weight: 600;
-          overflow-wrap: anywhere;
-        }
-
-        .marks-page.marks-workspace .marks-items {
-          display: flex;
-          flex-direction: column;
-          overflow: hidden;
-        }
-
-        .marks-page.marks-workspace .marks-items > :first-child {
-          flex: 0 0 auto;
-          padding: 6px 9px;
-        }
-
-        .marks-page.marks-workspace .marks-items > button {
-          flex: 0 0 auto;
-          padding: 7px 10px;
-          min-height: 32px;
-          font-size: 12px;
-        }
-
-        .marks-page.marks-workspace .marks-items-scroll {
-          flex: 1 1 0%;
-          min-height: 0;
-          max-height: none;
-          overflow: auto;
-          overscroll-behavior: contain;
-        }
-
-        .marks-page.marks-workspace .marks-items-scroll li > button {
-          padding: 7px 10px 4px;
-        }
-
-        .marks-page.marks-workspace .marks-items-scroll li > button > span:first-child {
-          font-size: 12px;
-        }
-
-        .marks-page.marks-workspace .marks-items-scroll li > .flex {
-          padding-bottom: 4px;
-        }
-
-        .marks-page.marks-workspace .marks-items-scroll li > .flex > button {
-          padding: 4px;
-          min-width: 28px;
-          min-height: 28px;
-        }
-
-        .marks-page.marks-workspace .marks-main-scroll {
-          min-height: 0;
-          min-width: 0;
-          height: 100%;
-          overflow: auto;
-          overscroll-behavior: contain;
-          scrollbar-gutter: stable;
-          padding-bottom: 8px;
-        }
-
-        .marks-page.marks-workspace .marks-main-scroll > * {
-          flex-shrink: 0;
-        }
-
-        @media (min-width: 768px) and (max-width: 1100px) {
-          .marks-page.marks-workspace {
-            grid-template-columns: 245px minmax(0, 1fr);
-            padding: 8px;
-            gap: 8px;
-          }
-        }
-
-        @media (max-width: 767px) {
-          .marks-page.marks-workspace {
-            grid-template-columns: minmax(0, 1fr);
-            grid-template-rows: auto minmax(0, 1fr);
-            padding: 6px;
-            gap: 6px;
-          }
-
-          .marks-page.marks-workspace .marks-mobile-tabs {
-            display: flex;
-            gap: 6px;
-          }
-
-          .marks-page.marks-workspace .marks-mobile-tabs button {
-            flex: 1 1 0%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
-            min-height: 40px;
-            padding: 7px;
-            border: 1px solid #cbd5e1;
-            border-radius: 7px;
-            background: white;
-            color: #475569;
-            font-size: 12px;
-            font-weight: 600;
-          }
-
-          .marks-page.marks-workspace .marks-mobile-tabs .is-active {
-            background: #eff6ff;
-            border-color: #60a5fa;
-            color: #1d4ed8;
-          }
-
-          .marks-page.marks-workspace[data-mobile-panel="filters"] .marks-main-scroll {
-            display: none;
-          }
-
-          .marks-page.marks-workspace[data-mobile-panel="marks"] .marks-sidebar {
-            display: none;
-          }
-
-          .marks-page.marks-workspace .marks-sidebar {
-            grid-template-rows:
-              auto
-              minmax(0, 1.25fr)
-              minmax(0, 1fr)
-              minmax(0, 1.1fr);
-          }
-
-          .marks-page.marks-workspace .marks-controls-scroll select,
-          .marks-page.marks-workspace .marks-category-body input {
-            font-size: 16px;
-          }
-
-          .marks-page.marks-workspace .marks-controls-scroll button,
-          .marks-page.marks-workspace .marks-category-body button,
-          .marks-page.marks-workspace .marks-items button {
-            min-height: 36px;
-          }
-
-          .marks-page.marks-workspace .marks-category-header button {
-            min-height: 32px;
-          }
-        }
-      `}</style>
-
-      {/* Left Sidebar */}
-      <div className="marks-sidebar">
-
-        <div className="marks-sidebar-heading">
-          <h1 className="font-bold text-gray-800 flex items-center">
-            <BookOpen className="text-blue-600 shrink-0" />
-            Marks Management
-          </h1>
-        </div>
-
-        {/* Selection Controls — only this box may scroll */}
-        <div className="marks-controls-scroll bg-white rounded-lg shadow-sm border border-gray-200">
-          <div>
-            <label className="font-semibold text-gray-700 flex items-center mb-1.5 text-sm">
-              <Users className="w-4 h-4 mr-2" /> Class
-            </label>
-            <select
-              value={selectedClass}
-              onChange={(e) => setSelectedClass(e.target.value)}
-              className="w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium bg-gray-50 mb-2"
+          <div className="flex items-start justify-between gap-2">
+            <span className="text-sm font-semibold text-slate-800 break-words min-w-0">
+              {item.name}
+            </span>
+            <span
+              className={`mk-chip shrink-0 ${status === 'done'
+                ? 'mk-chip-green'
+                : status === 'pending'
+                  ? 'mk-chip-yellow'
+                  : ''
+                }`}
             >
-              {classes.length === 0 && archivedClasses.length === 0 && <option value="">No classes</option>}
-
-              {user?.email === 'clng@ktls.edu.hk' ? (
-                <>
-                  {Object.entries(classes.reduce((acc, c) => {
-                    const key = c.owner === user?.email ? "Active - Created by you" : `Active - Created by ${c.owner}`;
-                    acc[key] = acc[key] || []; acc[key].push(c); return acc;
-                  }, {})).map(([group, items]) => (
-                    <optgroup key={group} label={group}>
-                      {items.map(c => <option key={c.name} value={c.name}>{c.name.replace(/\u200B/g, '')}</option>)}
-                    </optgroup>
-                  ))}
-                  {Object.entries(archivedClasses.reduce((acc, c) => {
-                    const key = c.owner === user?.email ? "Archived - Created by you" : `Archived - Created by ${c.owner}`;
-                    acc[key] = acc[key] || []; acc[key].push(c); return acc;
-                  }, {})).map(([group, items]) => (
-                    <optgroup key={group} label={group}>
-                      {items.map(c => <option key={c.name} value={c.name}>{c.name.replace(/\u200B/g, '')} (Archived)</option>)}
-                    </optgroup>
-                  ))}
-                </>
-              ) : (
-                <>
-                  {classes.length > 0 && (
-                    <optgroup label="Active Classes">
-                      {classes.map(c => <option key={c.name} value={c.name}>{c.name.replace(/\u200B/g, '')}</option>)}
-                    </optgroup>
-                  )}
-                  {archivedClasses.length > 0 && (
-                    <optgroup label="Archived Classes">
-                      {archivedClasses.map(c => <option key={c.name} value={c.name}>{c.name.replace(/\u200B/g, '')} (Archived)</option>)}
-                    </optgroup>
-                  )}
-                </>
+              {status === 'done'
+                ? `${entered}/${currentStudentIds.length}`
+                : status === 'pending'
+                  ? 'Configure'
+                  : 'No marks'}
+            </span>
+          </div>
+          <div className="mt-1 text-xs text-slate-500">
+            {item.date || 'No date'}
+            {' · '}
+            {status === 'pending' ? 'Not configured' : `Full mark ${getAssessmentFullMark(item)}`}
+          </div>
+          {(item.designatedSource || multi || !item.isDisclosed) && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {item.designatedSource && (
+                <span className={`mk-chip ${status === 'pending' ? 'mk-chip-yellow' : status === 'done' ? 'mk-chip-green' : ''}`}>
+                  Compulsory
+                </span>
               )}
-            </select>
-            <label className="font-semibold text-gray-700 flex items-center mb-1.5 text-xs mt-2">
-              <Calculator className="w-3 h-3 mr-1" /> Default Term Score Method
-            </label>
-            <select
-              value={classPresetsMap[selectedClass] || ''}
-              onChange={async (e) => {
-                const newMap = { ...classPresetsMap, [selectedClass]: e.target.value };
-                setClassPresetsMap(newMap);
-                await setDoc(doc(db, "settings", "classPresets"), { map: newMap }, { merge: true });
-              }}
-              className="w-full border border-gray-300 rounded-md p-1.5 focus:ring-2 focus:ring-blue-500 outline-none text-xs font-medium bg-gray-50"
-            >
-              <option value="" title="All Categories (No Preset)">All Categories (No Preset)</option>
-              {presets.map(p => {
-                let formula = "";
-                if (p.name === 'JS Geography') formula = "50% (Assignments + Quizzes) + 50% UT";
-                else if (p.name === 'Learning Attitude (Homework)') formula = "Sum of Assignments / Total × 5";
-                else if (p.name === 'Learning Attitude (Lesson)') formula = "4 + Bonus - Records/2 (Range 0-5)";
-                else formula = Object.entries(p.weights || {}).filter(([_, w]) => w > 0).map(([c, w]) => `${c}: ${w}%`).join(', ');
-                return <option key={p.id} value={p.id} title={formula}>{p.name}</option>;
-              })}
-            </select>
+              {multi && <span className="mk-chip mk-chip-purple">Multi-section</span>}
+              {!item.isDisclosed && <span className="mk-chip"><EyeOff />Hidden</span>}
+            </div>
+          )}
+        </button>
+      </li>
+    );
+  };
+
+  const showDeductCol = !studentView && showDeduct;
+  const trailingCols =
+    1 + (showDeductCol ? 1 : 0) + 1 + (isMultiSectionCategory ? 1 : 0) + 1 + (!studentView ? 1 : 0);
+
+  const overallStats = selectedAssessment
+    ? getStats(statsData.final.marks, statsData.final.fullMark)
+    : null;
+
+  const selectedPreset = presets.find(p => p.id === selectedPresetId);
+
+  const termFormulaText = termResultMode === 'la-hw'
+    ? LA_HOMEWORK_FORMULA
+    : termResultMode === 'la-lesson'
+      ? LA_LESSON_FORMULA
+      : describePresetFormula(selectedPreset);
+
+  const sectionWeightTotal = sectionsConfig.reduce(
+    (sum, section) => sum + (Number(section.weight) || 0),
+    0
+  );
+
+  const rawSectionsTotal = sectionsConfig.reduce(
+    (sum, section) => sum + getSectionRawFullMark(section),
+    0
+  );
+
+  const layoutLocked = isEditingAssessment && !selectedAssessment?.designatedPending;
+
+  // ==========================================================================
+  return (
+    <div className="marks-page flex flex-col flex-1 min-h-0 min-w-0 w-full bg-slate-50 text-slate-800">
+      <style>{MARKS_CSS}</style>
+
+      {/* ===== TOP BAR ===== */}
+      <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-2.5">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="flex items-center gap-2 h-[34px] pr-2">
+            <BookOpen className="w-5 h-5 text-blue-600" />
+            <h1 className="text-base font-bold text-slate-800">Marks</h1>
           </div>
 
-          <div>
-            <div className="flex justify-between items-center mb-1.5">
-              <label className="font-semibold text-gray-700 text-sm flex items-center">
-                <Calendar className="w-4 h-4 mr-2" /> Term
-              </label>
-              <button
-                onClick={() => setShowTermManager(true)}
-                className="text-gray-400 hover:text-blue-600 transition-colors p-1 rounded hover:bg-blue-50"
-                title={`Manage Terms for ${selectedClass}`}
-              >
-                <Settings className="w-4 h-4" />
-              </button>
-            </div>
+          <label className="mk-field">
+            <span className="mk-label">Class</span>
             <select
+              className="mk-input min-w-[170px]"
+              value={selectedClass}
+              onChange={event => {
+                if (!guardUnsaved()) return;
+                setSelectedClass(event.target.value);
+              }}
+            >
+              {classOptions}
+            </select>
+          </label>
+
+          <label className="mk-field">
+            <span className="mk-label">Term</span>
+            <select
+              className="mk-input min-w-[140px]"
               value={selectedTerm}
-              onChange={event =>
-                setSelectedTerm(event.target.value)
-              }
-              className="w-full border border-gray-300 rounded-md p-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium bg-gray-50"
+              onChange={event => {
+                if (!guardUnsaved()) return;
+                setSelectedTerm(event.target.value);
+              }}
             >
               {!selectedTerm && (
                 <option value="" disabled>
                   {termPreferenceError
                     ? 'Select a term'
                     : terms.length
-                      ? 'Restoring saved term...'
+                      ? 'Restoring last term…'
                       : 'No terms'}
                 </option>
               )}
-
               {terms.map(term => (
-                <option key={term} value={term}>
-                  {term}
-                </option>
+                <option key={term} value={term}>{term}</option>
               ))}
             </select>
+          </label>
 
-            {termPreferenceError && (
-              <p
-                role="alert"
-                className="mt-2 text-xs text-red-700"
-              >
-                {termPreferenceError}
-              </p>
-            )}
-          </div>
-
-          <div className="pt-3 border-t border-gray-100">
+          <div className="ml-auto flex flex-wrap items-center gap-2">
             <button
-              onClick={() => {
-                setModalClasses([selectedClass]);
-                setModalTerm(selectedTerm);
-                setSelectedPresetId(classPresetsMap[selectedClass] || (presets.length > 0 ? presets[0].id : ''));
-                setTermScoresData([]);
-                setShowTermScoreModal(true);
-              }}
-              className="w-full flex items-center justify-center px-4 py-2 text-sm font-bold rounded-md transition-colors border shadow-sm bg-purple-50 text-purple-700 hover:bg-purple-100 border-purple-200"
-              title="Open the calculator to calculate weighted overall scores for a term"
+              type="button"
+              className="mk-btn mk-btn-soft-purple"
+              onClick={openTermScoreModal}
+              title="Calculate weighted term scores"
             >
-              <Calculator className="w-4 h-4 mr-2" />
-              Term Score Calculator
+              <Calculator /> Term Score
             </button>
-          </div>
-
-          <div className="pt-3 border-t border-gray-100">
             <button
-              onClick={() => setStudentView(!studentView)}
-              className={`w-full flex items-center justify-center px-4 py-2 text-sm font-bold rounded-md transition-colors border shadow-sm ${studentView
-                ? 'bg-amber-100 text-amber-800 border-amber-300'
-                : 'bg-gray-50 text-gray-700 hover:bg-gray-100 border-gray-200'
-                }`}
-              title="Hide or show individual marks on this screen. This does not change saved student disclosure settings."
-              aria-pressed={studentView}
-            >
-              {studentView ? <EyeOff className="w-4 h-4 mr-2" /> : <Eye className="w-4 h-4 mr-2" />}
-              {studentView ? 'Student View: ON' : 'Student View: OFF'}
-            </button>
-          </div>
-
-          <div className="pt-3 border-t border-gray-100">
-            <button
-              onClick={async () => {
-                if (!window.confirm("Are you sure you want to GLOBALLY disclose ALL hidden assessments across ALL classes and terms?")) return;
-                try {
-                  const q = query(collection(db, "assessments"), where("isDisclosed", "==", false));
-                  const snap = await getDocs(q);
-                  if (snap.empty) {
-                    alert("No hidden assessments found.");
-                    return;
-                  }
-                  const updates = snap.docs.map(d => updateDoc(doc(db, "assessments", d.id), { isDisclosed: true }));
-                  await Promise.all(updates);
-                  setAssessments(assessments.map(a => a.isDisclosed === false ? { ...a, isDisclosed: true } : a));
-                  alert(`Successfully disclosed ${snap.docs.length} hidden assessments globally.`);
-                } catch (e) {
-                  console.error(e);
-                  alert("Failed to disclose assessments.");
-                }
-              }}
-              className="w-full flex items-center justify-center px-4 py-2 text-sm font-bold rounded-md transition-colors border shadow-sm bg-green-50 text-green-700 hover:bg-green-100 border-green-200"
-              title="Instantly reveal all hidden items to students globally"
-            >
-              <Eye className="w-4 h-4 mr-2" />
-              Reveal All Classes
-            </button>
-          </div>
-
-          <div className="pt-3 border-t border-gray-100">
-            <button
+              type="button"
+              className="mk-btn"
               onClick={openExportModal}
-              className="w-full flex items-center justify-center px-4 py-2 text-sm font-bold rounded-md transition-colors border shadow-sm bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border-emerald-200"
-              title="Export all marks to an Excel spreadsheet"
+              title="Export this class and term to Excel"
             >
-              <Download className="w-4 h-4 mr-2" />
-              Export to Excel
+              <Download /> Export
+            </button>
+            <button
+              type="button"
+              className={`mk-btn ${studentView ? 'mk-btn-warn' : ''}`}
+              onClick={() => setStudentView(!studentView)}
+              aria-pressed={studentView}
+              title="Hide individual marks on this screen (does not change student disclosure)"
+            >
+              {studentView ? <EyeOff /> : <Eye />}
+              Student View {studentView ? 'On' : 'Off'}
+            </button>
+            <button
+              type="button"
+              className="mk-btn mk-btn-icon"
+              onClick={() => openSettings('general')}
+              title="Settings: default score method, terms, categories, presets"
+              aria-label="Settings"
+            >
+              <Settings />
             </button>
           </div>
         </div>
 
-        {/* Categories — shared settings for this exact class */}
-        <div className="marks-categories bg-white rounded-lg shadow-sm border border-gray-200">
-          <div className="marks-category-header">
-            <div className="flex items-center justify-between gap-2">
-              <h2 className="font-semibold text-gray-800 text-xs">
-                Categories · This Class
-              </h2>
+        {termPreferenceError && (
+          <p role="alert" className="mt-2 text-xs text-red-700">{termPreferenceError}</p>
+        )}
+      </div>
 
+      {/* ===== BODY ===== */}
+      <div className="flex-1 min-h-0 flex">
+        {/* ----- Item rail (only when an item / overview is open) ----- */}
+        {view !== 'home' && (
+          <aside className="hidden md:flex w-64 shrink-0 flex-col border-r border-slate-200 bg-white min-h-0">
+            <div className="p-3 space-y-2.5 border-b border-slate-200">
               <button
                 type="button"
-                disabled={
-                  !categoriesReady ||
-                  !canManageClassCategories ||
-                  isCategorySaving
-                }
-                onClick={() => setShowAddCategory(previous => !previous)}
-                className="flex items-center gap-1 text-xs text-blue-700 disabled:opacity-40"
-                title="Add a category to this class only"
+                className="mk-btn mk-btn-ghost mk-btn-sm w-full justify-start"
+                onClick={goHome}
               >
-                <PlusCircle size={14} />
-                Add
+                <LayoutGrid /> All items · {selectedTerm}
               </button>
-            </div>
 
-            <div className="flex flex-wrap gap-2 mt-1">
-              {canManageClassCategories && (
+              <label className="mk-field">
+                <span className="mk-label">Category</span>
+                <select
+                  className="mk-input w-full"
+                  value={selectedCategory}
+                  onChange={event => openOverview(event.target.value)}
+                >
+                  {categories.map(category => (
+                    <option key={category} value={category}>
+                      {category} ({termCountByCategory[category] || 0})
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  onClick={handleCleanClassCategories}
-                  disabled={!categoriesReady || isCategorySaving}
-                  className="text-[11px] text-slate-600 underline disabled:opacity-40"
-                  title="Remove empty custom categories from this class; check all terms"
+                  className={`mk-btn mk-btn-sm ${view === 'overview' ? 'mk-btn-soft' : ''}`}
+                  onClick={() => openOverview(selectedCategory)}
                 >
-                  Clean empty categories
+                  <Layers /> Overview
                 </button>
-              )}
-
-              {user?.email === 'clng@ktls.edu.hk' && (
                 <button
                   type="button"
-                  onClick={handleCleanAllClassCategories}
-                  disabled={!categoriesReady || isCategorySaving}
-                  className="text-[11px] text-orange-700 underline disabled:opacity-40"
-                  title="Clean empty custom categories across all active and archived classes"
+                  className="mk-btn mk-btn-sm"
+                  onClick={() => openAddModal(selectedCategory)}
+                  disabled={!selectedTerm}
                 >
-                  Clean ALL classes
+                  <Plus /> New item
                 </button>
+              </div>
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-auto p-2">
+              {isAssessmentsLoading ? (
+                <div className="p-4 flex items-center justify-center gap-2 text-sm text-slate-500">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+                </div>
+              ) : assessmentsError ? (
+                <p className="p-3 text-sm text-red-600" role="alert">{assessmentsError}</p>
+              ) : assessments.length === 0 ? (
+                <p className="p-3 text-sm text-slate-400 text-center">
+                  No {selectedCategory} items in {selectedTerm || 'this term'}.
+                </p>
+              ) : (
+                <>
+                  <ul className="space-y-1">
+                    {assessments.map((item, index) => {
+                      const status = itemStatus(item);
+                      const entered = marksCountEntered(item.marks, currentStudentIds);
+                      const isActive = view === 'item' && selectedAssessment?.id === item.id;
+
+                      return (
+                        <li
+                          key={item.id}
+                          draggable
+                          onDragStart={() => { dragIndexRef.current = index; }}
+                          onDragOver={event => {
+                            event.preventDefault();
+                            if (dragOverIndex !== index) setDragOverIndex(index);
+                          }}
+                          onDrop={event => {
+                            event.preventDefault();
+                            reorderAssessments(dragIndexRef.current, index);
+                            dragIndexRef.current = null;
+                            setDragOverIndex(null);
+                          }}
+                          onDragEnd={() => {
+                            dragIndexRef.current = null;
+                            setDragOverIndex(null);
+                          }}
+                          className={dragOverIndex === index && dragIndexRef.current !== index ? 'mk-drop-target' : ''}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => openItem(item)}
+                            aria-pressed={isActive}
+                            className={`mk-rail-item is-${status} ${item.designatedSource ? 'is-compulsory' : ''} ${isActive ? 'is-active' : ''}`}
+                          >
+                            <GripVertical className="mk-grip" />
+                            <span className="flex-1 min-w-0">
+                              <span className={`block truncate text-[13px] font-semibold ${isActive ? 'text-blue-700' : 'text-slate-800'}`}>
+                                {item.name}
+                              </span>
+                              <span className="block text-[11px] text-slate-500 truncate">
+                                {item.date || 'No date'}
+                                {' · '}
+                                {status === 'pending' ? 'Configure' : `${entered}/${currentStudentIds.length}`}
+                                {item.designatedSource ? ' · Compulsory' : ''}
+                              </span>
+                            </span>
+                            <span className={`mk-dot mk-dot-${status}`} />
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <p className="mt-3 px-2 text-[11px] text-slate-400">Drag items to reorder.</p>
+                </>
               )}
             </div>
-          </div>
+          </aside>
+        )}
 
-          <div className="marks-category-body">
-            {categoryLoadError ? (
-              <p className="p-3 text-xs text-red-700" role="alert">
-                {categoryLoadError}
-              </p>
-            ) : !categoriesReady ? (
-              <p className="p-3 text-xs text-gray-500 flex items-center gap-2">
-                {selectedClass && <Loader2 size={14} className="animate-spin" />}
-                {selectedClass ? 'Loading class categories...' : 'Select a class.'}
-              </p>
-            ) : (
-              <>
-                {isCategorySaving && (
-                  <p className="px-3 py-2 text-xs text-blue-700" role="status">
-                    Saving category settings...
-                  </p>
+        {/* ----- Main panel ----- */}
+        <main className="flex-1 min-w-0 min-h-0 flex flex-col">
+          {/* ======== HOME BOARD ======== */}
+          {view === 'home' && (
+            <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
+              <div className="max-w-6xl mx-auto space-y-4">
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-800">
+                      {cleanClassName(selectedClass) || 'No class'} · {selectedTerm || 'No term'}
+                    </h2>
+                    <p className="text-sm text-slate-500">
+                      {(termBoard || []).reduce((sum, group) => sum + group.items.length, 0)} items
+                      {' · '}
+                      {currentClassStudents.length} students
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                    <span className="flex items-center gap-1.5"><span className="mk-dot mk-dot-done" />Marks entered</span>
+                    <span className="flex items-center gap-1.5"><span className="mk-dot mk-dot-pending" />Needs configuration</span>
+                    <span className="flex items-center gap-1.5"><span className="mk-dot" />No marks yet</span>
+                  </div>
+                </div>
+
+                {categoryLoadError ? (
+                  <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700" role="alert">
+                    {categoryLoadError}
+                  </div>
+                ) : !selectedClass ? (
+                  <div className="mk-card p-10 text-center text-slate-500">Select a class to begin.</div>
+                ) : !selectedTerm ? (
+                  <div className="mk-card p-10 text-center text-slate-500">
+                    Select a term, or add one in <button type="button" className="text-blue-600 font-semibold underline" onClick={() => openSettings('terms')}>Settings → Terms</button>.
+                  </div>
+                ) : !termBoard ? (
+                  <div className="mk-card p-10 flex items-center justify-center gap-2 text-slate-500">
+                    <Loader2 className="w-5 h-5 animate-spin text-blue-600" /> Loading items…
+                  </div>
+                ) : (
+                  <>
+                    {termBoard.filter(group => group.items.length > 0).map(group => (
+                      <section key={group.category} className="mk-card overflow-hidden">
+                        <header className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 border-b border-slate-200 bg-slate-50">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <h3 className="text-sm font-bold text-slate-800">{group.category}</h3>
+                            <span className="mk-count">{group.items.length}</span>
+                            {multiSectionCategories.includes(group.category) && (
+                              <span className="mk-chip mk-chip-purple">Multi-section</span>
+                            )}
+                          </div>
+                          <div className="flex gap-1.5">
+                            <button type="button" className="mk-btn mk-btn-sm" onClick={() => openOverview(group.category)}>
+                              <Layers /> Overview
+                            </button>
+                            <button type="button" className="mk-btn mk-btn-sm" onClick={() => openAddModal(group.category)}>
+                              <Plus /> Add
+                            </button>
+                          </div>
+                        </header>
+                        <ul className="grid gap-2 p-3 sm:grid-cols-2 xl:grid-cols-3">
+                          {group.items.map(renderItemCard)}
+                        </ul>
+                      </section>
+                    ))}
+
+                    {termBoard.every(group => group.items.length === 0) && (
+                      <div className="mk-card p-10 text-center">
+                        <FileText className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                        <h3 className="text-base font-semibold text-slate-700">No items in {selectedTerm} yet</h3>
+                        <p className="text-sm text-slate-500 mt-1">Add an item to a category below to start entering marks.</p>
+                      </div>
+                    )}
+
+                    {termBoard.some(group => group.items.length === 0) && (
+                      <div className="mk-card px-4 py-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="mk-label mr-1">Empty categories</span>
+                          {termBoard.filter(group => group.items.length === 0).map(group => (
+                            <button
+                              key={group.category}
+                              type="button"
+                              className="mk-btn mk-btn-sm"
+                              onClick={() => openAddModal(group.category)}
+                              title={`Add a ${group.category} item`}
+                            >
+                              <Plus /> {group.category}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
+              </div>
+            </div>
+          )}
 
-                {showAddCategory && canManageClassCategories && (
-                  <form
-                    onSubmit={handleAddCategory}
-                    className="p-2 bg-blue-50 border-b border-gray-200 space-y-2"
+          {/* ======== CATEGORY OVERVIEW ======== */}
+          {view === 'overview' && (
+            <div className="flex-1 min-h-0 flex flex-col p-4 gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2 min-w-0">
+                  <button type="button" className="mk-btn mk-btn-icon md:hidden" onClick={goHome} aria-label="Back to all items">
+                    <ChevronLeft />
+                  </button>
+                  <div className="min-w-0">
+                    <h2 className="text-lg font-bold text-slate-800">{selectedCategory} overview</h2>
+                    <p className="text-sm text-slate-500">
+                      {cleanClassName(selectedClass)} · {selectedTerm} · {assessments.length} items
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <select
+                    className="mk-input md:hidden"
+                    value={selectedCategory}
+                    onChange={event => openOverview(event.target.value)}
                   >
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={newCategoryName}
-                        onChange={event => setNewCategoryName(event.target.value)}
-                        placeholder="Category for this class"
-                        maxLength={80}
-                        disabled={isCategorySaving}
-                        className="flex-1 w-full min-w-0 border rounded p-1 text-sm"
-                        autoFocus
-                      />
+                    {categories.map(category => <option key={category} value={category}>{category}</option>)}
+                  </select>
+                  <button type="button" className="mk-btn mk-btn-primary" onClick={() => openAddModal(selectedCategory)}>
+                    <Plus /> New item
+                  </button>
+                </div>
+              </div>
 
+              {isAssessmentsLoading ? (
+                <div className="mk-card p-10 flex items-center justify-center gap-2 text-slate-500" role="status">
+                  <Loader2 className="w-5 h-5 animate-spin text-blue-600" /> Loading…
+                </div>
+              ) : assessmentsError ? (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700" role="alert">
+                  {assessmentsError}
+                </div>
+              ) : assessments.length === 0 ? (
+                <div className="mk-card p-10 text-center">
+                  <FileText className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                  <h3 className="text-base font-semibold text-slate-700">No {selectedCategory} items in {selectedTerm}</h3>
+                  <p className="text-sm text-slate-500 mt-1 mb-4">Create one to start entering marks.</p>
+                  <button type="button" className="mk-btn mk-btn-primary" onClick={() => openAddModal(selectedCategory)}>
+                    <Plus /> Add {selectedCategory} item
+                  </button>
+                </div>
+              ) : (
+                <div className="mk-card flex-1 min-h-0 overflow-auto">
+                  <table className="mk-table">
+                    <thead>
+                      <tr>
+                        <th className="mk-sticky-no">No.</th>
+                        <th className="mk-sticky-name">Student</th>
+                        {assessments.map(a => (
+                          <th key={a.id} className="mk-sep" style={{ minWidth: 96 }}>
+                            <button
+                              type="button"
+                              onClick={() => openItem(a)}
+                              className="max-w-[140px] truncate block mx-auto text-[11px] font-bold uppercase text-slate-600 hover:text-blue-600"
+                              title={`Open ${a.name}`}
+                            >
+                              {a.name}
+                            </button>
+                            <span className="mk-sub">
+                              {a.designatedPending ? 'Not configured' : `/${getAssessmentFullMark(a)}`}
+                            </span>
+                          </th>
+                        ))}
+                        <th className="mk-sep" style={{ color: '#1d4ed8', minWidth: 90 }}>
+                          Total
+                          <span className="mk-sub">/{overviewTotalStats.fullMark}</span>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {currentClassStudents.length === 0 ? (
+                        <tr>
+                          <td colSpan={100} className="p-8 text-slate-500">No students found in {cleanClassName(selectedClass)}.</td>
+                        </tr>
+                      ) : currentClassStudents.map(student => {
+                        let studentTotal = 0;
+                        let hasAnyMark = false;
+
+                        const cells = assessments.map(a => {
+                          const finalMark = getSavedFinalMark(a, student.id);
+                          if (finalMark !== null) {
+                            studentTotal += finalMark;
+                            hasAnyMark = true;
+                          }
+                          const isTop = finalMark !== null && marksIsTopTwo(finalMark, overviewStats[a.id]?.marks || []);
+
+                          return (
+                            <td key={a.id} className={`mk-sep ${finalMark === null ? 'mk-missing-cell' : isTop ? 'mk-top' : ''}`}>
+                              {finalMark === null
+                                ? <span className="mk-gap">–</span>
+                                : studentView && !isTop
+                                  ? '***'
+                                  : finalMark.toFixed(1)}
+                            </td>
+                          );
+                        });
+
+                        const totalIsTop = hasAnyMark && marksIsTopTwo(studentTotal, overviewTotalStats.marks);
+
+                        return (
+                          <tr key={student.id}>
+                            <td className="mk-sticky-no font-semibold text-slate-700">{student.classNumber}</td>
+                            <td className="mk-sticky-name">
+                              <div className="truncate max-w-[220px] text-slate-800">{student.englishName}</div>
+                            </td>
+                            {cells}
+                            <td className={`mk-sep ${!hasAnyMark ? 'mk-missing-cell' : totalIsTop ? 'mk-top' : 'mk-final'}`}>
+                              {!hasAnyMark
+                                ? <span className="mk-gap">–</span>
+                                : studentView && !totalIsTop
+                                  ? '***'
+                                  : studentTotal.toFixed(1)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    {currentClassStudents.length > 0 && (
+                      <tfoot>
+                        <tr>
+                          <td className="mk-sticky-no"></td>
+                          <td className="mk-sticky-name">
+                            <div className="font-bold text-blue-800 text-xs">Statistics</div>
+                            <div className="text-[10px] text-blue-600">Mean / Median / Pass</div>
+                          </td>
+                          {assessments.map(a =>
+                            renderStatCell(a.id, getStats(overviewStats[a.id].marks, overviewStats[a.id].fullMark), { className: 'mk-sep' })
+                          )}
+                          {renderStatCell('total', getStats(overviewTotalStats.marks, overviewTotalStats.fullMark), { bold: true, className: 'mk-sep' })}
+                        </tr>
+                      </tfoot>
+                    )}
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ======== ITEM VIEW ======== */}
+          {view === 'item' && (
+            (isAssessmentsLoading || !selectedAssessment) ? (
+              <div className="flex-1 flex items-center justify-center gap-2 text-slate-500" role="status">
+                <Loader2 className="w-6 h-6 animate-spin text-blue-600" /> Loading item…
+              </div>
+            ) : selectedAssessment.designatedPending === true ? (
+              <div className="flex-1 min-h-0 overflow-auto p-6">
+                <div className="mx-auto max-w-xl rounded-xl border border-yellow-300 bg-yellow-50 p-6">
+                  <div className="flex items-center gap-2">
+                    <button type="button" className="mk-btn mk-btn-icon md:hidden" onClick={goHome} aria-label="Back">
+                      <ChevronLeft />
+                    </button>
+                    <AlertTriangle className="w-5 h-5 text-yellow-700 shrink-0" />
+                    <h2 className="text-lg font-bold text-yellow-950">{selectedAssessment.name}</h2>
+                  </div>
+                  <span className="mk-chip mk-chip-yellow mt-3">Compulsory · Needs configuration</span>
+                  <p className="mt-4 text-sm text-yellow-900">
+                    This item was added by Designated Assessment and has no marking setup yet.
+                    It is excluded from term calculations and exports until configured.
+                  </p>
+                  <ol className="mt-3 list-decimal pl-5 text-sm text-yellow-900 space-y-1">
+                    <li>Set its date, full mark and (if needed) sections.</li>
+                    <li>Save, then enter marks.</li>
+                    <li>Once marks are entered, the item turns <b className="text-green-700">green</b>.</li>
+                  </ol>
+                  <button type="button" onClick={openEditModal} className="mk-btn mk-btn-primary mt-5">
+                    <Settings /> Configure now
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex-1 min-h-0 flex flex-col">
+                {/* Item header */}
+                <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <button type="button" className="mk-btn mk-btn-icon md:hidden" onClick={goHome} aria-label="Back to all items">
+                          <ChevronLeft />
+                        </button>
+                        <h2 className="text-lg font-bold text-slate-800 truncate">{selectedAssessment.name}</h2>
+                        {selectedAssessment.designatedSource && (
+                          <span className="mk-chip mk-chip-green shrink-0">Compulsory</span>
+                        )}
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                        <span className="mk-chip" title="Linked classes">
+                          <Users />
+                          {(selectedAssessment.classes || [selectedAssessment.className]).map(cleanClassName).join(', ')}
+                        </span>
+                        <span className="mk-chip mk-chip-blue">{selectedAssessment.category || selectedCategory}</span>
+                        <span className="mk-chip mk-chip-purple">{selectedAssessment.term || selectedTerm}</span>
+                        <span className="mk-chip"><Calendar />{selectedAssessment.date || 'No date'}</span>
+                        <span className="mk-chip">
+                          Full mark {getAssessmentFullMark(selectedAssessment)}
+                          {hasSections ? (assessmentUsesScaling(selectedAssessment) ? ' · converted' : ' · raw') : ''}
+                        </span>
+                        {selectedAssessment.linkedDocId && (
+                          <button
+                            type="button"
+                            className="mk-btn mk-btn-sm mk-btn-soft"
+                            onClick={() => handleOpenPreview(selectedAssessment.linkedDocId)}
+                          >
+                            <ExternalLink /> Linked document
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button type="button" className="mk-btn" onClick={openEditModal} title="Edit configuration">
+                        <Edit /> Configure
+                      </button>
                       <button
-                        type="submit"
-                        disabled={isCategorySaving || !newCategoryName.trim()}
-                        className="rounded bg-blue-600 px-2 text-xs text-white disabled:opacity-40"
+                        type="button"
+                        onClick={toggleDisclosure}
+                        className={`mk-btn ${selectedAssessment.isDisclosed ? 'mk-btn-ok' : 'mk-btn-warn'}`}
+                        title="Show or hide this item's marks and documents for students"
                       >
-                        Add
+                        {selectedAssessment.isDisclosed ? <Eye /> : <EyeOff />}
+                        {selectedAssessment.isDisclosed ? 'Disclosed' : 'Hidden'}
+                      </button>
+                      <button
+                        type="button"
+                        className="mk-btn mk-btn-icon mk-btn-danger"
+                        onClick={() => handleDeleteAssessment(selectedAssessment.id)}
+                        title="Delete this item"
+                        aria-label="Delete this item"
+                      >
+                        <Trash2 />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                    <div className="mk-seg" role="group" aria-label="Input method">
+                      <button
+                        type="button"
+                        className={inputMethod === 'individual' ? 'is-active' : ''}
+                        onClick={() => setInputMethod('individual')}
+                      >
+                        <FormInput /> Boxes
+                      </button>
+                      <button
+                        type="button"
+                        className={inputMethod === 'bulk' ? 'is-active' : ''}
+                        onClick={() => setInputMethod('bulk')}
+                      >
+                        <ClipboardPaste /> Paste
                       </button>
                     </div>
 
-                    <label className="flex items-start gap-2 text-xs text-gray-700">
-                      <input
-                        type="checkbox"
-                        checked={newCategoryIsMulti}
-                        onChange={event => setNewCategoryIsMulti(event.target.checked)}
-                        disabled={isCategorySaving}
-                        className="mt-0.5"
-                      />
-                      New items use multi-section layout
-                    </label>
-                  </form>
-                )}
-
-                <ul className="divide-y divide-gray-100">
-                  {categories.map(cat => {
-                    const isDefault = MARKS_DEFAULT_CATEGORIES.includes(cat);
-
-                    return (
-                      <li key={cat}>
-                        {editingCategory === cat ? (
-                          <div className="flex items-center gap-1 p-2 bg-blue-50">
-                            <input
-                              type="text"
-                              value={editCategoryName}
-                              onChange={event => setEditCategoryName(event.target.value)}
-                              onKeyDown={event => {
-                                if (event.key === 'Enter') handleUpdateCategory(cat);
-                                if (event.key === 'Escape') setEditingCategory(null);
-                              }}
-                              disabled={isCategorySaving}
-                              className="flex-1 min-w-0 border rounded p-1 text-sm"
-                              autoFocus
-                            />
-
-                            <button
-                              type="button"
-                              onClick={() => handleUpdateCategory(cat)}
-                              disabled={isCategorySaving}
-                              className="text-green-700"
-                              aria-label="Save category name"
-                            >
-                              <CheckCircle size={15} />
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => setEditingCategory(null)}
-                              disabled={isCategorySaving}
-                              className="text-gray-500"
-                              aria-label="Cancel category rename"
-                            >
-                              <X size={15} />
-                            </button>
-                          </div>
-                        ) : (
-                          <div
-                            className={`marks-category-row ${selectedCategory === cat
-                              ? 'bg-blue-50 text-blue-700'
-                              : 'text-gray-600 hover:bg-gray-50'
-                              }`}
-                          >
-                            <button
-                              type="button"
-                              className="marks-category-select"
-                              aria-pressed={selectedCategory === cat}
-                              onClick={() => {
-                                setSelectedCategory(cat);
-                                setSelectedAssessment(null);
-                              }}
-                            >
-                              {cat}
-                            </button>
-
-                            {isDefault ? (
-                              <span className="text-[9px] text-gray-400 shrink-0">
-                                Default
-                              </span>
-                            ) : canManageClassCategories ? (
-                              <>
-                                <button
-                                  type="button"
-                                  disabled={isCategorySaving}
-                                  onClick={() => {
-                                    setEditingCategory(cat);
-                                    setEditCategoryName(cat);
-                                  }}
-                                  className="text-gray-400 hover:text-blue-600"
-                                  title="Rename this custom category if it is empty"
-                                  aria-label={`Rename ${cat}`}
-                                >
-                                  <Edit2 size={13} />
-                                </button>
-
-                                <button
-                                  type="button"
-                                  disabled={isCategorySaving}
-                                  onClick={event => handleDeleteCategory(cat, event)}
-                                  className="text-gray-400 hover:text-red-600"
-                                  title="Remove this custom category if it is empty in every term"
-                                  aria-label={`Remove ${cat}`}
-                                >
-                                  <Trash2 size={13} />
-                                </button>
-                              </>
-                            ) : null}
-
-                            {selectedCategory === cat && (
-                              <ChevronRight size={13} className="shrink-0" />
-                            )}
-                          </div>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* Assessment Items List — always available for every category */}
-        <div className="marks-items bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-          <div className="bg-gray-100 p-3 border-b border-gray-200 flex justify-between items-center gap-2">
-            <h2 className="font-semibold text-gray-800 text-sm min-w-0">
-              {selectedCategory || 'Assessment'} Items
-            </h2>
-            <button
-              type="button"
-              onClick={openAddModal}
-              disabled={
-                !selectedClass ||
-                !selectedTerm ||
-                !selectedCategory ||
-                isAssessmentsLoading
-              }
-              className="text-green-600 hover:text-green-800 flex-shrink-0 p-2 rounded-md disabled:opacity-40"
-              title="Add Assessment Item"
-              aria-label="Add assessment item"
-            >
-              <PlusCircle className="w-5 h-5" />
-            </button>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => {
-              setSelectedAssessment(null);
-              setMobileMarksPanel('marks');
-            }}
-            aria-pressed={!selectedAssessment}
-            className={`w-full text-left px-4 py-3 border-b border-gray-200 flex items-center gap-2 transition-colors ${!selectedAssessment
-              ? 'bg-blue-50 text-blue-700 font-bold'
-              : 'hover:bg-gray-50 text-gray-700 font-medium'
-              }`}
-          >
-            <Layers className="w-4 h-4 flex-shrink-0" />
-            Overall
-          </button>
-
-          <div className="marks-items-scroll">
-            {isAssessmentsLoading ? (
-              <div className="p-4 flex items-center justify-center gap-2 text-sm text-gray-500">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Loading items...
-              </div>
-            ) : assessmentsError ? (
-              <p className="p-4 text-sm text-red-600" role="alert">
-                {assessmentsError}
-              </p>
-            ) : assessments.length === 0 ? (
-              <p className="p-4 text-sm text-gray-500 text-center">
-                No items found for {selectedTerm || 'this term'}.
-              </p>
-            ) : (
-              <ul className="divide-y divide-gray-100">
-                {assessments.map((item, index) => {
-                  const itemHasSections =
-                    Array.isArray(item.sectionsConfig) &&
-                    item.sectionsConfig.length > 0;
-
-                  const itemIsSelected = selectedAssessment?.id === item.id;
-
-                  return (
-                    <li
-                      key={item.id}
-                      className={
-                        item.designatedSource
-                          ? itemIsSelected
-                            ? 'bg-yellow-100 ring-1 ring-inset ring-yellow-400'
-                            : 'bg-yellow-50'
-                          : itemIsSelected
-                            ? 'bg-blue-50'
-                            : 'bg-white'
-                      }
-                    >
+                    {!studentView && (
                       <button
                         type="button"
-                        onClick={() => {
-                          setSelectedAssessment(item);
-                          setMobileMarksPanel('marks');
-                        }}
-                        aria-pressed={itemIsSelected}
-                        className="w-full min-w-0 text-left px-4 pt-3 pb-2 hover:bg-blue-50 transition-colors"
+                        className={`mk-btn mk-btn-sm ${showDeduct ? 'mk-btn-soft' : ''}`}
+                        onClick={() => setShowDeduct(!showDeduct)}
+                        aria-pressed={showDeduct}
                       >
-                        <span
-                          className={`block text-sm font-semibold break-words ${item.designatedSource
-                            ? 'text-yellow-950'
-                            : itemIsSelected
-                              ? 'text-blue-700'
-                              : 'text-gray-800'
-                            }`}
-                        >
-                          {item.name}
-                        </span>
-
-                        {item.designatedSource && (
-                          <span className="mt-1 inline-block rounded border border-yellow-400 bg-yellow-200 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-yellow-950">
-                            Compulsory
-                          </span>
-                        )}
-                        <span className="block text-xs text-gray-500 mt-1">
-                          {item.date || 'No date'}
-                          {' · '}
-                          {item.designatedPending
-                            ? 'Configuration required'
-                            : itemHasSections
-                              ? `Paper full mark: ${item.paperFullMark ?? 100}`
-                              : `Full mark: ${item.fullMark ?? 100}`}
-                        </span>
-                        {itemHasSections && (
-                          <span className="block text-xs text-indigo-600 mt-1">
-                            Multi-section item
-                          </span>
-                        )}
+                        <MinusCircle /> Deduct
                       </button>
-
-                      <div className="flex justify-end gap-1 px-2 pb-2">
-                        <button
-                          type="button"
-                          onClick={(e) => handleMoveAssessment(index, 'up', e)}
-                          disabled={index === 0}
-                          className="p-2 rounded text-gray-500 hover:bg-blue-100 hover:text-blue-700 disabled:opacity-30"
-                          title="Move item up"
-                          aria-label={`Move ${item.name} up`}
-                        >
-                          <ChevronUp className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => handleMoveAssessment(index, 'down', e)}
-                          disabled={index === assessments.length - 1}
-                          className="p-2 rounded text-gray-500 hover:bg-blue-100 hover:text-blue-700 disabled:opacity-30"
-                          title="Move item down"
-                          aria-label={`Move ${item.name} down`}
-                        >
-                          <ChevronDown className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => handleDeleteAssessment(item.id, e)}
-                          className="p-2 rounded text-gray-400 hover:bg-red-50 hover:text-red-600"
-                          title="Delete assessment"
-                          aria-label={`Delete ${item.name}`}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Right Main Area — the main workspace scrolling region */}
-      <div className="marks-main-scroll flex flex-col min-w-0 w-full">
-        {isAssessmentsLoading ? (
-          <div
-            className="bg-white rounded-lg shadow-sm border border-gray-200 p-10 flex items-center justify-center gap-3 text-gray-500"
-            role="status"
-          >
-            <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
-            Loading assessments...
-          </div>
-        ) : assessmentsError ? (
-          <div
-            className="bg-red-50 rounded-lg border border-red-200 p-6 text-red-700"
-            role="alert"
-          >
-            {assessmentsError}
-          </div>
-        ) : !selectedAssessment ? (
-          assessments.length === 0 ? (
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 flex flex-col items-center justify-center text-gray-500 w-full max-w-3xl mt-12 self-center">
-              <FileText className="w-16 h-16 text-gray-300 mb-4" />
-              {isMultiSectionCategory ? (
-                <>
-                  <h3 className="text-xl font-medium text-gray-700 mb-2">No {selectedCategory} configured for {selectedTerm}</h3>
-                  <p className="mb-6 text-center">Click below to configure the sections and full marks for this term's {selectedCategory}.</p>
-                  <button
-                    onClick={openAddModal}
-                    className="px-6 py-2 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 flex items-center shadow-sm"
-                  >
-                    <Settings className="w-5 h-5 mr-2" /> Configure {selectedCategory}
-                  </button>
-                </>
-              ) : (
-                <>
-                  <h3 className="text-xl font-medium text-gray-700 mb-2">No Items Found</h3>
-                  <p>Create a new assessment to start entering marks.</p>
-                </>
-              )}
-            </div>
-          ) : (
-            <div className="w-full bg-white rounded-lg shadow-sm border border-gray-200 flex flex-col">
-              <div className="p-4 border-b border-gray-200 bg-white rounded-t-lg">
-                <h2 className="text-xl font-bold text-gray-800 flex items-center">
-                  <Layers className="w-6 h-6 mr-2 text-blue-600" />
-                  {selectedTerm} {selectedCategory} Overview
-                </h2>
-                <p className="text-sm text-gray-500 mt-1">Class: {selectedClass}</p>
-              </div>
-              <div className="overflow-x-auto w-full">
-                <table className="w-max mx-auto text-left border-collapse bg-white min-w-max">
-                  <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
-                    <tr className="text-gray-600 text-sm uppercase tracking-wider">
-                      <th className="p-3 border-b w-16 text-center">No.</th>
-                      <th className="p-3 border-b w-56 border-r border-gray-200">Name</th>
-                      {assessments.map(a => (
-                        <th key={a.id} className="p-3 border-b w-32 text-center border-r border-gray-200">
-                          <div className="truncate" title={a.name}>{a.name}</div>
-                          <div className="text-[10px] text-gray-400 normal-case font-normal mt-1">
-{a.designatedPending
-                              ? 'Configuration required'
-                              : `Full: ${getAssessmentFullMark(a)}`}
-                          </div>
-                        </th>
-                      ))}
-                      <th className="p-3 border-b w-32 text-center font-bold text-blue-700 bg-blue-50">
-                        Total
-                        <div className="text-[10px] text-blue-500 normal-case font-normal mt-1">
-                          Full: {overviewTotalStats.fullMark}
-                        </div>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {currentClassStudents.length === 0 ? (
-                      <tr>
-                        <td colSpan={assessments.length + 3} className="p-8 text-center text-gray-500">
-                          No students found in {selectedClass}.
-                        </td>
-                      </tr>
-                    ) : (
-                      <>
-                        {currentClassStudents.map(student => {
-                          let studentTotal = 0;
-                          let hasAnyMark = false;
-
-                          return (
-                            <tr key={student.id} className="hover:bg-gray-50 transition-colors">
-                              <td className="p-3 font-medium text-gray-800 text-center">{student.classNumber}</td>
-                              <td className="p-3 text-gray-700 border-r border-gray-200">
-                                <div className="truncate">{student.englishName}</div>
-                              </td>
-                              {assessments.map(a => {
-                                const marks = a.marks || {};
-                                const studentMark = marks[student.id];
-                                const deduction = parseFloat(marks[`${student.id}_deduction`]) || 0;
-                                const isMulti = a.sectionsConfig && a.sectionsConfig.length > 0;
-
-                                let finalMark = null;
-                                if (isMulti) {
-                                  const scaled = calculateScaledTotal(studentMark, a);
-                                  if (scaled !== null) finalMark = scaled - deduction;
-                                } else {
-                                  const raw = calculateTotal(studentMark);
-                                  if (raw !== null) finalMark = raw - deduction;
-                                }
-
-                                if (finalMark !== null) {
-                                  studentTotal += finalMark;
-                                  hasAnyMark = true;
-                                }
-
-                                const isMissing = finalMark === null;
-
-                                const revealTopMark =
-                                  !isMissing &&
-                                  marksIsTopTwo(
-                                    finalMark,
-                                    overviewStats[a.id]?.marks || []
-                                  );
-
-                                return (
-                                  <td
-                                    key={a.id}
-                                    className={`p-3 text-center border-r border-gray-200 ${isMissing
-                                      ? 'bg-red-50'
-                                      : revealTopMark
-                                        ? 'bg-yellow-200 font-bold text-yellow-950'
-                                        : ''
-                                      }`}
-                                  >
-                                    {isMissing
-                                      ? '-'
-                                      : studentView && !revealTopMark
-                                        ? '***'
-                                        : finalMark.toFixed(1)}
-                                  </td>
-                                );
-                              })}
-                              <td
-                                className={`p-3 text-center font-bold ${!hasAnyMark
-                                  ? 'bg-red-50 text-blue-700'
-                                  : marksIsTopTwo(
-                                    studentTotal,
-                                    overviewTotalStats.marks
-                                  )
-                                    ? 'bg-yellow-200 text-yellow-950'
-                                    : 'bg-blue-50/50 text-blue-700'
-                                  }`}
-                              >
-                                {!hasAnyMark
-                                  ? '-'
-                                  : studentView &&
-                                    !marksIsTopTwo(
-                                      studentTotal,
-                                      overviewTotalStats.marks
-                                    )
-                                    ? '***'
-                                    : studentTotal.toFixed(1)}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                        {/* Overview Stats Row */}
-                        {currentClassStudents.length > 0 && (
-                          <tr className="bg-blue-50/50 border-t-2 border-blue-200">
-                            <td colSpan={2} className="p-3 font-bold text-right text-blue-800 border-r border-gray-200">
-                              Statistics<br />
-                              <span className="text-[10px] font-normal text-blue-600">Mean / Median / Pass</span>
-                            </td>
-                            {assessments.map(a => (
-                              <StatCell
-                                key={a.id}
-                                stats={getStats(overviewStats[a.id].marks, overviewStats[a.id].fullMark)}
-                                borderRight
-                              />
-                            ))}
-                            <StatCell
-                              stats={getStats(overviewTotalStats.marks, overviewTotalStats.fullMark)}
-                              isBold
-                              bg="bg-blue-100/50"
-                            />
-                          </tr>
-                        )}
-                      </>
                     )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )
-        ) : selectedAssessment.designatedPending === true ? (
-          <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 space-y-4">
-            <h2 className="text-xl font-bold text-amber-950">
-              {selectedAssessment.name}
-            </h2>
 
-            <p className="text-sm text-amber-900">
-              This item was added by Designated Assessment.
-              It has no marking configuration yet.
-            </p>
+                    <span className="mk-divider" />
 
-            <p className="text-sm text-amber-900">
-              Configure its date, full mark and, where needed, its sections
-              before entering marks. It is excluded from term calculations
-              and exports until configured.
-            </p>
-
-            <button
-              type="button"
-              onClick={openEditModal}
-              className="rounded-lg bg-amber-700 px-4 py-2 text-sm font-bold text-white"
-            >
-              Configure assessment
-            </button>
-          </div>
-        ) : (
-          <div className="w-full bg-white rounded-lg shadow-sm border border-gray-200 flex flex-col">
-            {/* Header */}
-            <div className="p-4 border-b border-gray-200 flex flex-col md:flex-row md:justify-between md:items-center bg-white rounded-t-lg gap-4">
-              <div>
-                <h2 className="text-xl font-bold text-gray-800 flex items-center flex-wrap gap-2">
-                  {isMultiSectionCategory ? `${selectedAssessment.term || selectedTerm} ${selectedCategory}` : selectedAssessment.name}
-
-                  <div className="flex items-center gap-2">
+                    {assessmentClasses.length > 1 && (
+                      <button
+                        type="button"
+                        className="mk-btn mk-btn-sm"
+                        onClick={() => {
+                          setAllClassesStudentView(true);
+                          setShowAllClassesModal(true);
+                        }}
+                      >
+                        <Users /> All classes
+                      </button>
+                    )}
                     <button
-                      onClick={openEditModal}
-                      className="text-sm text-blue-600 hover:text-blue-800 flex items-center font-medium bg-blue-50 px-2 py-1 rounded border border-blue-100"
-                      title="Edit Configuration & Term"
+                      type="button"
+                      className="mk-btn mk-btn-sm"
+                      onClick={handleCopyTotals}
+                      title="Copy final totals in class-number order (WebSAMS)"
                     >
-                      <Edit className="w-4 h-4 mr-1" /> Edit Settings
+                      {copySuccess ? <CheckCircle /> : <Copy />}
+                      {copySuccess ? 'Copied' : 'Copy totals'}
                     </button>
                     <button
-                      onClick={() => handleDeleteAssessment(selectedAssessment.id)}
-                      className="text-sm text-red-500 hover:text-red-700 flex items-center font-medium bg-red-50 px-2 py-1 rounded border border-red-100"
-                    >
-                      <Trash2 className="w-4 h-4 mr-1" /> Delete & Reset
-                    </button>
-                    <button
-                      onClick={async () => {
-                        const newStatus = !selectedAssessment.isDisclosed;
-                        try {
-                          await updateDoc(doc(db, "assessments", selectedAssessment.id), { isDisclosed: newStatus });
-                          const updated = { ...selectedAssessment, isDisclosed: newStatus };
-                          setSelectedAssessment(updated);
-                          setAssessments(assessments.map(a => a.id === updated.id ? updated : a));
-                        } catch (e) { console.error(e); alert("Failed to update disclosure status."); }
-                      }}
-                      className={`text-sm flex items-center font-medium px-2 py-1 rounded border ${selectedAssessment.isDisclosed ? 'bg-green-50 text-green-700 border-green-100 hover:text-green-800' : 'bg-amber-50 text-amber-700 border-amber-100 hover:text-amber-800'}`}
-                      title="Toggle visibility of marks and documents for students"
-                    >
-                      {selectedAssessment.isDisclosed ? <Eye className="w-4 h-4 mr-1" /> : <EyeOff className="w-4 h-4 mr-1" />}
-                      {selectedAssessment.isDisclosed ? 'Disclosed' : 'Hidden from Students'}
-                    </button>
-                  </div>
-                </h2>
-                <p className="text-sm text-gray-500 flex items-center mt-2">
-                  <span className="bg-gray-100 px-2 py-0.5 rounded mr-2" title="Linked Classes">
-                    {selectedAssessment.classes ? selectedAssessment.classes.join(', ') : selectedAssessment.className}
-                  </span>
-                  <span className="bg-blue-100 text-blue-800 px-2 py-0.5 rounded mr-2">{selectedCategory}</span>
-                  <span className="bg-purple-100 text-purple-800 px-2 py-0.5 rounded mr-2">{selectedAssessment.term || selectedTerm}</span>
-                  <Calendar className="w-4 h-4 mr-1" /> {selectedAssessment.date}
-                  {!isMultiSectionCategory && <span className="ml-2 bg-gray-100 px-2 py-0.5 rounded">Full Mark: {selectedAssessment.fullMark || 100}</span>}
-                </p>
-                {selectedAssessment.linkedDocId && (
-                  <button
-                    onClick={() => handleOpenPreview(selectedAssessment.linkedDocId)}
-                    className="mt-2 text-sm text-indigo-600 hover:text-indigo-800 flex items-center font-medium bg-indigo-50 px-2 py-1 rounded border border-indigo-100 transition-colors"
-                  >
-                    <ExternalLink className="w-4 h-4 mr-1.5" /> View Linked Document
-                  </button>
-                )}
-              </div>
-
-              <div className="flex items-center space-x-3 flex-wrap gap-y-2 pl-8">
-                {assessmentClasses.length > 1 && (
-                  <button
-                    onClick={() => {
-                      setAllClassesStudentView(true);
-                      setShowAllClassesModal(true);
-                    }}
-                    className="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200"
-                    title="View scores for all classes linked to this assessment"
-                  >
-                    <Users className="w-4 h-4 mr-1.5" /> All Classes
-                  </button>
-                )}
-                <button
-                  onClick={handleCopyTotals}
-                  className="flex items-center justify-center w-[135px] px-3 py-2 text-sm font-medium rounded-md transition-colors bg-teal-50 text-teal-700 hover:bg-teal-100 border border-teal-200"
-                  title="Copy total marks vertically for WebSAMS (T1A3/T2A3)"
-                >
-                  {copySuccess ? <CheckCircle className="w-4 h-4 mr-1.5" /> : <Copy className="w-4 h-4 mr-1.5" />}
-                  {copySuccess ? 'Copied!' : 'Copy Totals'}
-                </button>
-
-                {isMultiSectionCategory && (
-                  <>
-                    <button
+                      type="button"
+                      className="mk-btn mk-btn-sm"
                       onClick={() => {
                         setRevealStep(studentView ? 0 : 4);
                         setShowOverviewModal(true);
                       }}
-                      className="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200"
                     >
-                      <BarChart2 className="w-4 h-4 mr-1.5" /> Overview & Graph
+                      <BarChart2 /> Overview & graph
                     </button>
-                    <button
-                      onClick={openAmendModal}
-                      className="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors bg-orange-50 text-orange-700 hover:bg-orange-100 border border-orange-200"
-                      title="Amend individual component marks with buttons"
-                    >
-                      <Edit3 className="w-4 h-4 mr-1.5" /> Amend Mark
-                    </button>
-                  </>
-                )}
+                    {isMultiSectionCategory && (
+                      <button type="button" className="mk-btn mk-btn-sm" onClick={openAmendModal}>
+                        <Edit3 /> Amend marks
+                      </button>
+                    )}
 
-                <div className="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
-                  <button
-                    onClick={() => setInputMethod('individual')}
-                    className={`flex items-center px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${inputMethod === 'individual' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
-                  >
-                    <FormInput className="w-4 h-4 mr-1.5" /> Boxes
-                  </button>
-                  <button
-                    onClick={() => setInputMethod('bulk')}
-                    className={`flex items-center px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${inputMethod === 'bulk' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
-                  >
-                    <ClipboardPaste className="w-4 h-4 mr-1.5" /> Paste Data
-                  </button>
+                    <div className="ml-auto flex items-center gap-2">
+                      {marksDirty && <span className="mk-chip mk-chip-yellow">Unsaved changes</span>}
+                      <button
+                        type="button"
+                        onClick={handleSaveMarks}
+                        disabled={isSaving}
+                        className={`mk-btn ${saveFlash ? 'mk-btn-emerald' : 'mk-btn-primary'}`}
+                      >
+                        {isSaving ? <Loader2 className="animate-spin" /> : saveFlash ? <CheckCircle /> : <Save />}
+                        {saveFlash ? 'Saved' : 'Save marks'}
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
-                <button
-                  onClick={handleSaveMarks}
-                  disabled={isSaving}
-                  className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors disabled:opacity-70 font-medium shadow-sm"
-                >
-                  {isSaving ? <Loader2 className="w-5 h-5 mr-2 animate-spin" /> : <Save className="w-5 h-5 mr-2" />}
-                  Save
-                </button>
-              </div>
-            </div>
+                {inputMethod === 'bulk' && (
+                  <div className="shrink-0 border-b border-blue-100 bg-blue-50 px-4 py-3">
+                    <p className="text-xs text-blue-800 mb-2">
+                      <b>Paste from Excel.</b>{' '}
+                      {hasSections
+                        ? 'Each row is a student (class-number order). Columns map to the sections/sub-sections from left to right.'
+                        : 'Paste one column of marks; rows map to students in class-number order.'}
+                    </p>
+                    <textarea
+                      rows={4}
+                      value={bulkText}
+                      onChange={handleBulkPaste}
+                      data-gramm="false"
+                      data-gramm_editor="false"
+                      placeholder="Paste marks here…"
+                      className="mk-input w-full resize-y whitespace-pre font-mono"
+                    />
+                  </div>
+                )}
 
-            {inputMethod === 'bulk' && (
-              <div className="p-4 bg-blue-50 border-b border-blue-100">
-                <h3 className="text-sm font-bold text-blue-800 mb-2 flex items-center">
-                  <ClipboardPaste className="w-4 h-4 mr-1" /> Bulk Paste Marks
-                </h3>
-                <p className="text-xs text-blue-600 mb-3">
-                  {hasSections
-                    ? "Paste a grid of marks from Excel. Columns will automatically map to your sections/sub-sections from left to right (separated by tabs)."
-                    : "Paste a column of marks directly from Excel. It will map to students in class number order."}
-                </p>
-                <textarea
-                  rows={6}
-                  value={bulkText}
-                  onChange={handleBulkPaste}
-                  data-gramm="false" data-gramm_editor="false"
-                  placeholder="Paste marks here..."
-                  className="w-full border border-gray-300 rounded-md p-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 resize-y whitespace-pre"
-                />
-              </div>
-            )}
-
-            <div className="overflow-x-auto w-full">
-              <table className="w-max mx-auto text-left border-collapse bg-white min-w-max">
-                <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
-                  {hasSections && (
-                    <tr className="text-gray-600 text-sm uppercase tracking-wider border-b border-gray-200">
-                      <th colSpan={2} className="p-3 border-r border-gray-200"></th>
-                      {selectedAssessment.sectionsConfig.map((sec, i) => {
-                        const isLastInGroup = sec.groupName && (i === selectedAssessment.sectionsConfig.length - 1 || selectedAssessment.sectionsConfig[i + 1].groupName !== sec.groupName);
-                        return (
-                          <React.Fragment key={sec.id}>
-                            <th colSpan={sec.hasSubSections ? sec.subSections.length + 1 : 1} className="p-2 border-r border-gray-200 text-center bg-gray-100">
-                              <div className="font-bold text-gray-700">{sec.name}</div>
-                              <div className="text-[10px] text-gray-500 normal-case font-normal">
-{assessmentUsesScaling(selectedAssessment)
-                                  ? `Full: ${sec.fullMark} | Weight: ${sec.weight}%`
-                                  : `Full: ${getSectionRawFullMark(sec)} | Raw marks`}
-                              </div>
-                            </th>
-                            {isLastInGroup && (
-                              <th rowSpan={1} className="p-2 border-r border-gray-200 text-center bg-purple-100">
-                                <div className="font-bold text-purple-800">{sec.groupName} Group</div>
-                              </th>
-                            )}
-                          </React.Fragment>
-                        );
-                      })}
-                      <th colSpan={(!studentView && showDeduct) ? 4 : 3}></th>
-                    </tr>
-                  )}
-                  <tr className="text-gray-600 text-sm uppercase tracking-wider">
-                    <th className="p-3 border-b w-16 text-center align-top">No.</th>
-                    <th className="p-3 border-b w-56 align-top border-r border-gray-200">English Name</th>
-
-                    {hasSections ? (
-                      <>
-                        {selectedAssessment.sectionsConfig.map((sec, i) => {
-                          const isLastInGroup = sec.groupName && (i === selectedAssessment.sectionsConfig.length - 1 || selectedAssessment.sectionsConfig[i + 1].groupName !== sec.groupName);
-                          return (
-                            <React.Fragment key={sec.id}>
-                              {sec.hasSubSections ? (
-                                <>
-                                  {sec.subSections.map(sub => (
-                                    <th key={sub.id} className="p-3 border-b w-24 align-top text-center">
-                                      <div className="mb-1 text-xs">{sub.name}</div>
-                                      <div className="text-[10px] text-gray-400 normal-case font-normal">
-                                        Full: {sub.fullMark}
-                                      </div>
-                                    </th>
-                                  ))}
-                                  <th className="p-3 border-b w-24 text-gray-700 bg-gray-50 font-bold align-top text-center border-r border-gray-200">
-                                    <div className="mb-1 text-xs">Total</div>
+                {/* Marks table */}
+                <div className="flex-1 min-h-0 overflow-auto bg-white">
+                  <table className="mk-table">
+                    <thead>
+                      {hasSections && (
+                        <tr className="mk-group-row">
+                          <th className="mk-sticky-no"></th>
+                          <th className="mk-sticky-name"></th>
+                          {selectedAssessment.sectionsConfig.map((sec, i) => {
+                            const isLastInGroup = sec.groupName && (i === selectedAssessment.sectionsConfig.length - 1 || selectedAssessment.sectionsConfig[i + 1].groupName !== sec.groupName);
+                            return (
+                              <React.Fragment key={sec.id}>
+                                <th colSpan={sec.hasSubSections ? sec.subSections.length + 1 : 1} className="mk-sep">
+                                  {sec.name}
+                                  <span className="mk-sub">
+                                    {assessmentUsesScaling(selectedAssessment)
+                                      ? `Full ${sec.fullMark} · Weight ${sec.weight}%`
+                                      : `Full ${getSectionRawFullMark(sec)}`}
+                                  </span>
+                                </th>
+                                {isLastInGroup && (
+                                  <th className="mk-sep" style={{ background: '#f5f3ff', color: '#6d28d9' }}>
+                                    {sec.groupName}
                                   </th>
-                                </>
-                              ) : (
-                                <th className="p-3 border-b w-24 align-top text-center border-r border-gray-200">
-                                  <div className="mb-1 text-xs">Mark</div>
-                                </th>
-                              )}
-                              {isLastInGroup && (
-                                <th className="p-3 border-b w-24 text-purple-700 bg-purple-50 font-bold align-top text-center border-r border-gray-200">
-                                  <div className="mb-1 text-xs">Total</div>
-                                </th>
-                              )}
-                            </React.Fragment>
-                          );
-                        })}
-<th className="p-3 border-b w-28 text-gray-700 font-bold align-top text-center">
-                          <div className="flex flex-col items-center justify-center">
-                            <span>
-                              Total / {getAssessmentFullMark(selectedAssessment)}
-                            </span>
-                            <span className="mt-1 text-[10px] font-normal normal-case text-gray-500">
-                              {assessmentUsesScaling(selectedAssessment)
-                                ? 'Converted to 100'
-                                : 'Raw marks'}
-                            </span>
-                          </div>
-                        </th>
-                      </>
-                    ) : (
-                      <th className="p-3 border-b w-32 align-top">Mark / Grade</th>
-                    )}
+                                )}
+                              </React.Fragment>
+                            );
+                          })}
+                          <th colSpan={trailingCols} className="mk-sep"></th>
+                        </tr>
+                      )}
+                      <tr>
+                        <th className="mk-sticky-no">No.</th>
+                        <th className="mk-sticky-name">Student</th>
 
-                    {!studentView && showDeduct && (
-                      <th className="p-3 border-b w-24 text-center align-top border-l border-gray-200 text-red-600">
-                        <div className="flex items-center justify-center">
-                          <MinusCircle className="w-4 h-4 mr-1" /> Deduct
-                        </div>
-                      </th>
-                    )}
-                    <th className="p-3 border-b w-24 text-blue-700 bg-blue-50 font-bold align-top text-center border-l border-gray-200">Final</th>
-                    {isMultiSectionCategory && (
-                      <th className="p-3 border-b w-36 text-center align-top border-l border-gray-200">
-                        <div className="flex flex-col items-center justify-center">
-                          <span>Compare</span>
-                          <select
-                            value={selectedCompareId}
-                            onChange={(e) => setSelectedCompareId(e.target.value)}
-                            className="mt-1 w-full border border-gray-300 rounded p-1 text-[10px] outline-none font-normal"
-                          >
-                            <option value="">None</option>
-                            {compareAssessmentsList.map(ca => (
-                              <option key={ca.id} value={ca.id}>{ca.term} {ca.category}</option>
-                            ))}
-                          </select>
-                        </div>
-                      </th>
-                    )}
-                    <th className="p-3 border-b w-28 text-center align-top border-l border-gray-200">
-                      <div className="flex flex-col items-center justify-center">
-                        <span>Status</span>
-                        {!studentView && (
-                          <button
-                            onClick={() => setShowDeduct(!showDeduct)}
-                            className="flex items-center mt-1 text-[10px] font-semibold text-gray-500 hover:text-blue-600 transition-colors bg-gray-100 px-2 py-0.5 rounded-full border border-gray-200"
-                            title="Toggle Deduct Column"
-                          >
-                            {showDeduct ? <ToggleRight className="w-3 h-3 mr-1 text-blue-600" /> : <ToggleLeft className="w-3 h-3 mr-1" />}
-                            Deduct
-                          </button>
+                        {hasSections ? (
+                          <>
+                            {selectedAssessment.sectionsConfig.map((sec, i) => {
+                              const isLastInGroup = sec.groupName && (i === selectedAssessment.sectionsConfig.length - 1 || selectedAssessment.sectionsConfig[i + 1].groupName !== sec.groupName);
+                              return (
+                                <React.Fragment key={sec.id}>
+                                  {sec.hasSubSections ? (
+                                    <>
+                                      {sec.subSections.map((sub, j) => (
+                                        <th key={sub.id} className={j === 0 ? 'mk-sep' : ''}>
+                                          {sub.name}
+                                          <span className="mk-sub">/{sub.fullMark}</span>
+                                        </th>
+                                      ))}
+                                      <th style={{ color: '#334155' }}>
+                                        Total
+                                        <span className="mk-sub">/{getSectionRawFullMark(sec)}</span>
+                                      </th>
+                                    </>
+                                  ) : (
+                                    <th className="mk-sep">
+                                      Mark
+                                      <span className="mk-sub">/{sec.fullMark}</span>
+                                    </th>
+                                  )}
+                                  {isLastInGroup && (
+                                    <th className="mk-sep" style={{ color: '#6d28d9' }}>Group total</th>
+                                  )}
+                                </React.Fragment>
+                              );
+                            })}
+                            <th className="mk-sep">
+                              Total
+                              <span className="mk-sub">
+                                /{getAssessmentFullMark(selectedAssessment)}
+                                {assessmentUsesScaling(selectedAssessment) ? ' · converted' : ' · raw'}
+                              </span>
+                            </th>
+                          </>
+                        ) : (
+                          <th className="mk-sep mk-left">
+                            Mark / Grade
+                            <span className="mk-sub">Full mark {selectedAssessment.fullMark ?? 100}</span>
+                          </th>
                         )}
-                      </div>
-                    </th>
-                    {!studentView && (
-                      <th className="p-3 border-b w-32 text-center align-top border-l border-gray-200">Comment</th>
-                    )}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {currentClassStudents.length === 0 ? (
-                    <tr>
-                      <td colSpan={hasSections ? ((!studentView && showDeduct) ? 12 : 11) : ((!studentView && showDeduct) ? 6 : 5)} className="p-8 text-center text-gray-500">
-                        No students found. Please add students in the Manage Classes tab.
-                      </td>
-                    </tr>
-                  ) : (
-                    <>
-                      {currentClassStudents.map((s, rowIndex) => {
-                        const studentMarks = marksData[s.id];
-                        let hasMark = false;
-                        if (hasSections) {
-                          hasMark = studentMarks && typeof studentMarks === 'object' && Object.values(studentMarks).some(v => v.toString().trim() !== '');
-                        } else {
-                          hasMark = studentMarks && studentMarks.toString().trim() !== '';
-                        }
 
-const rawTotal = calculateTotal(studentMarks);
+                        {showDeductCol && <th className="mk-sep" style={{ color: '#dc2626' }}>Deduct</th>}
+                        <th className="mk-sep" style={{ color: '#1d4ed8' }}>Final</th>
+                        {isMultiSectionCategory && (
+                          <th className="mk-sep" style={{ minWidth: 130 }}>
+                            Compare
+                            <select
+                              value={selectedCompareId}
+                              onChange={(e) => setSelectedCompareId(e.target.value)}
+                              className="mt-1 block w-full rounded border border-slate-300 bg-white px-1 py-0.5 text-[11px] font-normal normal-case text-slate-700"
+                            >
+                              <option value="">None</option>
+                              {compareAssessmentsList.map(ca => (
+                                <option key={ca.id} value={ca.id}>{ca.term} {ca.name}</option>
+                              ))}
+                            </select>
+                          </th>
+                        )}
+                        <th className="mk-sep">Done</th>
+                        {!studentView && <th className="mk-sep mk-left">Comment</th>}
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {currentClassStudents.length === 0 ? (
+                        <tr>
+                          <td colSpan={100} className="p-8 text-slate-500">
+                            No students found. Please add students in the Manage Classes tab.
+                          </td>
+                        </tr>
+                      ) : currentClassStudents.map((s, rowIndex) => {
+                        const studentMarks = marksData[s.id];
+                        const hasMark = hasSections
+                          ? Boolean(studentMarks && typeof studentMarks === 'object' && Object.values(studentMarks).some(marksValueFilled))
+                          : marksValueFilled(studentMarks);
+
+                        const rawTotal = calculateTotal(studentMarks);
                         const scaledTotal = hasSections
                           ? calculateScaledTotal(studentMarks, selectedAssessment)
                           : rawTotal;
-
-                        const deduction =
-                          parseFloat(marksData[`${s.id}_deduction`]) || 0;
-
-                        const finalTotal = scaledTotal !== null
-                          ? scaledTotal - deduction
-                          : null;
-
+                        const deduction = parseFloat(marksData[`${s.id}_deduction`]) || 0;
+                        const finalTotal = scaledTotal !== null ? scaledTotal - deduction : null;
                         const isTopMark = topStudentIds.has(s.id);
+                        const inputsDisabled = inputMethod === 'bulk' || studentView;
                         let globalColIndex = 0;
 
+                        const renderMarkInput = (value, onChange, extraClass = '') => {
+                          const isMissing = !marksValueFilled(value);
+                          const currentCol = globalColIndex++;
+                          return (
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              data-row={rowIndex}
+                              data-col={currentCol}
+                              data-gramm="false"
+                              data-gramm_editor="false"
+                              value={studentView ? (isMissing ? '' : '***') : (value ?? '')}
+                              onChange={event => { if (!studentView) onChange(event.target.value); }}
+                              onKeyDown={event => handleKeyDown(event, rowIndex, currentCol)}
+                              onFocus={event => event.target.select()}
+                              disabled={inputsDisabled}
+                              className={`mk-cell-input ${extraClass} ${isMissing ? 'is-missing' : ''}`}
+                            />
+                          );
+                        };
+
                         return (
-                          <tr key={s.id} className="hover:bg-gray-50 transition-colors">
-                            <td className="p-3 font-medium text-gray-800 text-center">{s.classNumber}</td>
-                            <td className="p-3 text-gray-700 border-r border-gray-200">
-                              <div className="truncate">{s.englishName}</div>
-                              <div className="text-xs text-gray-400 truncate">{s.chineseName}</div>
+                          <tr key={s.id}>
+                            <td className="mk-sticky-no font-semibold text-slate-700">{s.classNumber}</td>
+                            <td className="mk-sticky-name">
+                              <div className="truncate max-w-[220px] text-slate-800 font-medium">{s.englishName}</div>
+                              {s.chineseName && <div className="truncate max-w-[220px] text-[11px] text-slate-400">{s.chineseName}</div>}
                             </td>
 
                             {hasSections ? (
@@ -5170,181 +4505,118 @@ const rawTotal = calculateTotal(studentMarks);
                                   if (isLastInGroup) {
                                     let tempTotal = 0;
                                     let hasAnyGroupMark = false;
-                                    const groupSecs = selectedAssessment.sectionsConfig.filter(s => s.groupName === sec.groupName);
-                                    groupSecs.forEach(gs => {
-                                      const gsTotal = calculateSectionRawTotal(studentMarks, gs);
-                                      if (gsTotal !== null) {
-                                        tempTotal += gsTotal;
-                                        hasAnyGroupMark = true;
-                                      }
-                                    });
+                                    selectedAssessment.sectionsConfig
+                                      .filter(gs => gs.groupName === sec.groupName)
+                                      .forEach(gs => {
+                                        const gsTotal = calculateSectionRawTotal(studentMarks, gs);
+                                        if (gsTotal !== null) {
+                                          tempTotal += gsTotal;
+                                          hasAnyGroupMark = true;
+                                        }
+                                      });
                                     if (hasAnyGroupMark) groupTotal = tempTotal;
                                   }
+
+                                  const objectMarks = studentMarks && typeof studentMarks === 'object' ? studentMarks : {};
 
                                   return (
                                     <React.Fragment key={sec.id}>
                                       {sec.hasSubSections ? (
                                         <>
-                                          {sec.subSections.map(sub => {
-                                            const val = (studentMarks && typeof studentMarks === 'object') ? (studentMarks[sub.id] || '') : '';
-                                            const isMissing = val === '';
-                                            const currentCol = globalColIndex++;
-                                            return (
-                                              <td key={sub.id} className={`p-2 text-center ${isMissing ? 'bg-red-50' : ''}`}>
-                                                <input
-                                                  type="text"
-                                                  data-row={rowIndex}
-                                                  data-col={currentCol}
-                                                  data-gramm="false" data-gramm_editor="false"
-                                                  value={studentView ? (isMissing ? '' : '***') : val}
-                                                  onChange={(e) => { if (!studentView) handleMarkChange(s.id, e.target.value, sub.id) }}
-                                                  onKeyDown={(e) => handleKeyDown(e, rowIndex, currentCol)}
-                                                  disabled={inputMethod === 'bulk' || studentView}
-                                                  className={`w-full max-w-[70px] border rounded-md p-1.5 text-center outline-none transition-colors focus:ring-2 focus:ring-blue-500 ${isMissing ? 'bg-red-50 border-red-300' : (inputMethod === 'bulk' || studentView ? 'bg-gray-100 text-gray-500' : 'bg-white')
-                                                    } ${!isMissing && !studentView ? 'border-gray-300' : 'border-dashed border-gray-300'}`}
-                                                />
-                                              </td>
-                                            );
-                                          })}
-                                          <td className={`p-2 font-semibold text-gray-600 text-center border-r border-gray-200 ${secRawTotal === null ? 'bg-red-50' : 'bg-gray-50/50'}`}>
-                                            {secRawTotal === null ? '-' : (studentView ? '***' : secRawTotal.toFixed(1))}
+                                          {sec.subSections.map((sub, j) => (
+                                            <td key={sub.id} className={j === 0 ? 'mk-sep' : ''}>
+                                              {renderMarkInput(objectMarks[sub.id], value => handleMarkChange(s.id, value, sub.id))}
+                                            </td>
+                                          ))}
+                                          <td className="font-semibold text-slate-600 bg-slate-50/60">
+                                            {secRawTotal === null ? <span className="mk-gap">–</span> : (studentView ? '***' : secRawTotal.toFixed(1))}
                                           </td>
                                         </>
                                       ) : (
-                                        <td className={`p-2 text-center border-r border-gray-200 ${((studentMarks && typeof studentMarks === 'object') ? (studentMarks[sec.id] || '') : '') === '' ? 'bg-red-50' : ''}`}>
-                                          {(() => {
-                                            const val = (studentMarks && typeof studentMarks === 'object') ? (studentMarks[sec.id] || '') : '';
-                                            const isMissing = val === '';
-                                            const currentCol = globalColIndex++;
-                                            return (
-                                              <input
-                                                type="text"
-                                                data-row={rowIndex}
-                                                data-col={currentCol}
-                                                data-gramm="false" data-gramm_editor="false"
-                                                value={studentView ? (isMissing ? '' : '***') : val}
-                                                onChange={(e) => { if (!studentView) handleMarkChange(s.id, e.target.value, sec.id) }}
-                                                onKeyDown={(e) => handleKeyDown(e, rowIndex, currentCol)}
-                                                disabled={inputMethod === 'bulk' || studentView}
-                                                className={`w-full max-w-[70px] border rounded-md p-1.5 text-center outline-none transition-colors focus:ring-2 focus:ring-blue-500 ${isMissing ? 'bg-red-50 border-red-300' : (inputMethod === 'bulk' || studentView ? 'bg-gray-100 text-gray-500' : 'bg-white')
-                                                  } ${!isMissing && !studentView ? 'border-gray-300' : 'border-dashed border-gray-300'}`}
-                                              />
-                                            );
-                                          })()}
+                                        <td className="mk-sep">
+                                          {renderMarkInput(objectMarks[sec.id], value => handleMarkChange(s.id, value, sec.id))}
                                         </td>
                                       )}
                                       {isLastInGroup && (
-                                        <td className={`p-3 font-bold text-center text-purple-700 border-r border-gray-200 ${groupTotal === null ? 'bg-red-50' : 'bg-purple-50/50'}`}>
-                                          {groupTotal === null ? '-' : (studentView ? '***' : groupTotal.toFixed(1))}
+                                        <td className="mk-sep font-bold" style={{ color: '#6d28d9', background: 'rgba(245,243,255,.6)' }}>
+                                          {groupTotal === null ? <span className="mk-gap">–</span> : (studentView ? '***' : groupTotal.toFixed(1))}
                                         </td>
                                       )}
                                     </React.Fragment>
                                   );
                                 })}
-<td className={`p-3 font-semibold text-center text-gray-600 ${scaledTotal === null ? 'bg-red-50' : ''}`}>
-                                  {scaledTotal === null
-                                    ? '-'
-                                    : studentView
-                                      ? '***'
-                                      : scaledTotal.toFixed(1)}
+                                <td className="mk-sep font-semibold text-slate-700">
+                                  {scaledTotal === null ? <span className="mk-gap">–</span> : studentView ? '***' : scaledTotal.toFixed(1)}
                                 </td>
                               </>
                             ) : (
-                              <td className={`p-3 ${!hasMark ? 'bg-red-50' : ''}`}>
-                                <input
-                                  type="text"
-                                  data-row={rowIndex}
-                                  data-col={0}
-                                  data-gramm="false" data-gramm_editor="false"
-                                  value={studentView ? (!hasMark ? '' : '***') : (studentMarks || '')}
-                                  onChange={(e) => { if (!studentView) handleMarkChange(s.id, e.target.value) }}
-                                  onKeyDown={(e) => handleKeyDown(e, rowIndex, 0)}
-                                  disabled={inputMethod === 'bulk' || studentView}
-                                  placeholder={inputMethod === 'bulk' ? "Pasted from above..." : "Enter mark..."}
-                                  className={`w-full max-w-[200px] border rounded-md p-2 outline-none transition-colors focus:ring-2 focus:ring-blue-500 ${!hasMark ? 'bg-red-50 border-red-300' : (inputMethod === 'bulk' || studentView ? 'bg-gray-100 text-gray-500' : 'bg-white')
-                                    } ${hasMark && !studentView ? 'border-gray-300' : 'border-dashed border-gray-300'}`}
-                                />
+                              <td className="mk-sep mk-left">
+                                {renderMarkInput(
+                                  typeof studentMarks === 'object' ? '' : studentMarks,
+                                  value => handleMarkChange(s.id, value),
+                                  'is-wide'
+                                )}
                               </td>
                             )}
 
-                            {!studentView && showDeduct && (
-                              <td className="p-2 text-center border-l border-gray-200">
+                            {showDeductCol && (
+                              <td className="mk-sep">
                                 <input
                                   type="number"
                                   step="any"
-                                  data-gramm="false" data-gramm_editor="false"
+                                  data-gramm="false"
+                                  data-gramm_editor="false"
                                   value={marksData[`${s.id}_deduction`] || ''}
                                   onChange={(e) => handleDeductionChange(s.id, e.target.value)}
-                                  placeholder="-0"
-                                  className="w-full max-w-[60px] border rounded-md p-1.5 text-center outline-none transition-colors focus:ring-2 focus:ring-red-500 text-red-600 font-medium bg-white border-red-200 hover:border-red-300"
+                                  placeholder="0"
+                                  className="mk-cell-input"
+                                  style={{ color: '#dc2626', borderColor: '#fecaca' }}
                                 />
                               </td>
                             )}
 
-                            <td
-                              className={`p-3 font-bold text-center border-l border-gray-200 ${finalTotal === null
-                                ? 'bg-red-50'
-                                : isTopMark
-                                  ? 'bg-yellow-200 text-yellow-950'
-                                  : 'text-blue-700 bg-blue-50/50'
-                                }`}
-                            >
+                            <td className={`mk-sep ${finalTotal === null ? '' : isTopMark ? 'mk-top' : 'mk-final'}`}>
                               {finalTotal === null
-                                ? '-'
+                                ? <span className="mk-gap">–</span>
                                 : studentView && !isTopMark
                                   ? '***'
                                   : finalTotal.toFixed(1)}
                             </td>
 
                             {isMultiSectionCategory && (
-                              <td className="p-2 text-center border-l border-gray-200 align-middle">
+                              <td className="mk-sep">
                                 {(() => {
-                                  if (!selectedCompareId || finalTotal === null || studentView) return <span className="text-gray-300">-</span>;
+                                  if (!selectedCompareId || finalTotal === null || studentView) return <span className="mk-gap">–</span>;
                                   const compAss = compareAssessmentsList.find(a => a.id === selectedCompareId);
-                                  if (!compAss) return <span className="text-gray-300">-</span>;
+                                  if (!compAss) return <span className="mk-gap">–</span>;
 
                                   const compMarks = compAss.marks?.[s.id];
                                   const compDeduct = parseFloat(compAss.marks?.[`${s.id}_deduction`]) || 0;
                                   const compScaled = calculateScaledTotal(compMarks, compAss);
-                                  if (compScaled === null) return <span className="text-gray-300">-</span>;
+                                  if (compScaled === null) return <span className="mk-gap">–</span>;
 
-const compFinal = compScaled - compDeduct;
-                                  const currentFull =
-                                    getAssessmentFullMark(selectedAssessment);
-                                  const comparisonFull =
-                                    getAssessmentFullMark(compAss);
+                                  const compFinal = compScaled - compDeduct;
+                                  const currentFull = getAssessmentFullMark(selectedAssessment);
+                                  const comparisonFull = getAssessmentFullMark(compAss);
 
-                                  if (
-                                    currentFull <= 0 ||
-                                    comparisonFull <= 0
-                                  ) {
-                                    return <span className="text-gray-300">-</span>;
-                                  }
+                                  if (currentFull <= 0 || comparisonFull <= 0) return <span className="mk-gap">–</span>;
 
-                                  // Compare equivalent percentages.
-                                  const diff =
-                                    (finalTotal / currentFull) * 100 -
-                                    (compFinal / comparisonFull) * 100;
-
-                                  // Determine visual cues
+                                  const diff = (finalTotal / currentFull) * 100 - (compFinal / comparisonFull) * 100;
                                   const isPositive = diff > 0;
                                   const isNegative = diff < 0;
                                   const diffText = diff > 0 ? `+${diff.toFixed(1)}` : diff.toFixed(1);
-
-                                  // Background bar width calculation (max 30 diff for full width)
-                                  const absDiff = Math.abs(diff);
-                                  const widthPercent = Math.min(100, (absDiff / 30) * 100);
+                                  const widthPercent = Math.min(100, (Math.abs(diff) / 30) * 100);
 
                                   return (
-                                    <div className="relative w-full h-8 flex items-center justify-center border border-gray-300 bg-white rounded overflow-hidden shadow-sm">
+                                    <div className="relative mx-auto w-28 h-7 flex items-center justify-center border border-slate-200 bg-white rounded overflow-hidden">
                                       {diff !== 0 && (
                                         <div
-                                          className={`absolute top-0 bottom-0 ${isPositive ? 'left-1/2 bg-gradient-to-r from-green-200 to-green-100' : 'right-1/2 bg-gradient-to-l from-red-200 to-red-100'}`}
+                                          className={`absolute top-0 bottom-0 ${isPositive ? 'left-1/2 bg-green-200' : 'right-1/2 bg-red-200'}`}
                                           style={{ width: `${widthPercent / 2}%` }}
                                         />
                                       )}
-                                      <div className="absolute left-1/2 top-0 bottom-0 w-px bg-gray-400 border-dashed border-l"></div>
-                                      <span className={`relative z-10 text-sm font-extrabold tracking-wide ${isPositive ? 'text-green-700' : isNegative ? 'text-red-700' : 'text-gray-600'}`}>
+                                      <div className="absolute left-1/2 top-0 bottom-0 w-px bg-slate-300" />
+                                      <span className={`relative z-10 text-xs font-bold ${isPositive ? 'text-green-700' : isNegative ? 'text-red-700' : 'text-slate-600'}`}>
                                         {diff === 0 ? '0' : diffText}
                                       </span>
                                     </div>
@@ -5353,828 +4625,708 @@ const compFinal = compScaled - compDeduct;
                               </td>
                             )}
 
-                            <td className="p-3 text-center border-l border-gray-200">
-                              {hasMark ? (
-                                <CheckCircle className="w-5 h-5 text-green-500 mx-auto" />
-                              ) : (
-                                <span className="w-2 h-2 rounded-full bg-gray-300 inline-block"></span>
-                              )}
+                            <td className="mk-sep">
+                              {hasMark
+                                ? <CheckCircle className="w-4 h-4 text-green-500 mx-auto" />
+                                : <span className="mk-dot" />}
                             </td>
+
                             {!studentView && (
-                              <td className="p-2 text-center border-l border-gray-200">
+                              <td className="mk-sep mk-left">
                                 <input
                                   type="text"
-                                  placeholder="+ Add"
+                                  placeholder="Add comment"
                                   value={marksData[`${s.id}_comment`] || ''}
                                   onChange={(e) => setMarksData(prev => ({ ...prev, [`${s.id}_comment`]: e.target.value }))}
-                                  className="w-full max-w-[120px] border rounded-md p-1.5 text-xs outline-none focus:ring-2 focus:ring-blue-500 bg-white border-gray-200"
+                                  className="mk-cell-input is-wide is-text"
+                                  style={{ fontSize: 12 }}
                                 />
                               </td>
                             )}
                           </tr>
                         );
                       })}
+                    </tbody>
 
-                      {/* Statistics Row */}
-                      {currentClassStudents.length > 0 && (
-                        <tr className="bg-blue-50/50 border-t-2 border-blue-200">
-                          <td colSpan={2} className="p-3 font-bold text-right text-blue-800 border-r border-gray-200">
-                            Statistics<br />
-                            <span className="text-[10px] font-normal text-blue-600">Mean / Median / Pass</span>
+                    {currentClassStudents.length > 0 && (
+                      <tfoot>
+                        <tr>
+                          <td className="mk-sticky-no"></td>
+                          <td className="mk-sticky-name">
+                            <div className="font-bold text-blue-800 text-xs">Statistics</div>
+                            <div className="text-[10px] text-blue-600">Mean / Median / Pass</div>
                           </td>
 
                           {hasSections ? (
                             <>
-                              {selectedAssessment.sectionsConfig.map(sec => (
-                                <React.Fragment key={sec.id}>
-                                  {sec.hasSubSections ? (
-                                    <>
-                                      {sec.subSections.map(sub => (
-                                        <StatCell key={sub.id} stats={getStats(statsData[sub.id].marks, statsData[sub.id].fullMark)} />
-                                      ))}
-                                      <StatCell stats={getStats(statsData[`sec_${sec.id}`].marks, statsData[`sec_${sec.id}`].fullMark)} isBold borderRight />
-                                    </>
-                                  ) : (
-                                    <StatCell stats={getStats(statsData[sec.id].marks, statsData[sec.id].fullMark)} borderRight />
-                                  )}
-                                </React.Fragment>
-                              ))}
-                              <StatCell stats={getStats(statsData.scaledTotal.marks, statsData.scaledTotal.fullMark)} isBold />
+                              {selectedAssessment.sectionsConfig.map((sec, i) => {
+                                const isLastInGroup = sec.groupName && (i === selectedAssessment.sectionsConfig.length - 1 || selectedAssessment.sectionsConfig[i + 1].groupName !== sec.groupName);
+                                return (
+                                  <React.Fragment key={sec.id}>
+                                    {sec.hasSubSections ? (
+                                      <>
+                                        {sec.subSections.map((sub, j) =>
+                                          renderStatCell(sub.id, getStats(statsData[sub.id].marks, statsData[sub.id].fullMark), { className: j === 0 ? 'mk-sep' : '' })
+                                        )}
+                                        {renderStatCell(`sec_${sec.id}`, getStats(statsData[`sec_${sec.id}`].marks, statsData[`sec_${sec.id}`].fullMark), { bold: true })}
+                                      </>
+                                    ) : (
+                                      renderStatCell(sec.id, getStats(statsData[sec.id].marks, statsData[sec.id].fullMark), { className: 'mk-sep' })
+                                    )}
+                                    {isLastInGroup && <td className="mk-sep"></td>}
+                                  </React.Fragment>
+                                );
+                              })}
+                              {renderStatCell('scaled', getStats(statsData.scaledTotal.marks, statsData.scaledTotal.fullMark), { bold: true, className: 'mk-sep' })}
                             </>
                           ) : (
-                            <StatCell stats={getStats(statsData.main.marks, statsData.main.fullMark)} />
+                            renderStatCell('main', getStats(statsData.main.marks, statsData.main.fullMark), { className: 'mk-sep mk-left' })
                           )}
 
-                          {showDeduct && !studentView && <td className="p-2 border-l border-gray-200 bg-gray-50"></td>}
-
-                          <StatCell stats={getStats(statsData.final.marks, statsData.final.fullMark)} isBold borderLeft bg="bg-blue-100/50" />
-                          <td className="p-3"></td>
+                          {showDeductCol && <td className="mk-sep"></td>}
+                          {renderStatCell('final', overallStats, { bold: true, className: 'mk-sep' })}
+                          {isMultiSectionCategory && <td className="mk-sep"></td>}
+                          <td className="mk-sep"></td>
+                          {!studentView && <td className="mk-sep"></td>}
                         </tr>
-                      )}
-                    </>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
+                      </tfoot>
+                    )}
+                  </table>
+                </div>
+              </div>
+            )
+          )}
+        </main>
       </div>
 
-      {/* --- ADD/EDIT ASSESSMENT MODAL --- */}
+      {/* ================= ADD / EDIT / CONFIGURE ASSESSMENT ================= */}
       {showAddAssessment && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col">
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-lg shrink-0">
-              <h2 className="text-lg font-bold text-gray-800 flex items-center">
-                {isEditingAssessment ? <Edit className="w-5 h-5 mr-2 text-blue-600" /> : <PlusCircle className="w-5 h-5 mr-2 text-blue-600" />}
-                {isEditingAssessment ? 'Edit Assessment' : `Add New ${selectedCategory}`}
-              </h2>
-              <button onClick={() => setShowAddAssessment(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
-                <X className="w-6 h-6" />
+        <div className="mk-backdrop">
+          <div className="mk-modal max-w-4xl">
+            <div className="mk-modal-head">
+              <div className="min-w-0">
+                <h2>
+                  {isEditingAssessment ? <Edit className="text-blue-600" /> : <PlusCircle className="text-blue-600" />}
+                  {isEditingAssessment
+                    ? (selectedAssessment?.designatedPending ? 'Configure assessment' : 'Edit assessment')
+                    : `New ${formCategory} item`}
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {formCategory} · {cleanClassName(selectedClass)}
+                </p>
+              </div>
+              <button type="button" className="mk-btn mk-btn-icon mk-btn-ghost" onClick={() => setShowAddAssessment(false)} aria-label="Close">
+                <X />
               </button>
             </div>
 
-            <div className="p-6 overflow-y-auto flex-1">
-              <form id="assessment-form" onSubmit={handleSaveAssessment} className="space-y-6">
-                {/* Basic Info */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
-                  <div className="min-w-0">
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">
-                      Assessment Name
-                    </label>
-                    <input
-                      type="text"
-                      value={newAssessmentName}
-                      onChange={(e) => setNewAssessmentName(e.target.value)}
-                      placeholder={
-                        isMultiSectionForm
-                          ? `${formTerm} ${selectedCategory}`
-                          : 'e.g. Quiz 1'
-                      }
-                      data-gramm="false"
-                      data-gramm_editor="false"
-                      className="w-full min-w-0 border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                      required={!isMultiSectionForm}
-                    />
-                  </div>
-
-                  <div className="min-w-0">
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">
-                      Date
-                    </label>
-                    <input
-                      type="date"
-                      value={newAssessmentDate}
-                      onChange={(e) => setNewAssessmentDate(e.target.value)}
-                      className="w-full min-w-0 border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                      required
-                    />
-                  </div>
-
-                  <div className="min-w-0">
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">
-                      Term
-                    </label>
-                    <select
-                      value={formTerm}
-                      onChange={(e) => setFormTerm(e.target.value)}
-                      className="w-full min-w-0 border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                      required
-                    >
-                      {terms.map(t => (
-                        <option key={t} value={t}>{t}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {!isMultiSectionForm && (
-                    <div className="min-w-0">
-                      <label className="block text-sm font-semibold text-gray-700 mb-1">
-                        Item Full Mark — Original Maximum
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="any"
-                        inputMode="decimal"
-                        value={fullMark}
-                        onChange={(e) => setFullMark(e.target.value)}
-                        data-gramm="false"
-                        data-gramm_editor="false"
-                        className="w-full min-w-0 border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                        required
-                      />
-                      <p className="mt-1 text-xs text-gray-500">
-                        The maximum mark for this item, not its term weighting.
-                        Changing it does not change students' entered marks.
-                      </p>
-                    </div>
-                  )}
-                </div>
-
-                {!categoryDefaultsToMultiSection && (
-                  <div className="mt-2 mb-4">
-                    <label
-                      htmlFor="forceMultiSection"
-                      className="flex items-start gap-2 text-sm font-semibold text-gray-700"
-                    >
-                      <input
-                        type="checkbox"
-                        id="forceMultiSection"
-                        checked={forceMultiSection}
-                        onChange={event =>
-                          setForceMultiSection(event.target.checked)
-                        }
-                        disabled={
-                          isEditingAssessment &&
-                          !selectedAssessment?.designatedPending
-                        }
-                        className="mt-1 rounded text-blue-600 focus:ring-blue-500 disabled:opacity-50"
-                      />
-                      Enable Multi-Section Layout for this specific item
-                    </label>
-
-                    {isEditingAssessment &&
-                      !selectedAssessment?.designatedPending && (
-                        <p className="mt-1 text-xs text-gray-500">
-                          The layout is locked to protect existing marks.
-                          Full marks and section weights can still be edited.
-                        </p>
-                      )}
+            <div className="mk-modal-body bg-slate-50">
+              <form id="assessment-form" onSubmit={handleSaveAssessment} className="space-y-4">
+                {isEditingAssessment && selectedAssessment?.designatedPending && (
+                  <div className="rounded-lg border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-900 flex gap-2">
+                    <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                    <span>
+                      This compulsory item came from Designated Assessment. Choose its layout and full marks,
+                      then save to start entering marks. You can choose the layout only this once.
+                    </span>
                   </div>
                 )}
 
-                {/* Classes Selection */}
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">Apply to Classes</label>
-                  <div className="flex flex-wrap gap-2">
-                    {classes.map(c => (
-                      <label key={c.name} className={`flex items-center px-3 py-1.5 rounded-md border cursor-pointer transition-colors ${selectedClassesForNew.includes(c.name) ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}`}>
-                        <input
-                          type="checkbox"
-                          checked={selectedClassesForNew.includes(c.name)}
-                          onChange={() => toggleClassForNew(c.name)}
-                          className="mr-2 rounded text-blue-600 focus:ring-blue-500"
-                        />
-                        <span className="text-sm font-medium">{c.name}</span>
-                      </label>
-                    ))}
+                {/* Basics */}
+                <section className="mk-card p-4">
+                  <h3 className="mk-section-title">Basic details</h3>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <label className="mk-field sm:col-span-2">
+                      <span className="mk-label">Name</span>
+                      <input
+                        type="text"
+                        value={newAssessmentName}
+                        onChange={(e) => setNewAssessmentName(e.target.value)}
+                        placeholder={isMultiSectionForm ? `${formTerm} ${formCategory}` : 'e.g. Quiz 1'}
+                        data-gramm="false"
+                        data-gramm_editor="false"
+                        className="mk-input w-full"
+                        required={!isMultiSectionForm}
+                      />
+                    </label>
+                    <label className="mk-field">
+                      <span className="mk-label">Date</span>
+                      <input
+                        type="date"
+                        value={newAssessmentDate}
+                        onChange={(e) => setNewAssessmentDate(e.target.value)}
+                        className="mk-input w-full"
+                        required
+                      />
+                    </label>
+                    <label className="mk-field">
+                      <span className="mk-label">Term</span>
+                      <select
+                        value={formTerm}
+                        onChange={(e) => setFormTerm(e.target.value)}
+                        className="mk-input w-full"
+                        required
+                      >
+                        {terms.map(t => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                    </label>
                   </div>
-                </div>
+                </section>
 
-                {/* Document Linking */}
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">Link Archive Document (Optional)</label>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => { setDocLinkerTarget('main'); setShowDocLinker(true); }}
-                      className="px-3 py-2 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-md text-sm font-medium hover:bg-indigo-100 flex items-center transition-colors"
-                    >
-                      <LinkIcon className="w-4 h-4 mr-2" />
-                      {linkedDocId ? 'Change Linked Document' : 'Link Document'}
-                    </button>
-                    {linkedDocId && (
-                      <div className="flex items-center text-sm text-gray-600 bg-gray-100 px-3 py-2 rounded-md border border-gray-200">
-                        <FileText className="w-4 h-4 mr-2 text-gray-400" />
-                        <span className="truncate max-w-[200px]">{linkableDocs.find(a => a.id === linkedDocId)?.title || 'Unknown Document'}</span>
-                        <button type="button" onClick={() => setLinkedDocId('')} className="ml-2 text-red-500 hover:text-red-700"><X className="w-4 h-4" /></button>
-                      </div>
+                {/* Layout */}
+                <section className="mk-card p-4">
+                  <h3 className="mk-section-title">Marking layout</h3>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="mk-seg">
+                      <button
+                        type="button"
+                        className={!isMultiSectionForm ? 'is-active' : ''}
+                        disabled={layoutLocked}
+                        onClick={() => setForceMultiSection(false)}
+                      >
+                        <FormInput /> Single mark
+                      </button>
+                      <button
+                        type="button"
+                        className={isMultiSectionForm ? 'is-active' : ''}
+                        disabled={layoutLocked}
+                        onClick={() => setForceMultiSection(true)}
+                      >
+                        <Layers /> Sections / papers
+                      </button>
+                    </div>
+                    {layoutLocked && (
+                      <span className="mk-help">Layout is locked to protect existing marks. Full marks and weights can still change.</span>
                     )}
                   </div>
-                </div>
 
-{/* Multi-Section Config */}
+                  {!isMultiSectionForm && (
+                    <div className="mt-4 flex flex-wrap items-end gap-3">
+                      <label className="mk-field w-40">
+                        <span className="mk-label">Full mark</span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="any"
+                          inputMode="decimal"
+                          value={fullMark}
+                          onChange={(e) => setFullMark(e.target.value)}
+                          data-gramm="false"
+                          data-gramm_editor="false"
+                          className="mk-input w-full"
+                          required
+                        />
+                      </label>
+                      <p className="mk-help pb-2">
+                        The maximum mark for this item (not its term weighting). Changing it does not alter entered marks.
+                      </p>
+                    </div>
+                  )}
+                </section>
+
+                {/* Sections */}
                 {isMultiSectionForm && (
-                  <div className="border-t border-gray-200 pt-6 mt-6">
-                    <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 p-4">
-                      <label className="flex items-start gap-3 text-sm font-semibold text-gray-800">
+                  <section className="mk-card p-4 space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <h3 className="mk-section-title mb-0">Sections</h3>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="mk-label mr-1">Quick presets</span>
+                        {SECTION_PRESETS.map(preset => (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            className="mk-btn mk-btn-sm mk-btn-soft-purple"
+                            onClick={() => {
+                              if (
+                                sectionsConfig.length > 1 &&
+                                !window.confirm('Replace the current sections with this preset?')
+                              ) return;
+                              setSectionsConfig(preset.build());
+                              setPaperFullMark(preset.paperFullMark);
+                            }}
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+                      <label className="flex items-start gap-2 text-sm font-semibold text-slate-800">
                         <input
                           type="checkbox"
                           checked={scaleTotalTo100}
-                          onChange={event =>
-                            setScaleTotalTo100(event.target.checked)
-                          }
-                          className="mt-1 rounded text-blue-600 focus:ring-blue-500"
+                          onChange={event => setScaleTotalTo100(event.target.checked)}
+                          className="mt-0.5 rounded text-blue-600"
                         />
-                        <span>
-                          Convert total to 100 using section weights
-                        </span>
+                        Convert the total to 100 using section weights
                       </label>
-
-                      <p className="mt-2 text-xs leading-relaxed text-gray-600">
+                      <p className="mk-help mt-1 pl-6">
                         {scaleTotalTo100
-                          ? 'ON: section weights are applied and normalized to a maximum of 100. Example: 5 raw marks out of 15 becomes 33.3/100.'
-                          : 'OFF: section weights are ignored. The total and maximum are the sums of the enabled sections/subsections. Example: 5/15.'}
+                          ? 'ON: section weights are applied and normalised to 100 (e.g. 5/15 becomes 33.3/100).'
+                          : 'OFF: weights are ignored; the total is the sum of all sections (e.g. 5/15).'}
                       </p>
 
-                      <p className="mt-2 text-xs text-gray-500">
-                        This choice is saved for this assessment.
-                        Changing it does not rewrite entered component marks.
-                        Deduction is applied in the selected total’s units.
-                      </p>
-                    </div>
-                    <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-4 gap-4">
-                      <div>
-                        <h3 className="text-lg font-bold text-gray-800">Paper & Sections Configuration</h3>
-                        <div className="flex flex-wrap gap-2 mt-2">
-                          <span className="text-xs text-gray-500 font-semibold uppercase mt-1">Presets:</span>
-                          <button type="button" onClick={() => {
-                            setSectionsConfig([
-                              { id: generateId(), name: 'DBQ 1', groupName: 'DBQ', fullMark: 15, weight: 50, hasSubSections: true, subSections: [{ id: generateId(), name: 'a', fullMark: '' }, { id: generateId(), name: 'b', fullMark: '' }, { id: generateId(), name: 'c', fullMark: 8 }] },
-                              { id: generateId(), name: 'DBQ 2', groupName: 'DBQ', fullMark: 15, weight: 50, hasSubSections: true, subSections: [{ id: generateId(), name: 'a', fullMark: '' }, { id: generateId(), name: 'b', fullMark: '' }, { id: generateId(), name: 'c', fullMark: 8 }] }
-                            ]);
-                            setPaperFullMark(30);
-                          }} className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs font-bold hover:bg-purple-200 transition-colors">2DBQ</button>
-
-                          <button type="button" onClick={() => {
-                            setSectionsConfig([
-                              { id: generateId(), name: 'DBQ 1', groupName: 'DBQ', fullMark: 15, weight: 30, hasSubSections: true, subSections: [{ id: generateId(), name: 'a', fullMark: '' }, { id: generateId(), name: 'b', fullMark: '' }, { id: generateId(), name: 'c', fullMark: 8 }] },
-                              { id: generateId(), name: 'DBQ 2', groupName: 'DBQ', fullMark: 15, weight: 30, hasSubSections: true, subSections: [{ id: generateId(), name: 'a', fullMark: '' }, { id: generateId(), name: 'b', fullMark: '' }, { id: generateId(), name: 'c', fullMark: 8 }] },
-                              { id: generateId(), name: 'Essay', groupName: 'Essay', fullMark: 25, weight: 40, hasSubSections: true, subSections: [{ id: generateId(), name: '1', fullMark: 25 }, { id: generateId(), name: '2', fullMark: 25 }] }
-                            ]);
-                            setPaperFullMark(55);
-                          }} className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs font-bold hover:bg-purple-200 transition-colors">2DBQ + 1Essay</button>
-
-                          <button type="button" onClick={() => {
-                            setSectionsConfig([
-                              { id: generateId(), name: 'DBQ 1', groupName: 'DBQ', fullMark: 15, weight: 15, hasSubSections: true, subSections: [{ id: generateId(), name: 'a', fullMark: '' }, { id: generateId(), name: 'b', fullMark: '' }, { id: generateId(), name: 'c', fullMark: 8 }] },
-                              { id: generateId(), name: 'DBQ 2', groupName: 'DBQ', fullMark: 15, weight: 15, hasSubSections: true, subSections: [{ id: generateId(), name: 'a', fullMark: '' }, { id: generateId(), name: 'b', fullMark: '' }, { id: generateId(), name: 'c', fullMark: 8 }] },
-                              { id: generateId(), name: 'DBQ 3', groupName: 'DBQ', fullMark: 15, weight: 15, hasSubSections: true, subSections: [{ id: generateId(), name: 'a', fullMark: '' }, { id: generateId(), name: 'b', fullMark: '' }, { id: generateId(), name: 'c', fullMark: 8 }] },
-                              { id: generateId(), name: 'DBQ 4', groupName: 'DBQ', fullMark: 15, weight: 15, hasSubSections: true, subSections: [{ id: generateId(), name: 'a', fullMark: '' }, { id: generateId(), name: 'b', fullMark: '' }, { id: generateId(), name: 'c', fullMark: 8 }] },
-                              { id: generateId(), name: 'Essay', groupName: 'Essay', fullMark: 50, weight: 40, hasSubSections: true, subSections: [{ id: generateId(), name: '1', fullMark: 25 }, { id: generateId(), name: '2', fullMark: 25 }, { id: generateId(), name: '3', fullMark: 25 }, { id: generateId(), name: '4', fullMark: 25 }, { id: generateId(), name: '5', fullMark: 25 }] }
-                            ]);
-                            setPaperFullMark(110);
-                          }} className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs font-bold hover:bg-purple-200 transition-colors">4DBQ + 2Essay</button>
+                      {scaleTotalTo100 ? (
+                        <div className="mt-3 pl-6 flex flex-wrap items-end gap-3">
+                          <label className="mk-field w-32">
+                            <span className="mk-label">Paper full mark</span>
+                            <input
+                              type="number"
+                              value={paperFullMark}
+                              onChange={event => setPaperFullMark(event.target.value)}
+                              data-gramm="false"
+                              data-gramm_editor="false"
+                              className="mk-input w-full text-center font-bold"
+                            />
+                          </label>
+                          <button type="button" onClick={autoCalculateWeights} className="mk-btn">
+                            <Percent /> Auto weights
+                          </button>
+                          <span className={`mk-chip ${Math.abs(sectionWeightTotal - 100) < 0.05 ? 'mk-chip-green' : 'mk-chip-yellow'}`}>
+                            Weights total: {Number(sectionWeightTotal.toFixed(1))}%
+                          </span>
                         </div>
-                      </div>
-<div className="flex items-center space-x-2">
-                        <label className="text-sm font-semibold text-gray-700">
-                          Paper Full Mark:
-                        </label>
-                        <input
-                          type="number"
-                          value={
-                            scaleTotalTo100
-                              ? paperFullMark
-                              : sectionsConfig.reduce(
-                                (sum, section) =>
-                                  sum + getSectionRawFullMark(section),
-                                0
-                              )
-                          }
-                          onChange={event =>
-                            setPaperFullMark(event.target.value)
-                          }
-                          disabled={!scaleTotalTo100}
-                          data-gramm="false"
-                          data-gramm_editor="false"
-                          className="w-20 border border-gray-300 rounded p-1.5 text-sm outline-none focus:ring-2 focus:ring-blue-500 text-center font-bold disabled:bg-gray-100"
-                        />
-                        <button
-                          type="button"
-                          onClick={autoCalculateWeights}
-                          disabled={!scaleTotalTo100}
-                          className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200 border border-gray-300 disabled:opacity-40 disabled:cursor-not-allowed"
-                        >
-                          Auto Weights
-                        </button>
-                      </div>
+                      ) : (
+                        <p className="mt-2 pl-6 text-sm text-slate-700">
+                          Total full mark: <b>{Number(rawSectionsTotal.toFixed(2))}</b>
+                        </p>
+                      )}
                     </div>
 
-                    <div className="space-y-4">
+                    <div className="space-y-3">
                       {sectionsConfig.map((sec, index) => (
-                        <div key={sec.id} className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                          <div className="flex flex-wrap gap-3 items-end mb-3">
-                            <div className="flex-1 min-w-[120px]">
-                              <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase">Section Name</label>
-                              <input type="text" value={sec.name} onChange={(e) => updateSection(sec.id, 'name', e.target.value)} data-gramm="false" data-gramm_editor="false" className="w-full border border-gray-300 rounded p-2 text-sm" required />
-                            </div>
-                            <div className="flex-1 min-w-[120px]">
-                              <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase">Group (Optional)</label>
-                              <input type="text" value={sec.groupName || ''} onChange={(e) => updateSection(sec.id, 'groupName', e.target.value)} placeholder="e.g. DBQ" data-gramm="false" data-gramm_editor="false" className="w-full border border-gray-300 rounded p-2 text-sm" />
-                            </div>
-<div className="w-20">
-                              <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase">
-                                Full Mark
-                              </label>
-                              <input
-                                type="number"
-                                step="any"
-                                value={
-                                  !scaleTotalTo100 && sec.hasSubSections
-                                    ? getSectionRawFullMark(sec)
-                                    : sec.fullMark
-                                }
-                                onChange={event =>
-                                  updateSection(
-                                    sec.id,
-                                    'fullMark',
-                                    event.target.value
-                                  )
-                                }
-                                disabled={
-                                  !scaleTotalTo100 && sec.hasSubSections
-                                }
-                                data-gramm="false"
-                                data-gramm_editor="false"
-                                className="w-full border border-gray-300 rounded p-2 text-sm disabled:bg-gray-100"
-                                required={
-                                  scaleTotalTo100 || !sec.hasSubSections
-                                }
-                              />
-                            </div>
-                            <div className="w-20">
-                              <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase">
-                                Weight (%)
-                              </label>
-                              <input
-                                type="number"
-                                step="any"
-                                value={sec.weight}
-                                onChange={event =>
-                                  updateSection(
-                                    sec.id,
-                                    'weight',
-                                    event.target.value
-                                  )
-                                }
-                                disabled={!scaleTotalTo100}
-                                data-gramm="false"
-                                data-gramm_editor="false"
-                                className="w-full border border-gray-300 rounded p-2 text-sm disabled:bg-gray-100 disabled:text-gray-400"
-                                required={scaleTotalTo100}
-                              />
-                            </div>
-                            <div className="flex items-center h-[38px] space-x-2">
-                              <button type="button" onClick={() => { setDocLinkerTarget(sec.id); setShowDocLinker(true); }} className={`px-3 py-2 rounded text-sm font-medium border ${sec.linkedDocId ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`} title={sec.linkedDocId ? "Change Linked Doc" : "Link Doc"}>
-                                <LinkIcon className="w-4 h-4 inline" />
+                        <div key={sec.id} className="rounded-lg border border-slate-200 bg-white">
+                          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2 rounded-t-lg">
+                            <span className="text-xs font-bold text-slate-500">Section {index + 1}</span>
+                            <div className="flex flex-wrap gap-1">
+                              <button
+                                type="button"
+                                onClick={() => { setDocLinkerTarget(sec.id); setShowDocLinker(true); }}
+                                className={`mk-btn mk-btn-sm ${sec.linkedDocId ? 'mk-btn-soft' : ''}`}
+                                title={sec.linkedDocId ? 'Change linked document' : 'Link a document'}
+                              >
+                                <LinkIcon /> {sec.linkedDocId ? 'Linked' : 'Link'}
                               </button>
-                              <button type="button" onClick={() => toggleSubSections(sec.id)} className={`px-3 py-2 rounded text-sm font-medium border ${sec.hasSubSections ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>
-                                <Layers className="w-4 h-4 inline mr-1" /> Sub-sections
+                              <button
+                                type="button"
+                                onClick={() => toggleSubSections(sec.id)}
+                                className={`mk-btn mk-btn-sm ${sec.hasSubSections ? 'mk-btn-soft-purple' : ''}`}
+                              >
+                                <Layers /> Sub-sections {sec.hasSubSections ? 'on' : 'off'}
                               </button>
-                              <button type="button" onClick={() => handleRemoveSection(sec.id)} disabled={sectionsConfig.length === 1} className="p-2 text-red-500 hover:bg-red-50 rounded border border-transparent hover:border-red-100 disabled:opacity-50">
-                                <Trash2 className="w-4 h-4" />
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveSection(sec.id)}
+                                disabled={sectionsConfig.length === 1}
+                                className="mk-btn mk-btn-sm mk-btn-icon mk-btn-danger"
+                                aria-label="Remove section"
+                              >
+                                <Trash2 />
                               </button>
                             </div>
                           </div>
 
+                          <div className="mk-section-grid p-3">
+                            <label className="mk-field">
+                              <span className="mk-label">Section name</span>
+                              <input type="text" value={sec.name} onChange={(e) => updateSection(sec.id, 'name', e.target.value)} data-gramm="false" data-gramm_editor="false" className="mk-input w-full" required />
+                            </label>
+                            <label className="mk-field">
+                              <span className="mk-label">Group (optional)</span>
+                              <input type="text" value={sec.groupName || ''} onChange={(e) => updateSection(sec.id, 'groupName', e.target.value)} placeholder="e.g. DBQ" data-gramm="false" data-gramm_editor="false" className="mk-input w-full" />
+                            </label>
+                            <label className="mk-field">
+                              <span className="mk-label">Full mark</span>
+                              <input
+                                type="number"
+                                step="any"
+                                value={!scaleTotalTo100 && sec.hasSubSections ? getSectionRawFullMark(sec) : sec.fullMark}
+                                onChange={event => updateSection(sec.id, 'fullMark', event.target.value)}
+                                disabled={!scaleTotalTo100 && sec.hasSubSections}
+                                data-gramm="false"
+                                data-gramm_editor="false"
+                                className="mk-input w-full"
+                                required={scaleTotalTo100 || !sec.hasSubSections}
+                              />
+                            </label>
+                            <label className="mk-field">
+                              <span className="mk-label">Weight %</span>
+                              <input
+                                type="number"
+                                step="any"
+                                value={sec.weight}
+                                onChange={event => updateSection(sec.id, 'weight', event.target.value)}
+                                disabled={!scaleTotalTo100}
+                                data-gramm="false"
+                                data-gramm_editor="false"
+                                className="mk-input w-full"
+                                required={scaleTotalTo100}
+                              />
+                            </label>
+                          </div>
+
                           {sec.hasSubSections && (
-                            <div className="ml-4 pl-4 border-l-2 border-indigo-200 space-y-2 mt-4">
-                              <h4 className="text-xs font-bold text-indigo-800 uppercase tracking-wider mb-2">Sub-sections</h4>
-                              {sec.subSections.map(sub => (
-                                <div key={sub.id} className="flex gap-2 items-center">
-                                  <input type="text" value={sub.name} onChange={(e) => updateSubSection(sec.id, sub.id, 'name', e.target.value)} data-gramm="false" data-gramm_editor="false" placeholder="e.g. Section A" className="flex-1 border border-gray-300 rounded p-1.5 text-sm" required />
-                                  <input type="number" step="any" value={sub.fullMark} onChange={(e) => updateSubSection(sec.id, sub.id, 'fullMark', e.target.value)} data-gramm="false" data-gramm_editor="false" placeholder="Full Mark" className="w-24 border border-gray-300 rounded p-1.5 text-sm" required />
-                                  <button type="button" onClick={() => handleRemoveSubSection(sec.id, sub.id)} className="p-1.5 text-red-400 hover:text-red-600"><X className="w-4 h-4" /></button>
-                                </div>
-                              ))}
-                              <button type="button" onClick={() => handleAddSubSection(sec.id)} className="text-sm text-indigo-600 hover:text-indigo-800 font-medium flex items-center mt-2">
-                                <Plus className="w-4 h-4 mr-1" /> Add Sub-section
+                            <div className="border-t border-slate-100 px-3 py-3">
+                              <div className="mk-label mb-2">Sub-sections</div>
+                              <div className="space-y-2">
+                                {sec.subSections.map(sub => (
+                                  <div key={sub.id} className="flex items-center gap-2">
+                                    <input type="text" value={sub.name} onChange={(e) => updateSubSection(sec.id, sub.id, 'name', e.target.value)} data-gramm="false" data-gramm_editor="false" placeholder="Name, e.g. a" className="mk-input flex-1" required />
+                                    <input type="number" step="any" value={sub.fullMark} onChange={(e) => updateSubSection(sec.id, sub.id, 'fullMark', e.target.value)} data-gramm="false" data-gramm_editor="false" placeholder="Full mark" className="mk-input w-28" required />
+                                    <button type="button" onClick={() => handleRemoveSubSection(sec.id, sub.id)} className="mk-btn mk-btn-sm mk-btn-icon mk-btn-danger" aria-label="Remove sub-section">
+                                      <X />
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                              <button type="button" onClick={() => handleAddSubSection(sec.id)} className="mk-btn mk-btn-sm mk-btn-ghost mt-2 text-indigo-700">
+                                <Plus /> Add sub-section
                               </button>
                             </div>
                           )}
                         </div>
                       ))}
-                      <button type="button" onClick={handleAddSection} className="w-full py-3 border-2 border-dashed border-gray-300 rounded-lg text-gray-500 font-medium hover:bg-gray-50 hover:text-blue-600 hover:border-blue-300 transition-colors flex items-center justify-center">
-                        <PlusCircle className="w-5 h-5 mr-2" /> Add Another Paper / Section
+
+                      <button
+                        type="button"
+                        onClick={handleAddSection}
+                        className="w-full py-2.5 border-2 border-dashed border-slate-300 rounded-lg text-sm text-slate-500 font-semibold hover:bg-white hover:text-blue-600 hover:border-blue-300 transition-colors flex items-center justify-center gap-2"
+                      >
+                        <PlusCircle className="w-4 h-4" /> Add section / paper
                       </button>
                     </div>
-                  </div>
+                  </section>
                 )}
+
+                {/* Classes */}
+                <section className="mk-card p-4">
+                  <h3 className="mk-section-title">Apply to classes</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {classes.map(c => {
+                      const checked = selectedClassesForNew.includes(c.name);
+                      return (
+                        <label
+                          key={c.name}
+                          className={`flex items-center gap-2 h-8 px-3 rounded-lg border cursor-pointer text-sm font-medium transition-colors ${checked ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleClassForNew(c.name)}
+                            className="rounded text-blue-600"
+                          />
+                          {cleanClassName(c.name)}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                {/* Linked doc */}
+                <section className="mk-card p-4">
+                  <h3 className="mk-section-title">Linked archive document (optional)</h3>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => { setDocLinkerTarget('main'); setShowDocLinker(true); }}
+                      className="mk-btn mk-btn-soft"
+                    >
+                      <LinkIcon /> {linkedDocId ? 'Change document' : 'Link document'}
+                    </button>
+                    {linkedDocId && (
+                      <span className="mk-chip" style={{ height: 30, paddingRight: 4 }}>
+                        <FileText />
+                        <span className="truncate max-w-[260px]">
+                          {linkableDocs.find(a => a.id === linkedDocId)?.title || 'Unknown document'}
+                        </span>
+                        <button type="button" onClick={() => setLinkedDocId('')} className="ml-1 rounded-full p-1 text-red-500 hover:bg-red-50" aria-label="Remove link">
+                          <X />
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                </section>
               </form>
             </div>
 
-            <div className="p-4 border-t border-gray-200 bg-gray-50 rounded-b-lg flex justify-end space-x-3 shrink-0">
-              <button type="button" onClick={() => setShowAddAssessment(false)} className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-md font-medium hover:bg-gray-50">Cancel</button>
+            <div className="mk-modal-foot">
+              <button type="button" onClick={() => setShowAddAssessment(false)} className="mk-btn">Cancel</button>
               <button
                 type="submit"
                 form="assessment-form"
                 disabled={isSavingAssessment}
-                className="px-6 py-2 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 shadow-sm flex items-center disabled:opacity-60 disabled:cursor-not-allowed"
+                className="mk-btn mk-btn-primary"
               >
-                {isSavingAssessment ? (
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                ) : (
-                  <Save className="w-4 h-4 mr-2" />
-                )}
-                {isSavingAssessment ? 'Saving...' : 'Save Assessment'}
+                {isSavingAssessment ? <Loader2 className="animate-spin" /> : <Save />}
+                {isSavingAssessment ? 'Saving…' : 'Save'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* All Classes Modal */}
+      {/* ================= ALL CLASSES ================= */}
       {showAllClassesModal && selectedAssessment && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4 sm:p-6">
-          <div className="bg-gray-50 rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden">
-            <div className="p-5 border-b border-gray-200 flex justify-between items-center bg-white rounded-t-2xl shrink-0">
-              <h2 className="text-2xl font-bold text-gray-800 flex items-center">
-                <Users className="w-7 h-7 mr-3 text-blue-600" />
-                All Classes Performance - {selectedAssessment.name}
-              </h2>
-              <div className="flex items-center">
+        <div className="mk-backdrop">
+          <div className="mk-modal max-w-5xl">
+            <div className="mk-modal-head">
+              <h2><Users className="text-blue-600" /> All classes · {selectedAssessment.name}</h2>
+              <div className="flex items-center gap-2">
                 <button
+                  type="button"
                   onClick={() => setAllClassesStudentView(!allClassesStudentView)}
-                  className={`flex items-center px-3 py-1.5 text-sm font-bold rounded-md transition-colors border shadow-sm mr-4 ${allClassesStudentView
-                    ? 'bg-amber-100 text-amber-800 border-amber-300'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border-gray-300'
-                    }`}
+                  className={`mk-btn mk-btn-sm ${allClassesStudentView ? 'mk-btn-warn' : ''}`}
                 >
-                  {allClassesStudentView ? <EyeOff className="w-4 h-4 mr-2" /> : <Eye className="w-4 h-4 mr-2" />}
-                  {allClassesStudentView ? 'Student View: ON' : 'Student View: OFF'}
+                  {allClassesStudentView ? <EyeOff /> : <Eye />}
+                  Student View {allClassesStudentView ? 'On' : 'Off'}
                 </button>
-                <button
-                  onClick={() => setShowAllClassesModal(false)}
-                  className="text-gray-400 hover:text-gray-600 transition-colors p-2 bg-gray-100 hover:bg-gray-200 rounded-full"
-                >
-                  <X className="w-7 h-7" />
+                <button type="button" onClick={() => setShowAllClassesModal(false)} className="mk-btn mk-btn-icon mk-btn-ghost" aria-label="Close">
+                  <X />
                 </button>
               </div>
             </div>
-            <div className="p-6 overflow-y-auto flex-1">
-              {allClassesStatsData && (
-                <div className="mb-6">
-                  {renderStatCard("Overall Performance (All Classes)", getStats(allClassesStatsData.marks, allClassesStatsData.fullMark), allClassesStatsData.fullMark, true)}
-                </div>
-              )}
-              <table className="w-full text-left border-collapse bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
-                <thead className="bg-gray-100 sticky top-0 z-10">
-                  <tr className="text-gray-600 text-sm uppercase tracking-wider">
-                    <th className="p-3 border-b border-gray-200 w-20 text-center">Class</th>
-                    <th className="p-3 border-b border-gray-200 w-16 text-center">No.</th>
-                    <th className="p-3 border-b border-gray-200">Name</th>
-                    {hasSections && selectedAssessment.sectionsConfig.map(sec => (
-                      <th key={sec.id} className="p-3 border-b border-gray-200 text-center">{sec.name}</th>
+            <div className="mk-modal-body bg-slate-50 space-y-4">
+              {allClassesStatsData && (() => {
+                const s = getStats(allClassesStatsData.marks, allClassesStatsData.fullMark);
+                if (!s) return null;
+                return (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {[
+                      ['Mean', s.mean, 'text-blue-600'],
+                      ['Median', s.median, 'text-blue-600'],
+                      ['Pass', `${s.passCount}/${s.total}`, s.passCount >= s.total / 2 ? 'text-green-600' : 'text-red-500'],
+                      ['Highest', s.max, 'text-purple-600']
+                    ].map(([label, value, color]) => (
+                      <div key={label} className="mk-card p-3">
+                        <div className="mk-label">{label}</div>
+                        <div className={`text-2xl font-bold ${color}`}>{value}</div>
+                      </div>
                     ))}
-                    <th className="p-3 border-b border-gray-200 text-center text-blue-800 font-bold">Total</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {allClassesStudents.length === 0 ? (
+                  </div>
+                );
+              })()}
+
+              <div className="mk-card overflow-auto max-h-[60vh]">
+                <table className="mk-table">
+                  <thead>
                     <tr>
-                      <td colSpan={hasSections ? selectedAssessment.sectionsConfig.length + 4 : 4} className="p-8 text-center text-gray-500">
-                        No students found across linked classes.
-                      </td>
+                      <th>Class</th>
+                      <th>No.</th>
+                      <th className="mk-left">Name</th>
+                      {hasSections && selectedAssessment.sectionsConfig.map(sec => (
+                        <th key={sec.id} className="mk-sep">{sec.name}</th>
+                      ))}
+                      <th className="mk-sep" style={{ color: '#1d4ed8' }}>Total</th>
                     </tr>
-                  ) : (
-                    allClassesStudents.map(student => {
+                  </thead>
+                  <tbody>
+                    {allClassesStudents.length === 0 ? (
+                      <tr><td colSpan={100} className="p-8 text-slate-500">No students found across linked classes.</td></tr>
+                    ) : allClassesStudents.map(student => {
                       const studentMarks = marksData[student.id];
                       const rawTotal = calculateTotal(studentMarks);
                       const scaledTotal = hasSections ? calculateScaledTotal(studentMarks, selectedAssessment) : rawTotal;
                       const deduction = parseFloat(marksData[`${student.id}_deduction`]) || 0;
-                      let finalTotal = null;
-                      if (scaledTotal !== null) {
-                        finalTotal = (scaledTotal - deduction);
-                      }
+                      const finalTotal = scaledTotal !== null ? scaledTotal - deduction : null;
+                      const isTop = marksIsTopTwo(finalTotal, allClassesStatsData?.marks || []);
 
                       return (
-                        <tr key={student.id} className="hover:bg-gray-50">
-                          <td className="p-3 text-center font-medium text-gray-600">{student.className}</td>
-                          <td className="p-3 text-center font-medium text-gray-800">{student.classNumber}</td>
-                          <td className="p-3 text-gray-800 font-medium">{student.englishName}</td>
+                        <tr key={student.id}>
+                          <td className="text-slate-600">{cleanClassName(student.className)}</td>
+                          <td className="font-semibold">{student.classNumber}</td>
+                          <td className="mk-left font-medium text-slate-800">{student.englishName}</td>
                           {hasSections && selectedAssessment.sectionsConfig.map(sec => {
                             const secRawTotal = calculateSectionRawTotal(studentMarks, sec);
                             return (
-                              <td key={sec.id} className="p-3 text-center text-gray-600">
-                                {secRawTotal === null ? '-' : (allClassesStudentView ? '***' : secRawTotal.toFixed(1))}
+                              <td key={sec.id} className="mk-sep text-slate-600">
+                                {secRawTotal === null ? <span className="mk-gap">–</span> : (allClassesStudentView ? '***' : secRawTotal.toFixed(1))}
                               </td>
                             );
                           })}
-                          <td
-                            className={`p-3 text-center font-bold ${marksIsTopTwo(
-                              finalTotal,
-                              allClassesStatsData?.marks || []
-                            )
-                              ? 'bg-yellow-200 text-yellow-950'
-                              : 'bg-blue-50/50 text-blue-700'
-                              }`}
-                          >
+                          <td className={`mk-sep ${finalTotal === null ? '' : isTop ? 'mk-top' : 'mk-final'}`}>
                             {finalTotal === null
-                              ? '-'
-                              : allClassesStudentView &&
-                                !marksIsTopTwo(
-                                  finalTotal,
-                                  allClassesStatsData?.marks || []
-                                )
+                              ? <span className="mk-gap">–</span>
+                              : allClassesStudentView && !isTop
                                 ? '***'
                                 : finalTotal.toFixed(1)}
                           </td>
                         </tr>
                       );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Amend Mark Modal */}
-      {showAmendModal && selectedAssessment && isMultiSectionCategory && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4 sm:p-6">
-          <div className="bg-gray-50 rounded-2xl shadow-2xl w-full max-w-7xl h-[90vh] flex flex-col overflow-hidden">
-            <div className="p-5 border-b border-gray-200 flex justify-between items-center bg-white rounded-t-2xl shrink-0">
-              <div>
-                <h2 className="text-2xl font-bold text-gray-800 flex items-center">
-                  <Edit3 className="w-7 h-7 mr-3 text-orange-600" />
-                  Amend Marks - {selectedAssessment.name}
-                </h2>
-                <p className="text-sm text-gray-500 mt-1">Type class number (e.g. 20) or full class+no (e.g. 4A15) to load a student.</p>
-              </div>
-              <div className="flex items-center space-x-3">
-                <button
-                  onClick={saveAmendments}
-                  disabled={isSaving}
-                  className="flex items-center px-4 py-2 bg-orange-600 text-white font-bold rounded-lg hover:bg-orange-700 transition-colors disabled:opacity-70 shadow-sm"
-                >
-                  {isSaving ? <Loader2 className="w-5 h-5 mr-2 animate-spin" /> : <Save className="w-5 h-5 mr-2" />}
-                  Save Changes
-                </button>
-                <button
-                  onClick={closeAmendModal}
-                  className="text-gray-400 hover:text-gray-600 transition-colors p-2 bg-gray-100 hover:bg-gray-200 rounded-full"
-                >
-                  <X className="w-7 h-7" />
-                </button>
-              </div>
-            </div>
-
-            <div className="p-6 overflow-y-auto overflow-x-auto flex-1">
-              <table className="w-max min-w-full text-left border-collapse bg-white shadow-sm border border-gray-200 rounded-lg">
-                <thead className="bg-gray-100 sticky top-0 z-10">
-                  <tr className="text-gray-600 text-sm uppercase tracking-wider">
-                    <th className="p-3 border-b border-gray-200 w-32 text-center">Student No.</th>
-                    <th className="p-3 border-b border-gray-200 w-48 border-r border-gray-200">Name</th>
-                    {selectedAssessment.sectionsConfig.map(sec => (
-                      <React.Fragment key={sec.id}>
-                        {sec.hasSubSections ? (
-                          sec.subSections.map(sub => (
-                            <th key={sub.id} className="p-3 border-b border-gray-200 text-center min-w-[200px]">
-                              {sec.name} - {sub.name} <br /><span className="text-[10px] normal-case text-gray-500">Full: {sub.fullMark}</span>
-                            </th>
-                          ))
-                        ) : (
-                          <th key={sec.id} className="p-3 border-b border-gray-200 text-center min-w-[200px] border-r border-gray-200">
-                            {sec.name} <br /><span className="text-[10px] normal-case text-gray-500">Full: {sec.fullMark}</span>
-                          </th>
-                        )}
-                      </React.Fragment>
-                    ))}
-                    <th className="p-3 border-b border-gray-200 text-center text-orange-800 font-bold border-l border-gray-200">Total</th>
-                    <th className="p-3 border-b border-gray-200 text-center w-16"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {amendRows.map((row, idx) => {
-                    const scaledTotal = row.student ? calculateScaledTotal(row.marks, selectedAssessment) : null;
-                    const deduction = row.student ? (parseFloat(marksData[`${row.student.id}_deduction`]) || 0) : 0;
-                    const finalTotal = scaledTotal !== null ? scaledTotal - deduction : null;
-
-                    return (
-                      <tr key={row.id} className="hover:bg-gray-50">
-                        <td className="p-3 text-center">
-                          <input
-                            type="text"
-                            value={row.query}
-                            onChange={(e) => handleAmendQueryChange(row.id, e.target.value)}
-                            data-gramm="false" data-gramm_editor="false"
-                            placeholder="e.g. 20"
-                            className="w-24 border border-gray-300 rounded p-2 text-center outline-none focus:ring-2 focus:ring-orange-500 font-bold"
-                          />
-                        </td>
-                        <td className="p-3 border-r border-gray-200">
-                          {row.student ? (
-                            <div>
-                              <div className="font-bold text-gray-800">{row.student.englishName}</div>
-                              <div className="text-xs text-gray-500">{row.student.className} ({row.student.classNumber})</div>
-                            </div>
-                          ) : (
-                            <span className="text-gray-400 italic text-sm">Student not found</span>
-                          )}
-                        </td>
-
-                        {selectedAssessment.sectionsConfig.map(sec => (
-                          <React.Fragment key={sec.id}>
-                            {sec.hasSubSections ? (
-                              sec.subSections.map(sub => {
-                                const val = row.marks[sub.id] !== undefined ? row.marks[sub.id] : '';
-                                const origVal = parseFloat(row.originalMarks[sub.id]) || 0;
-                                const currentVal = parseFloat(val) || 0;
-                                const diff = currentVal - origVal;
-
-                                return (
-                                  <td key={sub.id} className="p-2 text-center">
-                                    {row.student ? (
-                                      <div className="flex items-center justify-center space-x-1">
-                                        <button onClick={() => adjustAmendMark(row.id, sub.id, -1)} className="w-8 h-8 flex items-center justify-center bg-red-100 text-red-700 rounded hover:bg-red-200 font-bold">-1</button>
-                                        <button onClick={() => adjustAmendMark(row.id, sub.id, -0.5)} className="w-8 h-8 flex items-center justify-center bg-red-50 text-red-600 rounded hover:bg-red-100 text-xs font-bold">-.5</button>
-                                        <div className="w-14 flex flex-col items-center justify-center">
-                                          <span className="font-bold text-gray-800">{val !== '' ? parseFloat(val).toFixed(1) : '-'}</span>
-                                          {diff !== 0 && <span className={`text-[10px] font-bold ${diff > 0 ? 'text-green-600' : 'text-red-600'}`}>{diff > 0 ? `+${diff}` : diff}</span>}
-                                        </div>
-                                        <button onClick={() => adjustAmendMark(row.id, sub.id, 0.5)} className="w-8 h-8 flex items-center justify-center bg-green-50 text-green-600 rounded hover:bg-green-100 text-xs font-bold">+.5</button>
-                                        <button onClick={() => adjustAmendMark(row.id, sub.id, 1)} className="w-8 h-8 flex items-center justify-center bg-green-100 text-green-700 rounded hover:bg-green-200 font-bold">+1</button>
-                                      </div>
-                                    ) : <span className="text-gray-300">-</span>}
-                                  </td>
-                                );
-                              })
-                            ) : (
-                              <td key={sec.id} className="p-2 text-center border-r border-gray-200">
-                                {row.student ? (
-                                  <div className="flex items-center justify-center space-x-1">
-                                    <button onClick={() => adjustAmendMark(row.id, sec.id, -1)} className="w-8 h-8 flex items-center justify-center bg-red-100 text-red-700 rounded hover:bg-red-200 font-bold">-1</button>
-                                    <button onClick={() => adjustAmendMark(row.id, sec.id, -0.5)} className="w-8 h-8 flex items-center justify-center bg-red-50 text-red-600 rounded hover:bg-red-100 text-xs font-bold">-.5</button>
-                                    <div className="w-14 flex flex-col items-center justify-center">
-                                      <span className="font-bold text-gray-800">{row.marks[sec.id] !== undefined && row.marks[sec.id] !== '' ? parseFloat(row.marks[sec.id]).toFixed(1) : '-'}</span>
-                                      {(() => {
-                                        const origVal = parseFloat(row.originalMarks[sec.id]) || 0;
-                                        const currentVal = parseFloat(row.marks[sec.id]) || 0;
-                                        const diff = currentVal - origVal;
-                                        return diff !== 0 ? <span className={`text-[10px] font-bold ${diff > 0 ? 'text-green-600' : 'text-red-600'}`}>{diff > 0 ? `+${diff}` : diff}</span> : null;
-                                      })()}
-                                    </div>
-                                    <button onClick={() => adjustAmendMark(row.id, sec.id, 0.5)} className="w-8 h-8 flex items-center justify-center bg-green-50 text-green-600 rounded hover:bg-green-100 text-xs font-bold">+.5</button>
-                                    <button onClick={() => adjustAmendMark(row.id, sec.id, 1)} className="w-8 h-8 flex items-center justify-center bg-green-100 text-green-700 rounded hover:bg-green-200 font-bold">+1</button>
-                                  </div>
-                                ) : <span className="text-gray-300">-</span>}
-                              </td>
-                            )}
-                          </React.Fragment>
-                        ))}
-                        <td className="p-3 text-center font-bold text-orange-700 bg-orange-50/50 border-l border-gray-200">
-                          {finalTotal !== null ? finalTotal.toFixed(1) : '-'}
-                        </td>
-                        <td className="p-3 text-center">
-                          <button onClick={() => handleRemoveAmendRow(row.id)} className="text-gray-400 hover:text-red-500 p-1">
-                            <Trash2 className="w-5 h-5" />
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              <div className="mt-4">
-                <button
-                  onClick={handleAddAmendRow}
-                  className="flex items-center px-4 py-2 bg-gray-100 text-gray-700 font-medium rounded-lg hover:bg-gray-200 transition-colors border border-gray-300"
-                >
-                  <Plus className="w-5 h-5 mr-2" /> Add Row
-                </button>
+                    })}
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Term Manager Modal */}
-      {showTermManager && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-md flex flex-col">
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-lg">
-              <h2 className="text-lg font-bold text-gray-800 flex items-center">
-                <Settings className="w-5 h-5 mr-2 text-gray-600" />
-                Manage Terms for {selectedClass}
-              </h2>
-              <button
-                onClick={() => setShowTermManager(false)}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-            <div className="p-6">
-              <form onSubmit={handleAddTerm} className="mb-6 bg-gray-50 p-4 rounded-lg border border-gray-200">
-                <h3 className="font-semibold text-gray-700 mb-3 text-sm">Add New Term</h3>
-                <div className="flex space-x-2">
-                  <input
-                    type="text"
-                    value={newTermName}
-                    onChange={(e) => setNewTermName(e.target.value)}
-                    data-gramm="false" data-gramm_editor="false"
-                    placeholder="e.g. Term 3"
-                    className="flex-1 border border-gray-300 rounded p-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                    required
-                  />
-                  <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-blue-700">Add</button>
+      {/* ================= AMEND MARKS ================= */}
+      {showAmendModal && selectedAssessment && isMultiSectionCategory && (() => {
+        const amendColumns = selectedAssessment.sectionsConfig.flatMap(sec =>
+          sec.hasSubSections
+            ? sec.subSections.map(sub => ({ id: sub.id, section: sec.name, label: sub.name, full: sub.fullMark }))
+            : [{ id: sec.id, section: sec.name, label: 'Mark', full: sec.fullMark }]
+        );
+
+        return (
+          <div className="mk-backdrop">
+            <div className="mk-modal max-w-7xl" style={{ height: 'min(90dvh, 900px)' }}>
+              <div className="mk-modal-head">
+                <div className="min-w-0">
+                  <h2><Edit3 className="text-orange-600" /> Amend marks · {selectedAssessment.name}</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Type a class number (e.g. 20) or class + number (e.g. 4A15), then type a new mark or use the − / + buttons.
+                  </p>
                 </div>
-              </form>
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={saveAmendments} disabled={isSaving} className="mk-btn mk-btn-orange">
+                    {isSaving ? <Loader2 className="animate-spin" /> : <Save />} Save changes
+                  </button>
+                  <button type="button" onClick={closeAmendModal} className="mk-btn mk-btn-icon mk-btn-ghost" aria-label="Close">
+                    <X />
+                  </button>
+                </div>
+              </div>
 
-              <h3 className="font-semibold text-gray-700 mb-2 text-sm">Existing Terms</h3>
-              <ul className="divide-y divide-gray-100 border border-gray-200 rounded-md max-h-64 overflow-y-auto">
-                {terms.map((t, index) => (
-                  <li key={t} className="flex flex-col p-3 hover:bg-gray-50">
-                    {editingTerm === t ? (
-                      <div className="flex items-center space-x-2">
-                        <input
-                          type="text"
-                          value={editTermName}
-                          onChange={(e) => setEditTermName(e.target.value)}
-                          data-gramm="false" data-gramm_editor="false"
-                          className="flex-1 border border-gray-300 rounded p-1 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          autoFocus
-                        />
-                        <button onClick={() => handleUpdateTerm(t)} className="text-green-600 hover:text-green-800 p-1"><CheckCircle className="w-4 h-4" /></button>
-                        <button onClick={() => setEditingTerm(null)} className="text-gray-400 hover:text-gray-600 p-1"><X className="w-4 h-4" /></button>
-                      </div>
-                    ) : (
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm font-medium text-gray-700">{t}</span>
-                        <div className="flex items-center space-x-1">
-                          <button onClick={() => handleMoveTerm(index, 'up')} disabled={index === 0} className={`p-1 ${index === 0 ? 'text-gray-300' : 'text-gray-500 hover:text-blue-600'}`}><ChevronUp className="w-4 h-4" /></button>
-                          <button onClick={() => handleMoveTerm(index, 'down')} disabled={index === terms.length - 1} className={`p-1 ${index === terms.length - 1 ? 'text-gray-300' : 'text-gray-500 hover:text-blue-600'}`}><ChevronDown className="w-4 h-4" /></button>
-                          <button onClick={() => { setEditingTerm(t); setEditTermName(t); }} className="text-blue-500 hover:text-blue-700 p-1 ml-2"><Edit2 className="w-4 h-4" /></button>
-                          <button onClick={() => handleDeleteTerm(t)} className="text-red-400 hover:text-red-600 p-1"><Trash2 className="w-4 h-4" /></button>
-                        </div>
-                      </div>
-                    )}
-                  </li>
-                ))}
-                {terms.length === 0 && <li className="p-3 text-sm text-gray-500 text-center">No terms available.</li>}
-              </ul>
+              <div className="mk-modal-body bg-slate-50 space-y-3">
+                <div className="mk-card overflow-auto">
+                  <table className="mk-table">
+                    <thead>
+                      <tr>
+                        <th className="mk-left" style={{ minWidth: 210 }}>Student</th>
+                        {amendColumns.map(col => (
+                          <th key={col.id} className="mk-sep" style={{ minWidth: 170 }}>
+                            {col.section} · {col.label}
+                            <span className="mk-sub">/{col.full}</span>
+                          </th>
+                        ))}
+                        <th className="mk-sep" style={{ color: '#c2410c' }}>Total</th>
+                        <th className="mk-sep"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {amendRows.map(row => {
+                        const scaledTotal = row.student ? calculateScaledTotal(row.marks, selectedAssessment) : null;
+                        const deduction = row.student ? (parseFloat(marksData[`${row.student.id}_deduction`]) || 0) : 0;
+                        const finalTotal = scaledTotal !== null ? scaledTotal - deduction : null;
+
+                        return (
+                          <tr key={row.id}>
+                            <td className="mk-left">
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="text"
+                                  value={row.query}
+                                  onChange={(e) => handleAmendQueryChange(row.id, e.target.value)}
+                                  data-gramm="false"
+                                  data-gramm_editor="false"
+                                  placeholder="No."
+                                  className="mk-cell-input font-bold"
+                                  style={{ width: 70 }}
+                                />
+                                {row.student ? (
+                                  <div className="min-w-0">
+                                    <div className="font-semibold text-slate-800 truncate max-w-[140px]">{row.student.englishName}</div>
+                                    <div className="text-[11px] text-slate-500">{cleanClassName(row.student.className)} · {row.student.classNumber}</div>
+                                  </div>
+                                ) : (
+                                  <span className="text-xs italic text-slate-400">{row.query ? 'Not found' : ''}</span>
+                                )}
+                              </div>
+                            </td>
+
+                            {amendColumns.map(col => {
+                              const val = row.marks[col.id] !== undefined ? row.marks[col.id] : '';
+                              const diff = Number(((parseFloat(val) || 0) - (parseFloat(row.originalMarks[col.id]) || 0)).toFixed(2));
+
+                              return (
+                                <td key={col.id} className="mk-sep">
+                                  {row.student ? (
+                                    <div className="flex items-center justify-center gap-1">
+                                      <button type="button" onClick={() => adjustAmendMark(row.id, col.id, -1)} className="mk-step mk-step-minus">−1</button>
+                                      <button type="button" onClick={() => adjustAmendMark(row.id, col.id, -0.5)} className="mk-step mk-step-minus">−.5</button>
+                                      <div className="flex flex-col items-center">
+                                        <input
+                                          type="text"
+                                          inputMode="decimal"
+                                          value={val}
+                                          onChange={event => setAmendMark(row.id, col.id, event.target.value)}
+                                          className="mk-cell-input font-bold"
+                                          style={{ width: 52 }}
+                                        />
+                                        <span className={`text-[10px] font-bold h-3 leading-3 ${diff > 0 ? 'text-green-600' : diff < 0 ? 'text-red-600' : 'text-transparent'}`}>
+                                          {diff > 0 ? `+${diff}` : diff}
+                                        </span>
+                                      </div>
+                                      <button type="button" onClick={() => adjustAmendMark(row.id, col.id, 0.5)} className="mk-step mk-step-plus">+.5</button>
+                                      <button type="button" onClick={() => adjustAmendMark(row.id, col.id, 1)} className="mk-step mk-step-plus">+1</button>
+                                    </div>
+                                  ) : <span className="mk-gap">–</span>}
+                                </td>
+                              );
+                            })}
+
+                            <td className="mk-sep font-bold" style={{ color: '#c2410c', background: 'rgba(255,247,237,.7)' }}>
+                              {finalTotal !== null ? finalTotal.toFixed(1) : <span className="mk-gap">–</span>}
+                            </td>
+                            <td className="mk-sep">
+                              <button type="button" onClick={() => handleRemoveAmendRow(row.id)} className="mk-btn mk-btn-sm mk-btn-icon mk-btn-ghost mk-btn-danger" aria-label="Remove row">
+                                <Trash2 />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <button type="button" onClick={handleAddAmendRow} className="mk-btn">
+                  <Plus /> Add row
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
-      {/* Mark Overview & Graph Combined Modal */}
+      {/* ================= OVERVIEW & GRAPH ================= */}
       {showOverviewModal && selectedAssessment && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4 sm:p-6">
-          <div className={`bg-gray-50 shadow-2xl flex flex-col overflow-hidden transition-all duration-700 ${revealStep < 4 ? 'w-full h-full max-w-none max-h-none rounded-none' : 'rounded-2xl w-full max-w-7xl max-h-[90vh]'}`}>
-            <div className="p-5 border-b border-gray-200 flex justify-between items-center bg-white shrink-0">
-              <h2 className="text-2xl font-bold text-gray-800 flex items-center">
-                <BarChart2 className="w-7 h-7 mr-3 text-indigo-600" />
-                Analytics Overview - {selectedAssessment.name}
-              </h2>
-              <button
-                onClick={() => setShowOverviewModal(false)}
-                className="text-gray-400 hover:text-gray-600 transition-colors p-2 bg-gray-100 hover:bg-gray-200 rounded-full"
-              >
-                <X className="w-7 h-7" />
-              </button>
+        <div className="mk-backdrop" style={revealStep < 4 ? { padding: 0 } : undefined}>
+          <div
+            className={`mk-modal ${revealStep < 4 ? '' : 'max-w-6xl'}`}
+            style={revealStep < 4 ? { height: '100dvh', maxHeight: '100dvh', borderRadius: 0 } : { height: 'min(90dvh, 860px)' }}
+          >
+            <div className="mk-modal-head">
+              <h2><BarChart2 className="text-indigo-600" /> Overview · {selectedAssessment.name}</h2>
+              <div className="flex items-center gap-2">
+                {revealStep < 4 && (
+                  <button type="button" className="mk-btn mk-btn-sm" onClick={() => setRevealStep(4)}>
+                    Skip to statistics
+                  </button>
+                )}
+                <button type="button" onClick={() => setShowOverviewModal(false)} className="mk-btn mk-btn-icon mk-btn-ghost" aria-label="Close">
+                  <X />
+                </button>
+              </div>
             </div>
 
             {revealStep < 4 ? (
-              <div className="marks-reveal flex-1 min-h-0 min-w-0 flex flex-col items-center justify-start lg:justify-center p-4 sm:p-6 lg:p-10 bg-gradient-to-br from-indigo-50 to-blue-100 text-center overflow-y-auto">
+              <div className="flex-1 min-h-0 overflow-y-auto bg-gradient-to-br from-indigo-50 to-blue-100 p-6 flex flex-col items-center justify-center text-center gap-10">
                 <AnimatePresence mode="wait">
                   {revealStep === 0 && (
                     <motion.div
                       key="step0"
-                      initial={{ opacity: 0, scale: 0.8 }}
+                      initial={{ opacity: 0, scale: 0.85 }}
                       animate={{ opacity: 1, scale: 1 }}
                       exit={{ opacity: 0, scale: 1.1 }}
                       transition={{ duration: 0.8 }}
+                      className="flex flex-col items-center gap-10"
                     >
-                      <h3 className="text-6xl font-bold text-indigo-800 mb-12">Ready to Reveal Class Performance?</h3>
-                      <button
-                        onClick={() => setRevealStep(1)}
-                        className="px-12 py-6 bg-indigo-600 text-white text-2xl font-bold rounded-full shadow-2xl hover:bg-indigo-700 transition-all hover:scale-110 animate-pulse"
-                      >
-                        Reveal Mean & Pass Rate
+                      <h3 className="mk-reveal-title">Ready to reveal class performance?</h3>
+                      <button type="button" onClick={() => setRevealStep(1)} className="mk-reveal-btn animate-pulse">
+                        Reveal mean & pass rate
                       </button>
                     </motion.div>
                   )}
@@ -6183,47 +5335,43 @@ const compFinal = compScaled - compDeduct;
                 {revealStep >= 1 && (
                   <motion.div
                     key="step1"
-                    initial={{ opacity: 0, y: 50 }}
+                    initial={{ opacity: 0, y: 40 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.8, delay: 0.8 }} // Waits for step 0 to exit
-                    className="mb-12 w-full flex flex-col items-center"
+                    transition={{ duration: 0.8, delay: 0.8 }}
+                    className="w-full flex flex-col items-center gap-6"
                   >
-                    <h3 className="text-5xl font-bold text-indigo-800 mb-8">Class Performance</h3>
-                    <div className="flex gap-16 justify-center">
+                    <h3 className="mk-reveal-title">Class performance</h3>
+                    <div className="flex flex-wrap justify-center gap-6 w-full">
                       <motion.div
-                        initial={{ opacity: 0, x: -50 }}
+                        initial={{ opacity: 0, x: -40 }}
                         animate={{ opacity: 1, x: 0 }}
                         transition={{ duration: 0.8, delay: 1.2 }}
-                        className="bg-white p-10 rounded-3xl shadow-2xl border border-indigo-100 min-w-[300px]"
+                        className="mk-reveal-card"
                       >
-                        <p className="text-xl text-gray-500 uppercase tracking-wider font-bold">Mean Score</p>
-                        <p className="text-[6rem] leading-none font-extrabold text-blue-600 mt-6 flex items-baseline justify-center">
-                          {String(getStats(statsData.final.marks, statsData.final.fullMark)?.mean || '-').split('').map((char, i) => (
+                        <p className="text-sm font-bold uppercase tracking-wider text-slate-500">Mean score</p>
+                        <p className="mk-reveal-num text-blue-600 mt-4 flex items-baseline justify-center">
+                          {String(overallStats?.mean || '-').split('').map((char, i) => (
                             <motion.span key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 1.8 + (i * 0.8) }}>
                               {char}
                             </motion.span>
                           ))}
-                          <span className="text-4xl text-gray-400 ml-2 font-bold">
-                            / {statsData.final.fullMark}
-                          </span>
+                          <span className="text-2xl text-slate-400 ml-2 font-bold">/ {statsData.final.fullMark}</span>
                         </p>
                       </motion.div>
                       <motion.div
-                        initial={{ opacity: 0, x: 50 }}
+                        initial={{ opacity: 0, x: 40 }}
                         animate={{ opacity: 1, x: 0 }}
-                        transition={{ duration: 0.8, delay: 4.5 }} // Waits for mean score to finish
-                        className="bg-white p-10 rounded-3xl shadow-2xl border border-indigo-100 min-w-[300px]"
+                        transition={{ duration: 0.8, delay: 4.5 }}
+                        className="mk-reveal-card"
                       >
-                        <p className="text-xl text-gray-500 uppercase tracking-wider font-bold">Pass Rate</p>
-                        <p className="text-[6rem] leading-none font-extrabold text-green-600 mt-6 flex items-baseline justify-center">
-                          {String(getStats(statsData.final.marks, statsData.final.fullMark)?.passCount || 0).split('').map((char, i) => (
+                        <p className="text-sm font-bold uppercase tracking-wider text-slate-500">Pass rate</p>
+                        <p className="mk-reveal-num text-green-600 mt-4 flex items-baseline justify-center">
+                          {String(overallStats?.passCount || 0).split('').map((char, i) => (
                             <motion.span key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 5.3 + (i * 0.8) }}>
                               {char}
                             </motion.span>
                           ))}
-                          <span className="text-5xl text-gray-400 ml-2 font-bold">
-                            / {getStats(statsData.final.marks, statsData.final.fullMark)?.total || 0}
-                          </span>
+                          <span className="text-2xl text-slate-400 ml-2 font-bold">/ {overallStats?.total || 0}</span>
                         </p>
                       </motion.div>
                     </div>
@@ -6240,43 +5388,36 @@ const compFinal = compScaled - compDeduct;
                   if (sortedTotals.length < 2) return null;
 
                   return (
-                    <div className="flex gap-16 mt-4 items-end">
+                    <div className="flex flex-wrap justify-center items-end gap-6 w-full">
                       <motion.div
-                        initial={{ opacity: 0, y: 100 }}
+                        initial={{ opacity: 0, y: 80 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ duration: 1, delay: 0.5 }}
-                        className="bg-white p-10 rounded-3xl shadow-2xl border-4 border-slate-300 transform scale-95 min-w-[350px]"
+                        className="mk-reveal-card border-4 border-slate-300"
                       >
-                        <p className="text-xl text-slate-500 uppercase tracking-wider font-bold">2nd Highest</p>
-                        <div className="mt-6 flex flex-col items-center">
-                          <p className="text-4xl font-bold text-slate-700 text-center">{sortedTotals[1].student.englishName}</p>
-                          <p className="text-2xl font-medium text-slate-500 mt-2">{sortedTotals[1].student.chineseName}</p>
-                        </div>
-                        <p className="text-[5rem] leading-none font-extrabold text-slate-600 mt-6 flex items-baseline justify-center">
+                        <p className="text-sm font-bold uppercase tracking-wider text-slate-500">2nd highest</p>
+                        <p className="mt-4 text-2xl font-bold text-slate-700">{sortedTotals[1].student.englishName}</p>
+                        <p className="text-lg text-slate-500">{sortedTotals[1].student.chineseName}</p>
+                        <p className="mk-reveal-num text-slate-600 mt-4 flex items-baseline justify-center">
                           {sortedTotals[1].total.toFixed(1)}
-                          <span className="text-3xl text-slate-400 ml-2 font-bold">
-                            / {statsData.final.fullMark}
-                          </span>
+                          <span className="text-xl text-slate-400 ml-2 font-bold">/ {statsData.final.fullMark}</span>
                         </p>
                       </motion.div>
 
                       {revealStep >= 3 && (
                         <motion.div
-                          initial={{ opacity: 0, scale: 0.5, y: 150 }}
-                          animate={{ opacity: 1, scale: 1.1, y: 0 }}
-                          transition={{ duration: 1.2, delay: 0.8, type: "spring", bounce: 0.4 }}
-                          className="bg-gradient-to-b from-yellow-100 to-yellow-50 p-12 rounded-3xl shadow-2xl border-4 border-yellow-400 z-10 min-w-[400px]"
+                          initial={{ opacity: 0, scale: 0.5, y: 120 }}
+                          animate={{ opacity: 1, scale: 1.05, y: 0 }}
+                          transition={{ duration: 1.2, delay: 0.8, type: 'spring', bounce: 0.4 }}
+                          className="mk-reveal-card border-4 border-yellow-400"
+                          style={{ background: 'linear-gradient(#fef9c3, #fefce8)' }}
                         >
-                          <p className="text-2xl text-yellow-600 uppercase tracking-wider font-bold flex justify-center items-center gap-3 animate-bounce">🏆 Top Scorer 🏆</p>
-                          <div className="mt-6 flex flex-col items-center">
-                            <p className="text-5xl font-bold text-yellow-800 text-center">{sortedTotals[0].student.englishName}</p>
-                            <p className="text-3xl font-medium text-yellow-600 mt-2">{sortedTotals[0].student.chineseName}</p>
-                          </div>
-                          <p className="text-[7rem] leading-none font-extrabold text-yellow-600 mt-8 drop-shadow-lg flex items-baseline justify-center">
+                          <p className="text-base font-bold uppercase tracking-wider text-yellow-700 animate-bounce">🏆 Top scorer 🏆</p>
+                          <p className="mt-4 text-3xl font-bold text-yellow-900">{sortedTotals[0].student.englishName}</p>
+                          <p className="text-xl text-yellow-700">{sortedTotals[0].student.chineseName}</p>
+                          <p className="mk-reveal-num text-yellow-600 mt-4 flex items-baseline justify-center">
                             {sortedTotals[0].total.toFixed(1)}
-                            <span className="text-4xl text-yellow-700/60 ml-2 font-bold">
-                              / {statsData.final.fullMark}
-                            </span>
+                            <span className="text-xl text-yellow-700/60 ml-2 font-bold">/ {statsData.final.fullMark}</span>
                           </p>
                         </motion.div>
                       )}
@@ -6286,52 +5427,101 @@ const compFinal = compScaled - compDeduct;
 
                 {revealStep >= 1 && (
                   <motion.button
+                    type="button"
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    transition={{ duration: 1, delay: revealStep === 1 ? 7.5 : 1.5 }} // Delayed to appear after the slow numbering
+                    transition={{ duration: 1, delay: revealStep === 1 ? 7.5 : 1.5 }}
                     onClick={() => setRevealStep(prev => prev + 1)}
-                    className="mt-16 px-12 py-5 bg-indigo-600 text-white text-2xl font-bold rounded-full shadow-2xl hover:bg-indigo-700 transition-all hover:scale-110"
+                    className="mk-reveal-btn"
                   >
-                    {revealStep === 1 ? "Reveal Top Students" : revealStep === 2 ? "Reveal Top Scorer" : "Show Full Statistics"}
+                    {revealStep === 1 ? 'Reveal top students' : revealStep === 2 ? 'Reveal top scorer' : 'Show full statistics'}
                   </motion.button>
                 )}
               </div>
             ) : (
-              <div className="p-6 overflow-y-auto flex-1 flex flex-col lg:flex-row gap-8 animate-in fade-in duration-500">
-                {/* Left Side: Mark Overview */}
-                <div className="w-full lg:w-1/2 space-y-6">
-                  <h3 className="text-lg font-bold text-gray-700 border-b border-gray-200 pb-2">Component Statistics</h3>
-                  {renderStatCard("Overall Total", getStats(statsData.final.marks, statsData.final.fullMark), statsData.final.fullMark, true)}
+              <div className="mk-modal-body bg-slate-50 space-y-4">
+                {overallStats ? (
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                    {[
+                      ['Mean', overallStats.mean, `/ ${statsData.final.fullMark}`, 'text-blue-600'],
+                      ['Median', overallStats.median, '', 'text-blue-600'],
+                      ['Pass', `${overallStats.passCount}/${overallStats.total}`, `${Math.round((overallStats.passCount / overallStats.total) * 100)}%`, overallStats.passCount >= overallStats.total / 2 ? 'text-green-600' : 'text-red-500'],
+                      ['Highest', overallStats.max, '', 'text-purple-600'],
+                      ['Lowest', overallStats.min, '', 'text-orange-500']
+                    ].map(([label, value, extra, color]) => (
+                      <div key={label} className="mk-card p-3">
+                        <div className="mk-label">{label}</div>
+                        <div className={`text-2xl font-bold ${color}`}>
+                          {value} {extra && <span className="text-sm font-semibold text-slate-400">{extra}</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mk-card p-8 text-center text-slate-500">No marks entered yet.</div>
+                )}
 
-                  {selectedAssessment.sectionsConfig?.map(sec => (
-                    <div key={sec.id} className="space-y-4">
-                      {sec.hasSubSections ? (
-                        <>
-                          {sec.subSections.map(sub => (
-                            renderStatCard(`${sec.name} - ${sub.name}`, getStats(statsData[sub.id].marks, statsData[sub.id].fullMark), sub.fullMark)
-                          ))}
-                          {renderStatCard(`${sec.name} (Total)`, getStats(statsData[`sec_${sec.id}`].marks, statsData[`sec_${sec.id}`].fullMark), statsData[`sec_${sec.id}`].fullMark, false, true)}
-                        </>
-                      ) : (
-                        renderStatCard(sec.name, getStats(statsData[sec.id].marks, statsData[sec.id].fullMark), sec.fullMark)
-                      )}
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <div className="mk-card overflow-auto">
+                    <div className="px-4 py-2.5 border-b border-slate-200 text-sm font-bold text-slate-700">Component statistics</div>
+                    <table className="mk-table">
+                      <thead>
+                        <tr>
+                          <th className="mk-left">Component</th>
+                          <th>Full</th>
+                          <th>Mean</th>
+                          <th>Median</th>
+                          <th>Max</th>
+                          <th>Min</th>
+                          <th>Pass</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[
+                          ...(hasSections
+                            ? selectedAssessment.sectionsConfig.flatMap(sec => sec.hasSubSections
+                              ? [
+                                ...sec.subSections.map(sub => ({ key: sub.id, label: `${sec.name} – ${sub.name}`, indent: true, data: statsData[sub.id] })),
+                                { key: `sec_${sec.id}`, label: `${sec.name} total`, bold: true, data: statsData[`sec_${sec.id}`] }
+                              ]
+                              : [{ key: sec.id, label: sec.name, data: statsData[sec.id] }])
+                            : []),
+                          { key: 'overall', label: 'Final total', bold: true, overall: true, data: statsData.final }
+                        ].map(row => {
+                          const st = getStats(row.data?.marks || [], row.data?.fullMark);
+                          return (
+                            <tr key={row.key} style={row.overall ? { background: '#eff6ff' } : undefined}>
+                              <td className={`mk-left ${row.bold ? 'font-bold text-slate-800' : 'text-slate-600'}`} style={row.indent ? { paddingLeft: 24 } : undefined}>
+                                {row.label}
+                              </td>
+                              <td className="text-slate-500">{Number.isFinite(row.data?.fullMark) ? Number(row.data.fullMark.toFixed(2)) : '–'}</td>
+                              <td className="font-semibold">{st?.mean ?? '–'}</td>
+                              <td>{st?.median ?? '–'}</td>
+                              <td>{st?.max ?? '–'}</td>
+                              <td>{st?.min ?? '–'}</td>
+                              <td className={st ? (st.passCount >= st.total / 2 ? 'text-green-600 font-semibold' : 'text-red-500 font-semibold') : ''}>
+                                {st ? `${st.passCount}/${st.total}` : '–'}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="mk-card p-4 flex flex-col">
+                    <div className="text-sm font-bold text-slate-700 mb-3">Score distribution (% of full mark)</div>
+                    <div style={{ height: 340 }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={getGraphData()} margin={{ top: 8, right: 8, bottom: 8, left: -16 }}>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                          <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} angle={-30} textAnchor="end" height={50} />
+                          <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+                          <Tooltip />
+                          <Bar dataKey="count" fill="#6366f1" radius={[4, 4, 0, 0]} name="Students" />
+                        </BarChart>
+                      </ResponsiveContainer>
                     </div>
-                  ))}
-                </div>
-
-                {/* Right Side: SD Graph */}
-                <div className="w-full lg:w-1/2 flex flex-col">
-                  <h3 className="text-lg font-bold text-gray-700 border-b border-gray-200 pb-2 mb-4">Score Distribution</h3>
-                  <div className="flex-1 min-h-[400px] bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={getGraphData()}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="name" />
-                        <YAxis allowDecimals={false} />
-                        <Tooltip />
-                        <Bar dataKey="count" fill="#8b5cf6" name="Number of Students" />
-                      </BarChart>
-                    </ResponsiveContainer>
                   </div>
                 </div>
               </div>
@@ -6340,389 +5530,711 @@ const compFinal = compScaled - compDeduct;
         </div>
       )}
 
-      {/* Term Score Modal */}
+      {/* ================= TERM SCORE CALCULATOR ================= */}
       {showTermScoreModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-7xl h-[92vh] flex flex-col">
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-lg">
-              <h2 className="text-lg font-bold text-gray-800 flex items-center">
-                <Calculator className="w-5 h-5 mr-2 text-purple-600" />
-                Term Overall Score Calculator
-              </h2>
-              <button
-                onClick={() => setShowTermScoreModal(false)}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                <X className="w-6 h-6" />
+        <div className="mk-backdrop">
+          <div className="mk-modal max-w-7xl" style={{ height: 'min(92dvh, 920px)' }}>
+            <div className="mk-modal-head">
+              <div>
+                <h2><Calculator className="text-purple-600" /> Term score calculator</h2>
+                <p className="text-xs text-slate-500 mt-0.5">Calculate term scores and copy them for WebSAMS.</p>
+              </div>
+              <button type="button" onClick={() => setShowTermScoreModal(false)} className="mk-btn mk-btn-icon mk-btn-ghost" aria-label="Close">
+                <X />
               </button>
             </div>
 
-            <div className="p-4 bg-white flex flex-col xl:flex-row justify-between items-start xl:items-center border-b border-gray-200 gap-4">
-              <div className="flex items-center space-x-4 w-full xl:w-auto flex-wrap gap-y-3">
-                <div className="flex items-center space-x-2">
-                  <label className="font-semibold text-gray-700 text-sm">Classes:</label>
-                  <details className="relative min-w-0">
-                    <summary className="list-none cursor-pointer border border-gray-300 rounded-md px-3 py-2 text-sm bg-white flex items-center justify-between min-w-[140px] hover:border-purple-400">
-                      <span>{modalClasses.length} Selected</span>
-                      <ChevronDown className="w-4 h-4 ml-2 text-gray-500" />
-                    </summary>
-
-                    <div className="mt-2 w-56 max-w-full bg-white border border-gray-200 shadow-sm rounded-md max-h-64 overflow-y-auto">
-                      <div className="p-2 flex flex-col gap-1">
-                        {classes.map(c => (
-                          <label
-                            key={c.name}
-                            className="flex items-center text-sm p-3 hover:bg-purple-50 rounded cursor-pointer transition-colors"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={modalClasses.includes(c.name)}
-                              onChange={() => {
-                                setModalClasses(previous =>
-                                  previous.includes(c.name)
-                                    ? previous.filter(name => name !== c.name)
-                                    : [...previous, c.name]
-                                );
-                                setTermScoresData([]);
-                              }}
-                              className="mr-2 rounded text-purple-600 focus:ring-purple-500"
-                            />
-                            <span className="break-words">
-                              {c.name.replace(/\u200B/g, '')}
-                            </span>
-                          </label>
-                        ))}
+            {/* Controls */}
+            <div className="shrink-0 border-b border-slate-200 bg-white px-5 py-3 flex flex-wrap items-end gap-3">
+              <div className="mk-field relative">
+                <span className="mk-label">Classes</span>
+                <button
+                  type="button"
+                  className="mk-input flex items-center justify-between gap-2 min-w-[180px] text-left"
+                  onClick={() => setClassPickerOpen(open => !open)}
+                  aria-expanded={classPickerOpen}
+                >
+                  <span className="truncate max-w-[220px]">
+                    {modalClasses.length === 0
+                      ? 'Choose classes'
+                      : modalClasses.length <= 2
+                        ? modalClasses.map(cleanClassName).join(', ')
+                        : `${modalClasses.length} classes`}
+                  </span>
+                  <ChevronDown className="w-4 h-4 text-slate-500 shrink-0" />
+                </button>
+                {classPickerOpen && (
+                  <>
+                    <div className="fixed inset-0 z-20" onClick={() => setClassPickerOpen(false)} />
+                    <div className="absolute left-0 top-full mt-1 z-30 w-64 rounded-lg border border-slate-200 bg-white p-1 shadow-lg max-h-72 overflow-auto">
+                      {classes.map(c => (
+                        <label key={c.name} className="flex items-center gap-2 rounded-md px-2.5 py-2 text-sm hover:bg-purple-50 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={modalClasses.includes(c.name)}
+                            onChange={() => {
+                              setModalClasses(previous =>
+                                previous.includes(c.name)
+                                  ? previous.filter(name => name !== c.name)
+                                  : [...previous, c.name]
+                              );
+                              setTermScoresData([]);
+                              setTermResultMode('');
+                            }}
+                            className="rounded text-purple-600"
+                          />
+                          <span className="break-words">{cleanClassName(c.name)}</span>
+                        </label>
+                      ))}
+                      <div className="border-t border-slate-100 p-1 mt-1">
+                        <button type="button" className="mk-btn mk-btn-sm w-full" onClick={() => setClassPickerOpen(false)}>Done</button>
                       </div>
                     </div>
-                  </details>
-                </div>
+                  </>
+                )}
+              </div>
 
-                <div className="flex items-center space-x-2 pl-4 border-l border-gray-200">
-                  <label className="font-semibold text-gray-700 text-sm">Term:</label>
-                  <select
-                    value={modalTerm}
-                    onChange={(e) => {
-                      setModalTerm(e.target.value);
-                      setTermScoresData([]);
-                    }}
-                    className="border border-gray-300 rounded-md p-1.5 text-sm outline-none focus:ring-2 focus:ring-purple-500"
-                  >
-                    {modalTermsList.map(t => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                </div>
+              <label className="mk-field">
+                <span className="mk-label">Term</span>
+                <select
+                  value={modalTerm}
+                  onChange={(e) => {
+                    setModalTerm(e.target.value);
+                    setTermScoresData([]);
+                    setTermResultMode('');
+                  }}
+                  className="mk-input min-w-[130px]"
+                >
+                  {modalTermsList.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </label>
 
-                <div className="flex items-center space-x-2 pl-4 border-l border-gray-200">
-                  <label className="font-semibold text-gray-700 text-sm">Preset:</label>
+              <div className="mk-field">
+                <span className="mk-label">Preset</span>
+                <div className="flex gap-1.5">
                   <select
                     value={selectedPresetId}
                     onChange={(e) => {
                       setSelectedPresetId(e.target.value);
-                      setTermScoresData([]);
+                      if (termResultMode === 'preset') {
+                        setTermScoresData([]);
+                        setTermResultMode('');
+                      }
                     }}
-                    className="border border-gray-300 rounded-md p-1.5 text-sm outline-none focus:ring-2 focus:ring-purple-500 min-w-[160px]"
+                    className="mk-input min-w-[170px]"
                   >
-                    {presets.length === 0 && <option value="">No presets available</option>}
+                    {presets.length === 0 && <option value="">No presets</option>}
                     {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
-                  <button
-                    onClick={() => setShowPresetManager(true)}
-                    className="text-sm bg-gray-100 text-gray-700 px-3 py-1.5 rounded-md hover:bg-gray-200 transition-colors font-medium border border-gray-300"
-                  >
-                    Manage
+                  <button type="button" className="mk-btn mk-btn-icon" onClick={() => openSettings('presets')} title="Manage presets" aria-label="Manage presets">
+                    <Settings />
                   </button>
                 </div>
               </div>
 
-              <div className="flex items-center justify-end w-full xl:w-auto flex-wrap gap-2">
-                {(() => {
-                  const preset = presets.find(p => p.id === selectedPresetId);
-                  const isLearningAttitude = preset && preset.name.includes('Learning Attitude');
-                  const tPrefix = getTermPrefix();
-
-                  return (
-                    <>
-                      <button
-                        onClick={() => handleCopyScores('A1')}
-                        disabled={termScoresData.length === 0}
-                        className="bg-teal-50 text-teal-700 px-3 py-2 rounded-md font-medium hover:bg-teal-100 transition-colors flex items-center disabled:opacity-50 border border-teal-200 shadow-sm text-sm"
-                      >
-                        {termCopySuccess === 'A1' ? <CheckCircle className="w-4 h-4 mr-1.5" /> : <Copy className="w-4 h-4 mr-1.5" />}
-                        Copy {isLearningAttitude ? 'Learning Attitude' : `${tPrefix}A1`}
-                      </button>
-
-                      {!isLearningAttitude && (
-                        <>
-                          <button
-                            onClick={() => handleCopyScores('A2')}
-                            disabled={termScoresData.length === 0}
-                            className="bg-blue-50 text-blue-700 px-3 py-2 rounded-md font-medium hover:bg-blue-100 transition-colors flex items-center disabled:opacity-50 border border-blue-200 shadow-sm text-sm"
-                          >
-                            {termCopySuccess === 'A2' ? <CheckCircle className="w-4 h-4 mr-1.5" /> : <Copy className="w-4 h-4 mr-1.5" />}
-                            Copy {tPrefix}A2
-                          </button>
-                          <button
-                            onClick={() => handleCopyScores('A3')}
-                            disabled={termScoresData.length === 0}
-                            className="bg-indigo-50 text-indigo-700 px-3 py-2 rounded-md font-medium hover:bg-indigo-100 transition-colors flex items-center disabled:opacity-50 border border-indigo-200 shadow-sm text-sm"
-                          >
-                            {termCopySuccess === 'A3' ? <CheckCircle className="w-4 h-4 mr-1.5" /> : <Copy className="w-4 h-4 mr-1.5" />}
-                            Copy {tPrefix}A3
-                          </button>
-                        </>
-                      )}
-                    </>
-                  );
-                })()}
-
+              <div className="ml-auto flex flex-wrap items-center gap-2">
                 <button
-                  onClick={calculateTermScores}
-                  disabled={!selectedPresetId || isCalculatingScores || modalClasses.length === 0}
-                  className="bg-purple-600 text-white px-6 py-2 rounded-md font-medium hover:bg-purple-700 transition-colors flex items-center disabled:opacity-50 shadow-sm ml-2"
+                  type="button"
+                  onClick={() => calculateTermScores('preset')}
+                  disabled={!selectedPresetId || Boolean(calculatingMode) || modalClasses.length === 0}
+                  className="mk-btn mk-btn-purple"
+                  title={describePresetFormula(selectedPreset)}
                 >
-                  {isCalculatingScores ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Calculator className="w-4 h-4 mr-2" />}
+                  {calculatingMode === 'preset' ? <Loader2 className="animate-spin" /> : <Calculator />}
                   Calculate
+                </button>
+                <span className="mk-divider" />
+                <button
+                  type="button"
+                  onClick={() => calculateTermScores('la-hw')}
+                  disabled={Boolean(calculatingMode) || modalClasses.length === 0}
+                  className={`mk-btn ${termResultMode === 'la-hw' ? 'mk-btn-soft-purple' : ''}`}
+                  title={LA_HOMEWORK_FORMULA}
+                >
+                  {calculatingMode === 'la-hw' ? <Loader2 className="animate-spin" /> : <BookOpen />}
+                  Learning Attitude (Homework)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => calculateTermScores('la-lesson')}
+                  disabled={Boolean(calculatingMode) || modalClasses.length === 0}
+                  className={`mk-btn ${termResultMode === 'la-lesson' ? 'mk-btn-soft-purple' : ''}`}
+                  title={LA_LESSON_FORMULA}
+                >
+                  {calculatingMode === 'la-lesson' ? <Loader2 className="animate-spin" /> : <Users />}
+                  Learning Attitude (Lesson)
                 </button>
               </div>
             </div>
 
-            {/* Formula Display Area */}
-            {selectedPresetId && (
-              <div className="bg-purple-50 px-4 py-3 border-b border-purple-100 flex items-start">
-                <Info className="w-5 h-5 text-purple-600 mr-2 flex-shrink-0 mt-0.5" />
-                <div>
-                  <h4 className="text-sm font-bold text-purple-800">Calculation Formula</h4>
-                  <p className="text-sm text-purple-700 mt-1">
-                    {(() => {
-                      const preset = presets.find(p => p.id === selectedPresetId);
-                      if (!preset) return '';
-                      if (preset.name === 'JS Geography') {
-                        return "Overall Score = [ (Sum of Assignments & Quizzes) / (Total Full Marks) × 50% ] + [ (Uniform Test Score) / (UT Full Mark) × 50% ]";
-                      }
-                      if (preset.name === 'Learning Attitude (Homework)') {
-                        return "Overall Score = Math.round( (Sum of Assignments) / (Total Full Marks) × 5 )";
-                      }
-                      if (preset.name === 'Learning Attitude (Lesson)') {
-                        return "Overall Score = 4 + (1 if Assignment > 90%) - Math.floor(Records / 2). (Capped at 3 if Assignment Total < 60%). Range: 0-5.";
-                      }
-                      const parts = Object.entries(preset.weights)
-                        .filter(([_, w]) => w > 0)
-                        .map(([c, w]) => `(${c} × ${w}%)`);
-                      return parts.length > 0 ? `Overall Score = ${parts.join(' + ')}` : "No weights configured.";
-                    })()}
-                  </p>
+            {/* Formula + copy bar */}
+            <div className="shrink-0 border-b border-purple-100 bg-purple-50 px-5 py-2.5 flex flex-wrap items-center gap-3">
+              <Info className="w-4 h-4 text-purple-600 shrink-0" />
+              <p className="flex-1 min-w-[220px] text-xs text-purple-800">
+                <b>{termResultMode === 'la-hw' ? 'Learning Attitude (Homework)' : termResultMode === 'la-lesson' ? 'Learning Attitude (Lesson)' : (selectedPreset?.name || 'Formula')}:</b>{' '}
+                {termFormulaText}
+              </p>
+              {termScoresData.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  <button type="button" onClick={() => handleCopyScores('A1')} className="mk-btn mk-btn-sm">
+                    {termCopySuccess === 'A1' ? <CheckCircle /> : <Copy />}
+                    Copy {termIsLearningAttitude ? 'Learning Attitude' : `${getTermPrefix()}A1`}
+                  </button>
+                  {!termIsLearningAttitude && (
+                    <>
+                      <button type="button" onClick={() => handleCopyScores('A2')} className="mk-btn mk-btn-sm">
+                        {termCopySuccess === 'A2' ? <CheckCircle /> : <Copy />} Copy {getTermPrefix()}A2
+                      </button>
+                      <button type="button" onClick={() => handleCopyScores('A3')} className="mk-btn mk-btn-sm">
+                        {termCopySuccess === 'A3' ? <CheckCircle /> : <Copy />} Copy {getTermPrefix()}A3
+                      </button>
+                    </>
+                  )}
                 </div>
-              </div>
-            )}
+              )}
+            </div>
 
-            <div className="flex-1 overflow-auto p-4 bg-gray-50">
+            <div className="flex-1 min-h-0 overflow-auto bg-slate-50 p-4">
               {termScoresData.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-gray-500">
-                  <Calculator className="w-12 h-12 text-gray-300 mb-3" />
-                  <p>Select a preset and click "Calculate Scores" to view term results.</p>
+                <div className="h-full flex flex-col items-center justify-center text-slate-500 text-center">
+                  <Calculator className="w-12 h-12 text-slate-300 mb-3" />
+                  <p className="text-sm">Choose classes and a term, then press <b>Calculate</b> or a <b>Learning Attitude</b> button.</p>
                 </div>
               ) : (
-                <table className="w-max mx-auto text-left border-collapse bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
-                  <thead className="bg-gray-100 sticky top-0">
-                    <tr className="text-gray-600 text-sm uppercase tracking-wider">
-                      {modalClasses.length > 1 && <th className="p-3 border-b border-gray-200 w-16 text-center">Class</th>}
-                      <th className="p-3 border-b border-gray-200 w-16 text-center">No.</th>
-                      <th className="p-3 border-b border-gray-200">Name</th>
-                      {displayCategories.map(cat => {
-                        const weight = termScoresData[0].categoryScores[cat]?.weight || 0;
-                        const tPrefix = getTermPrefix();
-                        let headerName = cat;
-                        if (cat === 'Uniform Test') headerName = `Uniform Test (${tPrefix}A3)`;
+                <div className="mk-card overflow-auto">
+                  <table className="mk-table">
+                    <thead>
+                      <tr>
+                        {modalClasses.length > 1 && <th>Class</th>}
+                        <th>No.</th>
+                        <th className="mk-left">Name</th>
+                        {displayCategories.map(cat => {
+                          const weight = termScoresData[0].categoryScores[cat]?.weight || 0;
+                          let headerName = cat;
+                          if (cat === 'Uniform Test') headerName = `Uniform Test (${getTermPrefix()}A3)`;
+                          return (
+                            <th key={cat} className="mk-sep">
+                              {headerName}
+                              {!termIsLearningAttitude && <span className="mk-sub" style={{ color: '#7c3aed', fontWeight: 700 }}>{weight}%</span>}
+                            </th>
+                          );
+                        })}
+                        <th className="mk-sep" style={{ color: '#6d28d9' }}>
+                          {termIsLearningAttitude ? 'Learning Attitude' : `Daily marks (${getTermPrefix()}A1)`}
+                        </th>
+                        {!termIsLearningAttitude && (
+                          <th className="mk-sep" style={{ color: '#1d4ed8' }}>Exam ({getTermPrefix()}A2)</th>
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {termScoresData.map((data, idx) => {
+                        let scoreStyle = { background: 'rgba(245,243,255,.8)', color: '#6d28d9' };
+                        let rowStyle;
+                        if (data.highlight === 'top') {
+                          rowStyle = { background: '#f0fdf4' };
+                          scoreStyle = { background: '#dcfce7', color: '#166534' };
+                        } else if (data.highlight === 'middle') {
+                          rowStyle = { background: '#eff6ff' };
+                          scoreStyle = { background: '#dbeafe', color: '#1e40af' };
+                        } else if (data.highlight === 'bottom') {
+                          rowStyle = { background: '#fff7ed' };
+                          scoreStyle = { background: '#ffedd5', color: '#9a3412' };
+                        }
 
                         return (
-                          <th key={cat} className="p-3 border-b border-gray-200 text-center">
-                            {headerName} <span className="text-xs text-purple-600 block normal-case font-bold">{weight}%</span>
-                          </th>
+                          <tr key={idx} style={rowStyle}>
+                            {modalClasses.length > 1 && <td className="text-slate-600">{cleanClassName(data.student.className)}</td>}
+                            <td className="font-semibold">{data.student.classNumber}</td>
+                            <td className="mk-left font-medium text-slate-800">{data.student.englishName}</td>
+                            {displayCategories.map(cat => {
+                              const catData = data.categoryScores[cat];
+                              if (termResultMode === 'la-lesson') {
+                                return (
+                                  <td key={cat} className="mk-sep">
+                                    {cat === 'Records'
+                                      ? <span className="font-semibold">{catData.raw}</span>
+                                      : (
+                                        <>
+                                          <div className="font-semibold">{catData.score.toFixed(1)}%</div>
+                                          <div className="text-[10px] text-slate-400">({catData.raw.toFixed(1)}/{catData.full})</div>
+                                        </>
+                                      )}
+                                  </td>
+                                );
+                              }
+                              return (
+                                <td key={cat} className="mk-sep">
+                                  <div className="font-semibold text-slate-700">{catData.score.toFixed(1)}</div>
+                                  <div className="text-[10px] text-slate-400">({catData.raw.toFixed(1)}/{catData.full})</div>
+                                </td>
+                              );
+                            })}
+                            <td className="mk-sep font-bold text-base" style={scoreStyle}>{data.overallScore}</td>
+                            {!termIsLearningAttitude && (
+                              <td className="mk-sep font-bold text-base" style={{ color: '#1d4ed8' }}>
+                                {data.rawExam !== undefined ? data.rawExam.toFixed(1) : '–'}
+                              </td>
+                            )}
+                          </tr>
                         );
                       })}
-
-                      {(() => {
-                        const preset = presets.find(p => p.id === selectedPresetId);
-                        const isLearningAttitude = preset && preset.name.includes('Learning Attitude');
-                        const tPrefix = getTermPrefix();
-                        const overallTitle = isLearningAttitude ? 'Learning Attitude' : `Daily Marks (${tPrefix}A1)`;
-
-                        return (
-                          <>
-                            <th className="p-3 border-b border-gray-200 text-center text-purple-800 font-bold border-l-2 border-purple-200">
-                              {overallTitle}
-                            </th>
-                            {!isLearningAttitude && (
-                              <>
-                                <th className="w-4 border-b border-gray-200 bg-gray-50"></th>
-                                <th className="p-3 border-b border-gray-200 text-center text-blue-800 font-bold border-l-2 border-blue-200">
-                                  Exam ({tPrefix}A2)
-                                </th>
-                              </>
-                            )}
-                          </>
-                        );
-                      })()}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {termScoresData.map((data, idx) => {
-                      let rowBg = 'hover:bg-gray-50';
-                      let scoreBg = 'bg-purple-50/50 text-purple-700 border-l-2 border-purple-200';
-                      if (data.highlight === 'top') {
-                        rowBg = 'bg-green-50 hover:bg-green-100';
-                        scoreBg = 'bg-green-100 text-green-800 border-l-2 border-green-300';
-                      } else if (data.highlight === 'middle') {
-                        rowBg = 'bg-blue-50 hover:bg-blue-100';
-                        scoreBg = 'bg-blue-100 text-blue-800 border-l-2 border-blue-300';
-                      } else if (data.highlight === 'bottom') {
-                        rowBg = 'bg-orange-50 hover:bg-orange-100';
-                        scoreBg = 'bg-orange-100 text-orange-800 border-l-2 border-orange-300';
-                      }
-
-                      const preset = presets.find(p => p.id === selectedPresetId);
-                      const isLearningAttitude = preset && preset.name.includes('Learning Attitude');
-
-                      return (
-                        <tr key={idx} className={rowBg}>
-                          {modalClasses.length > 1 && <td className="p-3 text-center font-medium text-gray-600">{data.student.className}</td>}
-                          <td className="p-3 text-center font-medium text-gray-800">{data.student.classNumber}</td>
-                          <td className="p-3">
-                            <div className="text-gray-800 font-medium">{data.student.englishName}</div>
-                          </td>
-                          {displayCategories.map(cat => {
-                            const catData = data.categoryScores[cat];
-                            return (
-                              <td key={cat} className="p-3 text-center">
-                                <div className="font-semibold text-gray-700">{catData.score.toFixed(1)}</div>
-                                <div className="text-[10px] text-gray-400">({catData.raw.toFixed(1)}/{catData.full})</div>
-                              </td>
-                            );
-                          })}
-                          <td className={`p-3 text-center font-bold text-lg ${scoreBg}`}>
-                            {data.overallScore}
-                          </td>
-                          {!isLearningAttitude && (
-                            <>
-                              <td className="w-4 bg-gray-50"></td>
-                              <td className="p-3 text-center font-bold text-lg bg-blue-50/30 text-blue-700 border-l-2 border-blue-200">
-                                {data.rawExam !== undefined ? data.rawExam.toFixed(1) : '-'}
-                              </td>
-                            </>
-                          )}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
           </div>
         </div>
       )}
 
-      {/* Preset Manager Modal */}
-      {showPresetManager && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-md flex flex-col">
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-lg">
-              <h2 className="text-lg font-bold text-gray-800 flex items-center">
-                <Settings className="w-5 h-5 mr-2 text-gray-600" />
-                Manage Presets
-              </h2>
-              <button
-                onClick={() => setShowPresetManager(false)}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                <X className="w-6 h-6" />
+      {/* ================= SETTINGS ================= */}
+      {showSettings && (
+        <div className="mk-backdrop" style={{ zIndex: 60 }}>
+          <div className="mk-modal max-w-3xl" style={{ height: 'min(660px, calc(100dvh - 32px))' }}>
+            <div className="mk-modal-head">
+              <div>
+                <h2><Settings className="text-slate-600" /> Settings</h2>
+                <p className="text-xs text-slate-500 mt-0.5">{cleanClassName(selectedClass)}</p>
+              </div>
+              <button type="button" onClick={() => setShowSettings(false)} className="mk-btn mk-btn-icon mk-btn-ghost" aria-label="Close">
+                <X />
               </button>
             </div>
-            <div className="p-6">
-              <form onSubmit={handleAddPreset} className="mb-6 bg-gray-50 p-4 rounded-lg border border-gray-200">
-                <h3 className="font-semibold text-gray-700 mb-3 text-sm">Add New Preset</h3>
-                <input
-                  type="text"
-                  value={newPresetName}
-                  onChange={(e) => setNewPresetName(e.target.value)}
-                  data-gramm="false" data-gramm_editor="false"
-                  placeholder="Preset Name (e.g., Geography Calculation)"
-                  className="w-full border border-gray-300 rounded p-2 text-sm outline-none focus:ring-2 focus:ring-purple-500 mb-3"
-                  required
-                />
-                <div className="space-y-2 mb-4">
-                  {categories.map(cat => (
-                    <div key={cat} className="flex justify-between items-center">
-                      <label className="text-sm text-gray-600">{cat}</label>
-                      <div className="flex items-center">
-                        <input
-                          type="number"
-                          placeholder="0"
-                          value={newPresetWeights[cat] || ''}
-                          onChange={(e) => updatePresetWeight(cat, e.target.value)}
-                          data-gramm="false" data-gramm_editor="false"
-                          className="w-20 border border-gray-300 rounded p-1.5 text-sm outline-none text-center focus:ring-2 focus:ring-purple-500"
-                        />
-                        <Percent className="w-4 h-4 ml-1 text-gray-400" />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                {user?.email === 'clng@ktls.edu.hk' && (
-                  <div className="mb-4 flex items-center">
-                    <input
-                      type="checkbox"
-                      id="sharePreset"
-                      checked={isSharedPreset}
-                      onChange={(e) => setIsSharedPreset(e.target.checked)}
-                      className="mr-2 rounded text-purple-600 focus:ring-purple-500"
-                    />
-                    <label htmlFor="sharePreset" className="text-sm text-gray-700 font-medium">Share this calculation method with all admins</label>
+
+            <div className="flex flex-1 min-h-0 flex-col sm:flex-row">
+              <nav className="shrink-0 sm:w-48 border-b sm:border-b-0 sm:border-r border-slate-200 bg-slate-50 p-2 flex sm:flex-col gap-1 overflow-x-auto">
+                {[
+                  ['general', 'General', <Calculator key="i" />],
+                  ['terms', 'Terms', <Calendar key="i" />],
+                  ['categories', 'Categories', <Layers key="i" />],
+                  ['presets', 'Score presets', <Percent key="i" />]
+                ].map(([key, label, icon]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`mk-tab ${settingsTab === key ? 'is-active' : ''}`}
+                    onClick={() => setSettingsTab(key)}
+                  >
+                    {icon} {label}
+                  </button>
+                ))}
+              </nav>
+
+              <div className="flex-1 min-h-0 overflow-auto p-5">
+                {/* General */}
+                {settingsTab === 'general' && (
+                  <div className="space-y-6">
+                    <section>
+                      <h3 className="mk-section-title">Default term score method</h3>
+                      <select
+                        className="mk-input w-full max-w-sm"
+                        value={presets.some(p => p.id === classPresetsMap[selectedClass]) ? classPresetsMap[selectedClass] : ''}
+                        onChange={event => handleSaveDefaultPreset(event.target.value)}
+                      >
+                        <option value="">No default</option>
+                        {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select>
+                      <p className="mk-help mt-2">
+                        Used first when you open the Term Score calculator or Export for {cleanClassName(selectedClass)}.
+                      </p>
+                      {presets.find(p => p.id === classPresetsMap[selectedClass]) && (
+                        <p className="mt-2 rounded-lg bg-purple-50 border border-purple-100 px-3 py-2 text-xs text-purple-800">
+                          {describePresetFormula(presets.find(p => p.id === classPresetsMap[selectedClass]))}
+                        </p>
+                      )}
+                    </section>
+
+                    <section className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                      <h3 className="mk-section-title text-amber-900">Disclosure</h3>
+                      <p className="mk-help mb-3">Instantly reveal every hidden item to students, across all classes and terms.</p>
+                      <button type="button" className="mk-btn mk-btn-warn" onClick={handleRevealAllClasses}>
+                        <Eye /> Reveal all classes
+                      </button>
+                    </section>
                   </div>
                 )}
-                <button type="submit" className="w-full bg-purple-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-purple-700">Save Preset</button>
-              </form>
 
-              <h3 className="font-semibold text-gray-700 mb-2 text-sm">Existing Presets</h3>
-              <ul className="divide-y divide-gray-100 border border-gray-200 rounded-md max-h-48 overflow-y-auto">
-                {presets.map((p) => (
-                  <li key={p.id} className="flex justify-between items-center p-3 hover:bg-gray-50">
+                {/* Terms */}
+                {settingsTab === 'terms' && (
+                  <div className="space-y-4">
+                    <form onSubmit={handleAddTerm} className="flex gap-2">
+                      <input
+                        type="text"
+                        value={newTermName}
+                        onChange={(e) => setNewTermName(e.target.value)}
+                        data-gramm="false"
+                        data-gramm_editor="false"
+                        placeholder="New term, e.g. Term 3"
+                        className="mk-input flex-1"
+                        required
+                      />
+                      <button type="submit" className="mk-btn mk-btn-primary"><Plus /> Add term</button>
+                    </form>
+
+                    <ul className="mk-card divide-y divide-slate-100">
+                      {terms.map((t, index) => (
+                        <li key={t} className="flex items-center gap-2 px-3 py-2">
+                          {editingTerm === t ? (
+                            <>
+                              <input
+                                type="text"
+                                value={editTermName}
+                                onChange={(e) => setEditTermName(e.target.value)}
+                                onKeyDown={event => {
+                                  if (event.key === 'Enter') handleUpdateTerm(t);
+                                  if (event.key === 'Escape') setEditingTerm(null);
+                                }}
+                                data-gramm="false"
+                                data-gramm_editor="false"
+                                className="mk-input flex-1"
+                                autoFocus
+                              />
+                              <button type="button" onClick={() => handleUpdateTerm(t)} className="mk-btn mk-btn-sm mk-btn-icon" aria-label="Save"><CheckCircle /></button>
+                              <button type="button" onClick={() => setEditingTerm(null)} className="mk-btn mk-btn-sm mk-btn-icon" aria-label="Cancel"><X /></button>
+                            </>
+                          ) : (
+                            <>
+                              <span className="flex-1 text-sm font-medium text-slate-700">
+                                {t}
+                                {t === selectedTerm && <span className="mk-chip mk-chip-blue ml-2">Current</span>}
+                              </span>
+                              <button type="button" onClick={() => handleMoveTerm(index, 'up')} disabled={index === 0} className="mk-btn mk-btn-sm mk-btn-icon mk-btn-ghost" aria-label="Move up"><ChevronUp /></button>
+                              <button type="button" onClick={() => handleMoveTerm(index, 'down')} disabled={index === terms.length - 1} className="mk-btn mk-btn-sm mk-btn-icon mk-btn-ghost" aria-label="Move down"><ChevronDown /></button>
+                              <button type="button" onClick={() => { setEditingTerm(t); setEditTermName(t); }} className="mk-btn mk-btn-sm mk-btn-icon mk-btn-ghost" aria-label="Rename"><Edit2 /></button>
+                              <button type="button" onClick={() => handleDeleteTerm(t)} className="mk-btn mk-btn-sm mk-btn-icon mk-btn-ghost mk-btn-danger" aria-label="Delete"><Trash2 /></button>
+                            </>
+                          )}
+                        </li>
+                      ))}
+                      {terms.length === 0 && <li className="p-4 text-sm text-slate-500 text-center">No terms yet.</li>}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Categories */}
+                {settingsTab === 'categories' && (
+                  <div className="space-y-4">
+                    {categoryLoadError ? (
+                      <p className="text-sm text-red-700" role="alert">{categoryLoadError}</p>
+                    ) : !categoriesReady ? (
+                      <p className="text-sm text-slate-500 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading categories…</p>
+                    ) : (
+                      <>
+                        {canManageClassCategories ? (
+                          <form onSubmit={handleAddCategory} className="mk-card p-3 space-y-2">
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                value={newCategoryName}
+                                onChange={event => setNewCategoryName(event.target.value)}
+                                placeholder="New category for this class"
+                                maxLength={80}
+                                disabled={isCategorySaving}
+                                className="mk-input flex-1"
+                              />
+                              <button type="submit" disabled={isCategorySaving || !newCategoryName.trim()} className="mk-btn mk-btn-primary">
+                                {isCategorySaving ? <Loader2 className="animate-spin" /> : <Plus />} Add
+                              </button>
+                            </div>
+                            <label className="flex items-center gap-2 text-xs text-slate-600">
+                              <input
+                                type="checkbox"
+                                checked={newCategoryIsMulti}
+                                onChange={event => setNewCategoryIsMulti(event.target.checked)}
+                                disabled={isCategorySaving}
+                              />
+                              New items in this category use the multi-section layout by default
+                            </label>
+                          </form>
+                        ) : (
+                          <p className="mk-help">Only the class owner can change its categories.</p>
+                        )}
+
+                        <ul className="mk-card divide-y divide-slate-100">
+                          {categories.map(cat => {
+const isDefault = MARKS_DEFAULT_CATEGORIES.includes(cat);
+                            const usedCount = allTermCountByCategory[cat] || 0;
+                            const isMulti = multiSectionCategories.includes(cat);
+
+                            return (
+                              <li key={cat} className="flex items-center gap-2 px-3 py-2">
+                                {editingCategory === cat ? (
+                                  <>
+                                    <input
+                                      type="text"
+                                      value={editCategoryName}
+                                      onChange={event => setEditCategoryName(event.target.value)}
+                                      onKeyDown={event => {
+                                        if (event.key === 'Enter') handleUpdateCategory(cat);
+                                        if (event.key === 'Escape') setEditingCategory(null);
+                                      }}
+                                      disabled={isCategorySaving}
+                                      className="mk-input flex-1"
+                                      autoFocus
+                                    />
+                                    <button type="button" onClick={() => handleUpdateCategory(cat)} disabled={isCategorySaving} className="mk-btn mk-btn-sm mk-btn-icon" aria-label="Save category name">
+                                      <CheckCircle />
+                                    </button>
+                                    <button type="button" onClick={() => setEditingCategory(null)} disabled={isCategorySaving} className="mk-btn mk-btn-sm mk-btn-icon" aria-label="Cancel">
+                                      <X />
+                                    </button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span className="flex-1 min-w-0 text-sm font-medium text-slate-700 break-words">{cat}</span>
+                                    {isMulti && <span className="mk-chip mk-chip-purple">Multi-section</span>}
+                                    <span className="mk-chip" title="Items in all terms of this class">
+                                      {usedCount} {usedCount === 1 ? 'item' : 'items'}
+                                    </span>
+                                    {isDefault ? (
+                                      <span className="mk-chip">Default</span>
+                                    ) : canManageClassCategories ? (
+                                      <>
+                                        <button
+                                          type="button"
+                                          disabled={isCategorySaving || usedCount > 0}
+                                          onClick={() => {
+                                            setEditingCategory(cat);
+                                            setEditCategoryName(cat);
+                                          }}
+                                          className="mk-btn mk-btn-sm mk-btn-icon mk-btn-ghost"
+                                          title={usedCount > 0 ? 'Only empty categories can be renamed' : 'Rename'}
+                                          aria-label={`Rename ${cat}`}
+                                        >
+                                          <Edit2 />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={isCategorySaving || usedCount > 0}
+                                          onClick={event => handleDeleteCategory(cat, event)}
+                                          className="mk-btn mk-btn-sm mk-btn-icon mk-btn-ghost mk-btn-danger"
+                                          title={usedCount > 0 ? 'Only empty categories can be removed' : 'Remove'}
+                                          aria-label={`Remove ${cat}`}
+                                        >
+                                          <Trash2 />
+                                        </button>
+                                      </>
+                                    ) : null}
+                                  </>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+
+                        {canManageClassCategories && (
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={handleCleanClassCategories}
+                              disabled={isCategorySaving}
+                              className="mk-btn mk-btn-sm"
+                              title="Remove empty custom categories from this class (checks all terms)"
+                            >
+                              <Trash2 /> Clean empty categories
+                            </button>
+                            {user?.email === SUPER_ADMIN_EMAIL && (
+                              <button
+                                type="button"
+                                onClick={handleCleanAllClassCategories}
+                                disabled={isCategorySaving}
+                                className="mk-btn mk-btn-sm mk-btn-warn"
+                                title="Clean empty custom categories across all active and archived classes"
+                              >
+                                <AlertTriangle /> Clean ALL classes
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        <p className="mk-help">
+                          The six default categories are always kept. A category that has items in any term cannot be renamed or removed.
+                        </p>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* Presets */}
+                {settingsTab === 'presets' && (
+                  <div className="space-y-5">
+                    <form onSubmit={handleAddPreset} className="mk-card p-4 space-y-3">
+                      <h3 className="mk-section-title mb-0">New preset</h3>
+                      <input
+                        type="text"
+                        value={newPresetName}
+                        onChange={(e) => setNewPresetName(e.target.value)}
+                        data-gramm="false"
+                        data-gramm_editor="false"
+                        placeholder="Preset name, e.g. S3 History"
+                        className="mk-input w-full"
+                        required
+                      />
+                      <div>
+                        <div className="mk-label mb-2">Category weights (%)</div>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {categories.map(cat => (
+                            <label key={cat} className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 px-3 py-1.5">
+                              <span className="text-sm text-slate-700 truncate">{cat}</span>
+                              <span className="flex items-center gap-1">
+                                <input
+                                  type="number"
+                                  placeholder="0"
+                                  value={newPresetWeights[cat] || ''}
+                                  onChange={(e) => updatePresetWeight(cat, e.target.value)}
+                                  data-gramm="false"
+                                  data-gramm_editor="false"
+                                  className="mk-cell-input"
+                                  style={{ width: 64 }}
+                                />
+                                <Percent className="w-3.5 h-3.5 text-slate-400" />
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                        <p className="mk-help mt-2">
+                          Weights total: <b>{Object.values(newPresetWeights).reduce((sum, value) => sum + (Number(value) || 0), 0)}%</b>
+                        </p>
+                      </div>
+                      {user?.email === SUPER_ADMIN_EMAIL && (
+                        <label className="flex items-center gap-2 text-sm text-slate-700">
+                          <input
+                            type="checkbox"
+                            checked={isSharedPreset}
+                            onChange={(e) => setIsSharedPreset(e.target.checked)}
+                            className="rounded text-purple-600"
+                          />
+                          Share this preset with all admins
+                        </label>
+                      )}
+                      <button type="submit" className="mk-btn mk-btn-purple">
+                        <Save /> Save preset
+                      </button>
+                    </form>
+
                     <div>
-                      <span className="text-sm font-bold text-gray-700 flex items-center gap-2">
-                        {p.name}
-                        {p.isShared && <span className="bg-blue-100 text-blue-700 text-[10px] px-2 py-0.5 rounded-full">Shared</span>}
-                      </span>
-                      <span className="text-xs text-gray-500">
-                        {p.isCustom ? "Custom Calculation Logic Applied" : Object.entries(p.weights || {}).filter(([_, w]) => w > 0).map(([c, w]) => `${c}: ${w}%`).join(', ')}
-                      </span>
+                      <h3 className="mk-section-title">Existing presets</h3>
+                      <ul className="mk-card divide-y divide-slate-100">
+                        {presets.map(p => (
+                          <li key={p.id} className="flex items-center gap-3 px-3 py-2.5">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                                <span className="truncate">{p.name}</span>
+                                {p.isShared && <span className="mk-chip mk-chip-blue">Shared</span>}
+                                {classPresetsMap[selectedClass] === p.id && <span className="mk-chip mk-chip-purple">Default</span>}
+                              </div>
+                              <div className="text-xs text-slate-500 mt-0.5">{describePresetFormula(p)}</div>
+                            </div>
+                            {user?.email === SUPER_ADMIN_EMAIL && (
+                              <button
+                                type="button"
+                                onClick={() => handleToggleShareExistingPreset(p.id, p.isShared)}
+                                className="mk-btn mk-btn-sm"
+                              >
+                                {p.isShared ? 'Unshare' : 'Share'}
+                              </button>
+                            )}
+                            {(!p.isShared || user?.email === p.owner || user?.email === SUPER_ADMIN_EMAIL) && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeletePreset(p.id)}
+                                className="mk-btn mk-btn-sm mk-btn-icon mk-btn-ghost mk-btn-danger"
+                                aria-label={`Delete ${p.name}`}
+                              >
+                                <Trash2 />
+                              </button>
+                            )}
+                          </li>
+                        ))}
+                        {presets.length === 0 && <li className="p-4 text-sm text-slate-500 text-center">No presets yet.</li>}
+                      </ul>
+                      <p className="mk-help mt-2">
+                        Learning Attitude (Homework / Lesson) are now separate buttons in the Term Score calculator.
+                      </p>
                     </div>
-                    <div className="flex items-center gap-2">
-                      {user?.email === 'clng@ktls.edu.hk' && (
-                        <button
-                          onClick={() => handleToggleShareExistingPreset(p.id, p.isShared)}
-                          className={`text-xs px-2 py-1 rounded font-medium ${p.isShared ? 'bg-gray-200 text-gray-700 hover:bg-gray-300' : 'bg-purple-100 text-purple-700 hover:bg-purple-200'}`}
-                        >
-                          {p.isShared ? 'Unshare' : 'Share'}
-                        </button>
-                      )}
-                      {(!p.isShared || user?.email === p.owner || user?.email === 'clng@ktls.edu.hk') && (
-                        <button
-                          onClick={() => handleDeletePreset(p.id)}
-                          className="text-red-400 hover:text-red-600 p-1 ml-2"
-                          title="Delete Preset"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                  </li>
-                ))}
-                {presets.length === 0 && <li className="p-3 text-sm text-gray-500 text-center">No presets available.</li>}
-              </ul>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Document Linker — search and inspect question text before selecting */}
+      {/* ================= EXPORT TO EXCEL ================= */}
+      {showExportModal && (
+        <div className="mk-backdrop">
+          <div className="mk-modal max-w-3xl">
+            <div className="mk-modal-head">
+              <div>
+                <h2><Download className="text-emerald-600" /> Export to Excel</h2>
+                <p className="text-xs text-slate-500 mt-0.5">{cleanClassName(selectedClass)} · {selectedTerm}</p>
+              </div>
+              <button type="button" onClick={() => setShowExportModal(false)} className="mk-btn mk-btn-icon mk-btn-ghost" aria-label="Close">
+                <X />
+              </button>
+            </div>
+
+            <div className="mk-modal-body bg-slate-50 space-y-4">
+              <section className="mk-card p-4">
+                <h3 className="mk-section-title">1. Term score preset</h3>
+                <select
+                  value={exportPresetId}
+                  onChange={(e) => setExportPresetId(e.target.value)}
+                  className="mk-input w-full max-w-sm"
+                >
+                  {presets.length === 0 && <option value="">No presets available</option>}
+                  {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+                {presets.find(p => p.id === exportPresetId) && (
+                  <p className="mk-help mt-2">{describePresetFormula(presets.find(p => p.id === exportPresetId))}</p>
+                )}
+              </section>
+
+              <section className="mk-card p-4">
+                <h3 className="mk-section-title">2. Column order (top to bottom = left to right)</h3>
+                <div className="space-y-3">
+                  {Object.keys(exportAssessmentsMap)
+                    .filter(cat => (exportAssessmentsMap[cat] || []).length > 0)
+                    .map(cat => (
+                      <div key={cat} className="rounded-lg border border-slate-200 overflow-hidden">
+                        <div className="bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 border-b border-slate-200 flex items-center gap-2">
+                          {cat} <span className="mk-count">{exportAssessmentsMap[cat].length}</span>
+                        </div>
+                        <ul className="divide-y divide-slate-100 bg-white">
+                          {exportAssessmentsMap[cat].map((item, index) => (
+                            <li key={item.id} className="flex items-center gap-2 px-3 py-1.5">
+                              <span className="flex-1 min-w-0 truncate text-sm text-slate-700">{item.name}</span>
+                              <span className="text-xs text-slate-400">{item.date}</span>
+                              <button type="button" onClick={() => moveExportItem(cat, index, 'up')} disabled={index === 0} className="mk-btn mk-btn-sm mk-btn-icon mk-btn-ghost" aria-label="Move up"><ChevronUp /></button>
+                              <button type="button" onClick={() => moveExportItem(cat, index, 'down')} disabled={index === exportAssessmentsMap[cat].length - 1} className="mk-btn mk-btn-sm mk-btn-icon mk-btn-ghost" aria-label="Move down"><ChevronDown /></button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  {Object.values(exportAssessmentsMap).every(list => (list || []).length === 0) && (
+                    <p className="text-sm text-slate-500">No configured items in this term.</p>
+                  )}
+                  {Object.keys(exportAssessmentsMap).some(cat => (exportAssessmentsMap[cat] || []).length === 0) && (
+                    <p className="mk-help">
+                      Empty: {Object.keys(exportAssessmentsMap).filter(cat => (exportAssessmentsMap[cat] || []).length === 0).join(', ')}
+                    </p>
+                  )}
+                </div>
+              </section>
+            </div>
+
+            <div className="mk-modal-foot">
+              <button type="button" onClick={() => setShowExportModal(false)} className="mk-btn">Cancel</button>
+              <button type="button" onClick={generateExcel} className="mk-btn mk-btn-emerald">
+                <Download /> Download Excel file
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= DOCUMENT LINKER ================= */}
       {showDocLinker && (
         <DesignatedDocumentLinker
           key={`${docLinkerTarget || 'main'}:${selectedAssessment?.id || 'new'}`}
@@ -6732,9 +6244,7 @@ const compFinal = compScaled - compDeduct;
           selectedId={
             docLinkerTarget === 'main'
               ? linkedDocId
-              : sectionsConfig.find(
-                section => section.id === docLinkerTarget
-              )?.linkedDocId || ''
+              : sectionsConfig.find(section => section.id === docLinkerTarget)?.linkedDocId || ''
           }
           onClose={() => setShowDocLinker(false)}
           onSelect={({ linkedDocId: selectedLink }) => {
@@ -6743,11 +6253,7 @@ const compFinal = compScaled - compDeduct;
             if (docLinkerTarget === 'main') {
               setLinkedDocId(selectedLink);
             } else {
-              updateSection(
-                docLinkerTarget,
-                'linkedDocId',
-                selectedLink
-              );
+              updateSection(docLinkerTarget, 'linkedDocId', selectedLink);
             }
 
             setShowDocLinker(false);
@@ -6755,216 +6261,146 @@ const compFinal = compScaled - compDeduct;
         />
       )}
 
-      {/* Preview Modal for Linked Document */}
+      {/* ================= LINKED DOCUMENT PREVIEW ================= */}
       {previewItem && (
-        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4">
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="bg-white rounded-xl w-full max-w-full h-full shadow-2xl flex flex-col overflow-hidden"
-          >
-            {/* Preview Header */}
-            <div className="px-6 py-3 border-b border-slate-200 flex justify-between items-center bg-white shrink-0 z-10 gap-4 flex-wrap">
-              <div className="flex items-center gap-4">
-                <div className="flex flex-col">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                      {previewItem.parent.year || ''} • {previewItem.parent.origin || ''}
-                    </span>
-                    <span className={`text-xs px-2 py-0.5 rounded font-medium ${previewItem.parent.paperType?.includes('1') ? 'bg-orange-100 text-orange-700' : 'bg-purple-100 text-purple-700'}`}>
-                      {previewItem.parent.paperType || 'Unknown'}
-                    </span>
-                  </div>
-                  <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                    {viewingAnswer ? "Answer Key: " : ""}{previewItem.parent.title || 'Untitled Document'}
-                    <span className="bg-blue-100 text-blue-800 text-xs px-2 py-0.5 rounded-md font-bold ml-2">
-                      {previewItem.isFullPaper
-                        ? 'Full Paper View'
-                        : `Part ${previewItem.child?.label || ''}`}
-                    </span>
-                  </h2>
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4">
+          <div className="bg-white rounded-xl w-full h-full shadow-2xl flex flex-col overflow-hidden">
+            <div className="px-5 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 bg-white shrink-0">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                    {previewItem.parent.year || ''} · {previewItem.parent.origin || ''}
+                  </span>
+                  <span className={`mk-chip ${previewItem.parent.paperType?.includes('1') ? 'mk-chip-yellow' : 'mk-chip-purple'}`}>
+                    {previewItem.parent.paperType || 'Unknown'}
+                  </span>
                 </div>
+                <h2 className="text-base font-bold text-slate-800 flex items-center gap-2 flex-wrap">
+                  {viewingAnswer ? 'Answer key: ' : ''}{previewItem.parent.title || 'Untitled document'}
+                  <span className="mk-chip mk-chip-blue">
+                    {previewItem.isFullPaper ? 'Full paper' : `Part ${previewItem.child?.label || ''}`}
+                  </span>
+                </h2>
               </div>
 
-              {/* STATS DISPLAY */}
-              {selectedAssessment && statsData && statsData.final && (() => {
-                const s = getStats(statsData.final.marks, statsData.final.fullMark);
-                if (!s) return null;
-                return (
-                  <div className="hidden md:flex items-center gap-4 text-xs bg-slate-50 border border-slate-200 rounded-lg px-4 py-1.5 shadow-sm">
-                    <div className="flex flex-col items-center"><span className="text-slate-400 font-semibold uppercase text-[10px]">Mean</span><span className="font-bold text-slate-700 text-sm">{s.mean}</span></div>
-                    <div className="w-px h-6 bg-slate-200"></div>
-                    <div className="flex flex-col items-center"><span className="text-slate-400 font-semibold uppercase text-[10px]">Median</span><span className="font-bold text-slate-700 text-sm">{s.median}</span></div>
-                    <div className="w-px h-6 bg-slate-200"></div>
-                    <div className="flex flex-col items-center"><span className="text-slate-400 font-semibold uppercase text-[10px]">Pass</span><span className={`font-bold text-sm ${s.passCount >= s.total / 2 ? 'text-green-600' : 'text-red-500'}`}>{s.passCount}/{s.total}</span></div>
-                    <div className="w-px h-6 bg-slate-200"></div>
-                    <div className="flex flex-col items-center"><span className="text-slate-400 font-semibold uppercase text-[10px]">Max</span><span className="font-bold text-blue-600 text-sm">{s.max}</span></div>
-                    <div className="w-px h-6 bg-slate-200"></div>
-                    <div className="flex flex-col items-center"><span className="text-slate-400 font-semibold uppercase text-[10px]">Min</span><span className="font-bold text-orange-500 text-sm">{s.min}</span></div>
-                  </div>
-                );
-              })()}
+              {selectedAssessment && overallStats && (
+                <div className="hidden md:flex items-center gap-4 text-xs bg-slate-50 border border-slate-200 rounded-lg px-4 py-1.5">
+                  {[
+                    ['Mean', overallStats.mean, 'text-slate-700'],
+                    ['Median', overallStats.median, 'text-slate-700'],
+                    ['Pass', `${overallStats.passCount}/${overallStats.total}`, overallStats.passCount >= overallStats.total / 2 ? 'text-green-600' : 'text-red-500'],
+                    ['Max', overallStats.max, 'text-blue-600'],
+                    ['Min', overallStats.min, 'text-orange-500']
+                  ].map(([label, value, color]) => (
+                    <div key={label} className="flex flex-col items-center">
+                      <span className="text-slate-400 font-semibold uppercase text-[10px]">{label}</span>
+                      <span className={`font-bold text-sm ${color}`}>{value}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
 
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-2">
                 {!viewingAnswer && previewItem.parent.hasAnswer && (
-                  <button
-                    onClick={() => setViewingAnswer(true)}
-                    className="hidden sm:flex px-4 py-2 rounded-lg bg-green-600 text-white text-sm font-bold hover:bg-green-700 transition-all items-center gap-2"
-                  >
-                    <BookOpen size={16} /> Show Answer
+                  <button type="button" onClick={() => setViewingAnswer(true)} className="mk-btn mk-btn-emerald">
+                    <BookOpen /> Show answer
                   </button>
                 )}
-
                 {viewingAnswer && (
-                  <button
-                    onClick={() => setViewingAnswer(false)}
-                    className="hidden sm:flex px-4 py-2 rounded-lg bg-slate-600 text-white text-sm font-bold hover:bg-slate-700 transition-all items-center gap-2"
-                  >
-                    <ArrowLeft size={16} /> Return to Question
+                  <button type="button" onClick={() => setViewingAnswer(false)} className="mk-btn">
+                    <ArrowLeft /> Back to question
                   </button>
                 )}
-
                 <button
+                  type="button"
                   onClick={() => handleViewLinkedMarks(previewItem.parent.id, previewItem.parent.title)}
-                  className="hidden sm:flex px-4 py-2 rounded-lg bg-teal-600 text-white text-sm font-bold hover:bg-teal-700 transition-all items-center gap-2"
+                  className="mk-btn mk-btn-soft"
                 >
-                  <BarChart2 size={16} /> View Marks
+                  <BarChart2 /> View marks
                 </button>
-
-                <label className="flex items-center gap-2 text-xs font-bold text-slate-600">
-                  Language
-                  <select
-                    value={previewLanguage}
-                    onChange={event => setPreviewLanguage(event.target.value)}
-                    className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm"
-                  >
-                    <option value="en">English</option>
-                    <option value="zh">中文</option>
-                  </select>
-                </label>
-
+                <select
+                  value={previewLanguage}
+                  onChange={event => setPreviewLanguage(event.target.value)}
+                  className="mk-input"
+                  aria-label="Language"
+                >
+                  <option value="en">English</option>
+                  <option value="zh">中文</option>
+                </select>
                 {previewPdfUrl && (
                   <a
                     href={previewPdfUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="hidden sm:flex px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 transition-all items-center gap-2"
+                    className="mk-btn mk-btn-primary"
                   >
-                    <Download size={16} />
-                    {viewingAnswer ? 'Open / Download Answer' : 'Open / Download PDF'}
+                    <Download /> {viewingAnswer ? 'Open answer' : 'Open PDF'}
                   </a>
                 )}
-
                 <button
+                  type="button"
                   onClick={() => {
                     setPreviewItem(null);
                     setViewingAnswer(false);
                   }}
-                  className="text-slate-400 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 p-2 rounded-full transition-colors"
+                  className="mk-btn mk-btn-icon mk-btn-ghost"
+                  aria-label="Close"
                 >
-                  <X size={20} />
+                  <X />
                 </button>
               </div>
             </div>
 
-            {/* Preview Body */}
             <div className="flex-1 min-h-0 min-w-0 overflow-auto md:overflow-hidden flex flex-col md:flex-row">
               {!viewingAnswer && (
-                <div
-                  className={`${previewPdfUrl
-                    ? 'md:w-1/3 lg:w-1/4 md:border-r border-slate-200 shrink-0'
-                    : 'w-full'
-                    } p-4 md:p-6 overflow-y-auto bg-slate-50`}
-                >
-                  <div className="space-y-4">
-                    <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                      <h3 className="text-sm font-bold text-slate-800 mb-2">
-                        Paper Overview
-                      </h3>
-
+                <div className={`${previewPdfUrl ? 'md:w-1/3 lg:w-1/4 md:border-r border-slate-200 shrink-0' : 'w-full'} p-4 overflow-y-auto bg-slate-50`}>
+                  <div className="space-y-3">
+                    <div className="mk-card p-4">
+                      <h3 className="text-sm font-bold text-slate-800 mb-2">Paper overview</h3>
                       {previewItem.parent.versionFamilyId && (
-                        <p className="mb-3 text-xs font-bold text-indigo-700">
-                          Version:{' '}
-                          {previewItem.parent.versionLabel ||
-                            previewItem.parent.year ||
-                            'Year unknown'}
-                          {previewItem.parent.versionIsOriginal
-                            ? ' (Original)'
-                            : ''}
+                        <p className="mb-2 text-xs font-bold text-indigo-700">
+                          Version: {previewItem.parent.versionLabel || previewItem.parent.year || 'Year unknown'}
+                          {previewItem.parent.versionIsOriginal ? ' (Original)' : ''}
                         </p>
                       )}
-
-                      <div className="flex flex-wrap gap-2">
+                      <div className="flex flex-wrap gap-1.5">
                         {(
                           Array.isArray(previewItem.parent.topic)
                             ? previewItem.parent.topic
-                            : previewItem.parent.topic
-                              ? [previewItem.parent.topic]
-                              : []
+                            : previewItem.parent.topic ? [previewItem.parent.topic] : []
                         ).filter(Boolean).map((topic, index) => (
-                          <span
-                            key={index}
-                            className="px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium border border-blue-100 flex items-center gap-1"
-                          >
-                            <Tag size={12} /> {topic}
-                          </span>
+                          <span key={index} className="mk-chip mk-chip-blue"><Tag /> {topic}</span>
                         ))}
                       </div>
                     </div>
 
-                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                      <FileText size={14} />
-                      {previewItem.isFullPaper
-                        ? 'All Sub-Questions'
-                        : 'Linked Sub-Question'}
+                    <h3 className="mk-label flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5" />
+                      {previewItem.isFullPaper ? 'All sub-questions' : 'Linked sub-question'}
                     </h3>
 
                     {(
                       previewItem.isFullPaper
                         ? previewItem.parent.subQuestions || []
-                        : previewItem.child
-                          ? [previewItem.child]
-                          : []
+                        : previewItem.child ? [previewItem.child] : []
                     ).map(sq => {
-                      const preferredText = previewLanguage === 'zh'
-                        ? sq.contentChi
-                        : sq.content;
-
-                      const alternativeText = previewLanguage === 'zh'
-                        ? sq.content
-                        : sq.contentChi;
-
+                      const preferredText = previewLanguage === 'zh' ? sq.contentChi : sq.content;
+                      const alternativeText = previewLanguage === 'zh' ? sq.content : sq.contentChi;
                       const text = preferredText || alternativeText || '';
 
                       return (
-                        <div
-                          key={sq.id}
-                          className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm"
-                        >
+                        <div key={sq.id} className="mk-card p-4">
                           <div className="flex justify-between items-start mb-2">
-                            <span className="bg-slate-800 text-white text-xs px-2 py-1 rounded-md font-bold">
-                              Q{sq.label}
-                            </span>
-
-                            {previewItem.parent.paperType === 'Paper 1 (DBQ)' &&
-                              String(sq.marks ?? '') !== '' && (
-                                <span className="text-xs text-slate-500 border border-slate-200 px-1.5 py-0.5 rounded bg-slate-50">
-                                  {sq.marks} Marks
-                                </span>
-                              )}
-                          </div>
-
-                          {!preferredText && alternativeText && (
-                            <p className="mb-2 text-xs text-amber-700">
-                              Selected language unavailable; showing the other language.
-                            </p>
-                          )}
-
-                          <div className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
-                            {text || (
-                              <span className="text-slate-400 italic">
-                                No text content available.
-                              </span>
+                            <span className="bg-slate-800 text-white text-xs px-2 py-0.5 rounded-md font-bold">Q{sq.label}</span>
+                            {previewItem.parent.paperType === 'Paper 1 (DBQ)' && String(sq.marks ?? '') !== '' && (
+                              <span className="mk-chip">{sq.marks} marks</span>
                             )}
+                          </div>
+                          {!preferredText && alternativeText && (
+                            <p className="mb-2 text-xs text-amber-700">Selected language unavailable; showing the other language.</p>
+                          )}
+                          <div className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
+                            {text || <span className="text-slate-400 italic">No text content available.</span>}
                           </div>
                         </div>
                       );
@@ -6975,19 +6411,14 @@ const compFinal = compScaled - compDeduct;
 
               {(previewPdfUrl || viewingAnswer) && (
                 <div className="flex-1 min-w-0 min-h-[50vh] md:min-h-0 bg-slate-200 flex flex-col relative">
-                  <div className="shrink-0 px-3 py-2 bg-slate-100 text-xs text-slate-600 border-b border-slate-300">
-                    {previewLanguage === 'zh'
-                      ? 'Chinese preferred'
-                      : 'English preferred'}
-                    {' — '}
-                    Falls back to the other language when its PDF is unavailable.
+                  <div className="shrink-0 px-3 py-1.5 bg-slate-100 text-xs text-slate-600 border-b border-slate-300">
+                    {previewLanguage === 'zh' ? 'Chinese preferred' : 'English preferred'} — falls back to the other language when unavailable.
                   </div>
-
                   <div className="relative flex-1 min-h-[45vh] md:min-h-0">
                     <div className="absolute inset-0">
                       <MarksPdfAttachment
                         fileUrl={previewPdfUrl}
-                        title={viewingAnswer ? 'Answer Preview' : 'Question Preview'}
+                        title={viewingAnswer ? 'Answer preview' : 'Question preview'}
                       />
                     </div>
                   </div>
@@ -6998,85 +6429,74 @@ const compFinal = compScaled - compDeduct;
         </div>
       )}
 
-      {/* --- LINKED MARKS MODAL --- */}
+      {/* ================= LINKED MARKS RECORD ================= */}
       {showMarksModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
-            <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <div>
-                <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                  <BarChart2 size={20} className="text-teal-600" /> Linked Marks Record
-                </h2>
-                <p className="text-sm text-slate-500 mt-1">
-                  Showing all student marks linked to:{' '}
-                  <span className="font-bold text-slate-700">
-                    {currentMarksDocTitle}
-                  </span>
+        <div className="mk-backdrop" style={{ zIndex: 70 }}>
+          <div className="mk-modal max-w-4xl">
+            <div className="mk-modal-head">
+              <div className="min-w-0">
+                <h2><BarChart2 className="text-teal-600" /> Linked marks record</h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Marks linked to: <b className="text-slate-700">{currentMarksDocTitle}</b>
                 </p>
-
-                <p className="mt-2 text-xs text-teal-700">
-                  Component-linked documents show only their linked
-                  component and its recorded parts.
-                </p>
-
-                {linkedMarksError && (
-                  <p
-                    role="alert"
-                    className="mt-3 whitespace-pre-wrap rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700"
-                  >
-                    {linkedMarksError}
-                  </p>
-                )}
               </div>
-              <button onClick={() => setShowMarksModal(false)} className="text-slate-400 hover:text-slate-800">
-                <X size={20} />
-              </button>
+              <div className="flex items-center gap-2">
+                <div className="mk-seg">
+                  <button type="button" className={linkedMarksMode === 'total' ? 'is-active' : ''} onClick={() => setLinkedMarksMode('total')}>Totals</button>
+                  <button type="button" className={linkedMarksMode === 'details' ? 'is-active' : ''} onClick={() => setLinkedMarksMode('details')}>Details</button>
+                </div>
+                <button type="button" onClick={() => setShowMarksModal(false)} className="mk-btn mk-btn-icon mk-btn-ghost" aria-label="Close">
+                  <X />
+                </button>
+              </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-6 bg-slate-50">
+            <div className="mk-modal-body bg-slate-50 space-y-3">
+              {linkedMarksError && (
+                <p role="alert" className="whitespace-pre-wrap rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                  {linkedMarksError}
+                </p>
+              )}
+              <p className="mk-help">Component-linked documents show only their linked component and its recorded parts.</p>
+
               {isLoadingMarks ? (
-                <div className="flex flex-col items-center justify-center py-20">
-                  <Loader2 className="animate-spin text-teal-600 mb-4" size={40} />
-                  <p className="text-slate-500">Loading marks data...</p>
+                <div className="flex flex-col items-center justify-center py-16">
+                  <Loader2 className="w-8 h-8 animate-spin text-teal-600 mb-3" />
+                  <p className="text-sm text-slate-500">Loading marks…</p>
                 </div>
               ) : linkedMarksData.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-20 text-slate-400 bg-white rounded-xl border border-slate-200 border-dashed">
-                  <BarChart2 size={48} className="mb-4 text-slate-300" />
-                  <h3 className="text-lg font-semibold text-slate-600">No Marks Found</h3>
-                  <p className="text-sm max-w-xs text-center mt-2">
+                <div className="mk-card border-dashed flex flex-col items-center justify-center py-14 text-center">
+                  <BarChart2 className="w-10 h-10 text-slate-300 mb-3" />
+                  <h3 className="text-base font-semibold text-slate-600">No marks found</h3>
+                  <p className="text-sm text-slate-500 max-w-xs mt-1">
                     {linkedMarksError
-                      ? 'The request failed. Close this window and click View Marks to retry.'
+                      ? 'The request failed. Close this window and click View marks to retry.'
                       : 'No recorded student marks were found through the main or section links for this document.'}
                   </p>
                 </div>
               ) : (
-                <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                  <table className="w-full text-left text-sm border-collapse">
-                    <thead className="bg-slate-100 border-b border-slate-200 text-slate-600 uppercase text-xs font-bold sticky top-0">
+                <div className="mk-card overflow-auto max-h-[60vh]">
+                  <table className="mk-table">
+                    <thead>
                       <tr>
-                        <th className="px-4 py-3 border-r border-slate-200">Class</th>
-                        <th className="px-4 py-3 border-r border-slate-200">No.</th>
-                        <th className="px-4 py-3 border-r border-slate-200">Student Name</th>
-                        <th className="px-4 py-3 border-r border-slate-200">Assessment Name</th>
-                        <th className="px-4 py-3 border-r border-slate-200">Term / Category</th>
-                        <th className="px-4 py-3 text-right text-teal-700">Total Mark</th>
+                        <th className="mk-left">Class</th>
+                        <th>No.</th>
+                        <th className="mk-left">Student</th>
+                        <th className="mk-left">Assessment</th>
+                        <th className="mk-left">Term / Category</th>
+                        <th style={{ textAlign: 'right', color: '#0f766e' }}>Mark</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-100">
+                    <tbody>
                       {linkedMarksData.map((record, idx) => (
-                        <tr key={idx} className="hover:bg-slate-50 transition-colors">
-                          <td className="px-4 py-3 font-medium text-slate-700 border-r border-slate-200">{record.className}</td>
-                          <td className="px-4 py-3 text-slate-600 border-r border-slate-200">{record.classNumber}</td>
-                          <td className="px-4 py-3 font-medium text-slate-800 border-r border-slate-200">{record.studentName}</td>
-                          <td className="px-4 py-3 text-slate-700 border-r border-slate-200">{record.assessmentName}</td>
-                          <td className="px-4 py-3 text-slate-500 text-xs border-r border-slate-200">
-                            {record.term} <span className="mx-1">•</span> {record.category}
-                          </td>
-                          <td className="px-4 py-3 text-right align-top bg-teal-50/30">
-                            <LinkedMarksValue
-                              record={record}
-                              detailed={linkedMarksMode === 'details'}
-                            />
+                        <tr key={idx}>
+                          <td className="mk-left font-medium">{cleanClassName(record.className)}</td>
+                          <td>{record.classNumber}</td>
+                          <td className="mk-left font-medium text-slate-800">{record.studentName}</td>
+                          <td className="mk-left">{record.assessmentName}</td>
+                          <td className="mk-left text-xs text-slate-500">{record.term} · {record.category}</td>
+                          <td style={{ textAlign: 'right', verticalAlign: 'top' }}>
+                            <LinkedMarksValue record={record} detailed={linkedMarksMode === 'details'} />
                           </td>
                         </tr>
                       ))}
@@ -7088,71 +6508,6 @@ const compFinal = compScaled - compDeduct;
           </div>
         </div>
       )}
-
-      {/* Export to Excel Modal */}
-      {showExportModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col">
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-lg">
-              <h2 className="text-lg font-bold text-gray-800 flex items-center">
-                <Download className="w-5 h-5 mr-2 text-emerald-600" />
-                Export to Excel - {selectedClass} ({selectedTerm})
-              </h2>
-              <button onClick={() => setShowExportModal(false)} className="text-gray-400 hover:text-gray-600">
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-
-            <div className="p-6 overflow-y-auto flex-1">
-              <div className="mb-6 bg-emerald-50 p-4 rounded-lg border border-emerald-100">
-                <label className="block text-sm font-bold text-emerald-800 mb-2">1. Select Calculation Preset for Term Score</label>
-                <select
-                  value={exportPresetId}
-                  onChange={(e) => setExportPresetId(e.target.value)}
-                  className="w-full border border-emerald-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-                >
-                  {presets.length === 0 && <option value="">No presets available</option>}
-                  {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-              </div>
-
-              <label className="block text-sm font-bold text-gray-800 mb-2">2. Arrange Column Order (Top to Bottom = Left to Right)</label>
-              <div className="space-y-6">
-                {Object.keys(exportAssessmentsMap).map(cat => (
-                  <div key={cat} className="border border-gray-200 rounded-lg overflow-hidden">
-                    <div className="bg-gray-100 px-4 py-2 font-bold text-sm text-gray-700 border-b border-gray-200">
-                      {cat}
-                    </div>
-                    <ul className="divide-y divide-gray-100 bg-white">
-                      {(!exportAssessmentsMap[cat] || exportAssessmentsMap[cat].length === 0) ? (
-                        <li className="p-3 text-sm text-gray-400 italic">No items in this category.</li>
-                      ) : (
-                        exportAssessmentsMap[cat].map((item, index) => (
-                          <li key={item.id} className="flex justify-between items-center p-3 hover:bg-gray-50">
-                            <span className="text-sm font-medium text-gray-700">{item.name}</span>
-                            <div className="flex items-center space-x-1">
-                              <button onClick={() => moveExportItem(cat, index, 'up')} disabled={index === 0} className={`p-1 ${index === 0 ? 'text-gray-300' : 'text-gray-500 hover:text-blue-600'}`}><ChevronUp className="w-4 h-4" /></button>
-                              <button onClick={() => moveExportItem(cat, index, 'down')} disabled={index === exportAssessmentsMap[cat].length - 1} className={`p-1 ${index === exportAssessmentsMap[cat].length - 1 ? 'text-gray-300' : 'text-gray-500 hover:text-blue-600'}`}><ChevronDown className="w-4 h-4" /></button>
-                            </div>
-                          </li>
-                        ))
-                      )}
-                    </ul>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="p-4 border-t border-gray-200 bg-gray-50 rounded-b-lg flex justify-end space-x-3 shrink-0">
-              <button onClick={() => setShowExportModal(false)} className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-md font-medium hover:bg-gray-50">Cancel</button>
-              <button onClick={generateExcel} className="px-6 py-2 bg-emerald-600 text-white rounded-md font-medium hover:bg-emerald-700 shadow-sm flex items-center">
-                <Download className="w-4 h-4 mr-2" /> Download .xls
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
     </div>
   );
 }

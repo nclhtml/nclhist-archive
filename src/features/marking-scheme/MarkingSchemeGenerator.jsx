@@ -38,6 +38,8 @@ import QuestionPaper, {
   WorksheetSettings
 } from "./QuestionPaper.jsx";
 
+import GeneratorDocumentTools from "./GeneratorDocumentTools.jsx";
+
 import "./marking-scheme.css";
 
 function Field({
@@ -416,6 +418,41 @@ const [paper, setPaperState] = useState(
             cancelled = true;
         };
     }, [callApi, accessAttempt]);
+
+function getEditorDocument() {
+        return {
+            version: 1,
+            languageMode,
+            paperLanguageChoice,
+            activeTool,
+            paper,
+            blocks
+        };
+    }
+
+    function loadEditorDocument(document) {
+        /*
+         * Restore complete state directly.
+         *
+         * Do not call updateBlock() here: loading should
+         * preserve separately saved paper/scheme wording
+         * rather than trigger the one-way editing sync.
+         */
+        setPaper(document.paper);
+        setBlocks(document.blocks);
+
+        setLanguageMode(document.languageMode || "en");
+        setPaperLanguage(document.paperLanguageChoice || "en");
+        setActiveTool(document.activeTool || "questionPaper");
+
+        setBlockLanguages({});
+
+        setPreviewLanguage(
+            document.languageMode === "en" ? "en" : "zh"
+        );
+
+        setStatus("Editor document loaded.");
+    }
 
     function editBlock(blockId, updater) {
         setBlocks(previous =>
@@ -1141,9 +1178,10 @@ const [paper, setPaperState] = useState(
                     </span>
                 </div>
 
-                <p className="msg-warning">
-                    Drafts are not saved. Download your document
-                    before leaving or reloading this page.
+<p className="msg-warning">
+                    Changes are not saved automatically. Use a save slot
+                    below before leaving or reloading this page.
+                    Downloading Word does not update a save slot.
                 </p>
 
                 <p className="msg-note">
@@ -1153,6 +1191,13 @@ const [paper, setPaperState] = useState(
                     the other in Word.
                 </p>
             </header>
+
+<GeneratorDocumentTools
+                callApi={callApi}
+                getDocument={getEditorDocument}
+                onLoadDocument={loadEditorDocument}
+                disabled={exporting}
+            />
 
             <div
                 className="msg-tool-tabs"

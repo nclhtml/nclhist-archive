@@ -129,18 +129,39 @@ async function studentVisibleAssessments(assessments, account) {
 
     if (!common.length) return candidates;
 
-    const snapshot = await admin.firestore()
-        .collection("students")
-        .get();
+// Read only the students of the classes used by these assessments,
+    // instead of the whole students collection.
+    const classNames = [...new Set(
+        common
+            .flatMap(assessmentClasses)
+            .filter(name => typeof name === "string" && name.length > 0)
+    )];
+
+    const chunks = [];
+
+    for (let start = 0; start < classNames.length; start += 30) {
+        chunks.push(classNames.slice(start, start + 30));
+    }
+
+    const snapshots = await Promise.all(
+        chunks.map(chunk =>
+            admin.firestore()
+                .collection("students")
+                .where("className", "in", chunk)
+                .get()
+        )
+    );
 
     const actualStudents = new Map();
 
-    snapshot.docs.forEach(document => {
-        const student = document.data();
+    snapshots.forEach(snapshot => {
+        snapshot.docs.forEach(document => {
+            const student = document.data();
 
-        if (!student.isDummy && !student.isDeleted) {
-            actualStudents.set(document.id, student);
-        }
+            if (!student.isDummy && !student.isDeleted) {
+                actualStudents.set(document.id, student);
+            }
+        });
     });
 
     return candidates.filter(assessment => {

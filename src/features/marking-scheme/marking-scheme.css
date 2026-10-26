@@ -993,3 +993,147 @@
     margin: 5px 0 0 16px;
   }
 }
+
+/*
+ * Question-paper justification.
+ * The final line remains normally aligned rather than stretched.
+ */
+.qp-source-description,
+.qp-preview-source-table td,
+.qp-preview-extract p,
+.qp-preview-question-text {
+  text-align: justify;
+  text-align-last: start;
+}
+
+.qp-preview-question-text {
+  display: flow-root;
+}
+
+.qp-preview-marks {
+  float: right;
+  margin-left: 12pt;
+  white-space: nowrap;
+  text-align: right;
+  text-align-last: right;
+}
+
+/*
+ * Browser printing hints.
+ * Actual downloaded Word pagination is controlled by
+ * the non-splitting outer rows in questionPaper.cjs.
+ */
+.qp-preview-source,
+.qp-preview-questions {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+@media print {
+  /*
+   * Avoid relying on a grid item spanning several printed pages.
+   */
+  .qp-preview-section {
+    display: block;
+    position: relative;
+    padding-left: 30px;
+  }
+
+  .qp-preview-main-number {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 30px;
+  }
+
+  .qp-preview-source,
+  .qp-preview-questions {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
+
+.msg-document-tools {
+  margin: 18px 0;
+}
+
+.msg-document-controls {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.msg-document-controls .msg-field {
+  flex: 1 1 180px;
+  margin: 0;
+}
+
+.msg-document-controls button {
+  min-height: 33px;
+}
+
+.msg-document-message {
+  margin: 10px 0;
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.msg-import-draft {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid #bdcadd;
+  border-radius: 7px;
+  background: #f8fafc;
+}
+
+.msg-import-draft textarea {
+  display: block;
+  width: 100%;
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid #bdcadd;
+  border-radius: 5px;
+  font: 12px monospace;
+}
+
+/*
+ * Source-caption editor controls.
+ */
+.qp-caption-settings {
+  margin: 12px 0;
+}
+
+.qp-caption-settings > .msg-checkbox {
+  align-items: flex-start;
+  line-height: 1.4;
+}
+
+.qp-caption-settings > .msg-checkbox input {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/*
+ * Caption outside the source border.
+ *
+ * No left/right padding: align with the border itself.
+ * No added paragraph margins: keep it close to the source.
+ * Keep existing spacing before the next source/questions.
+ */
+.qp-source-caption {
+  margin: 4pt 0 0;
+  padding: 0;
+
+  font-size: inherit;
+  font-weight: normal;
+  line-height: 1;
+
+  text-align: left;
+  text-align-last: left;
+
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}

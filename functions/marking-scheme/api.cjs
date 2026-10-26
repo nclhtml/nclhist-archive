@@ -23,6 +23,10 @@ const {
   exportQuestionPaper
 } = require("./questionPaper.cjs");
 
+const {
+  handleGeneratorDocumentAction
+} = require("./generatorDocuments.cjs");
+
 const SUPER_ADMIN = "clng@ktls.edu.hk";
 
 const WORD_FONT = {
@@ -1035,10 +1039,24 @@ exports.markingSchemeApi = functions
         );
       }
 
-      if (data.action === "authorize") {
+if (data.action === "authorize") {
         return {
           authorized: true
         };
+      }
+
+      if (
+        [
+          "listDocuments",
+          "saveDocument",
+          "loadDocument",
+          "deleteDocument"
+        ].includes(data.action)
+      ) {
+        return await handleGeneratorDocumentAction(
+          data,
+          context
+        );
       }
 
 if (data.action === "exportQuestionPaper") {

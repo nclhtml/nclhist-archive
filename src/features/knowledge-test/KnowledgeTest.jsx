@@ -889,11 +889,37 @@ function AdminPanel({ home, busy, run, onProfile }) {
                         </button>
                     </div>
 
-                    {!home.actor.superadmin && (
+{home.actor.superadmin ? (
                         <p className="kt-notice">
-                            Only students in your current superadmin-assigned
-                            classes are shown.
+                            Superadmin access: all permitted student accounts
+                            are shown.
                         </p>
+                    ) : (
+                        <div className="kt-notice">
+                            <p>
+                                Only students in your currently assigned
+                                classes are shown.
+                            </p>
+
+                            <p>
+                                <strong>
+                                    Classes allowed by the server:
+                                </strong>
+                                {" "}
+                                {overview.scope?.classes?.length
+                                    ? overview.scope.classes.join(", ")
+                                    : "None"}
+                            </p>
+
+                            {!overview.scope?.classes?.length && (
+                                <p>
+                                    Your account has no valid class mapping
+                                    for this feature. Ask the superadmin to
+                                    check your assigned classes.
+                                    Access has not been expanded to all students.
+                                </p>
+                            )}
+                        </div>
                     )}
 
                     <label className="kt-field">

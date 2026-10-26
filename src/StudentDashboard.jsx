@@ -35,7 +35,7 @@ import {
     expandArchiveDocuments,
     loadArchiveCatalogue
 } from './dashboardData.js';
-import { BookOpen, Edit, Trash2, Plus, Save, X, ExternalLink, Loader2, FileText, GripHorizontal, Check, Star, BarChart2, Download } from 'lucide-react';
+import { BookOpen, Edit, Trash2, Plus, Save, X, ExternalLink, Loader2, FileText, GripHorizontal, Check, Star, BarChart2, Download, Search, ChevronDown, CalendarDays, LayoutGrid, Users } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { useLanguage } from './LanguageContext.jsx';
 import { Viewer, Worker } from '@react-pdf-viewer/core';
@@ -136,6 +136,383 @@ function resolveDashboardDocument(archives, link) {
     return null;
 }
 
+// ===== NEW: Student Dashboard helpers =====
+const visibleClassName = name => String(name || '').replace(/\u200B/g, '');
+
+// NEW: junior classes (names containing 1A–1D, 2A–2D, 3A–3D)
+// are hidden from the Student Dashboard, but can still be used in Export BIS.
+const isJuniorClass = name =>
+    /(^|[^0-9])[1-3][A-D]/i.test(visibleClassName(name));
+
+// NEW: works out the form from the class name.
+// 1A -> S1, 3D -> S3, 4B -> S4, "S6 History" -> S6.
+const getClassLevel = name => {
+    const text = visibleClassName(name);
+
+const match =
+        text.match(/(?:^|[^0-9])([1-6])[A-Ea-e](?![A-Za-z])/) ||
+        text.match(/\bs\s*([1-6])/i);
+
+    return match ? `S${match[1]}` : '';
+};
+
+// NEW: list of terms (and item counts) for Export BIS.
+const buildExportTermOptions = list => {
+    const counts = new Map();
+
+    (list || []).forEach(item => {
+        const term = String(item.term ?? '');
+        counts.set(term, (counts.get(term) || 0) + 1);
+    });
+
+    return [...counts.entries()]
+        .map(([term, count]) => ({ term, count }))
+        .sort((a, b) => {
+            const weight = getTermWeight(a.term) - getTermWeight(b.term);
+            if (weight) return weight;
+
+            return a.term.localeCompare(b.term, undefined, { numeric: true });
+        });
+};
+
+// Finds S4 / S5 / S6 inside a term name such as "S5 Term 2".
+const getTermLevel = term => {
+    const match = String(term || '').match(/\bs\s*([1-6])/i);
+    return match ? `S${match[1]}` : '';
+};
+
+// Export BIS order: term by term, then oldest date first.
+// This is the "By date" list read from the bottom up.
+const compareExportItems = (a, b) => {
+    const termA = String(a.term || '');
+    const termB = String(b.term || '');
+
+    const weight = getTermWeight(termA) - getTermWeight(termB);
+    if (weight) return weight;
+
+    if (termA !== termB) {
+        return termA.localeCompare(termB, undefined, { numeric: true });
+    }
+
+    const parsedA = Date.parse(a.date || '');
+    const parsedB = Date.parse(b.date || '');
+    const dateA = Number.isFinite(parsedA) ? parsedA : Number.POSITIVE_INFINITY;
+    const dateB = Number.isFinite(parsedB) ? parsedB : Number.POSITIVE_INFINITY;
+
+    if (dateA !== dateB) return dateA < dateB ? -1 : 1;
+
+    const nameDifference = String(a.name ?? '').localeCompare(
+        String(b.name ?? ''),
+        undefined,
+        { numeric: true }
+    );
+
+    if (nameDifference !== 0) return nameDifference;
+
+    return String(a.id ?? '').localeCompare(String(b.id ?? ''));
+};
+
+const DASHBOARD_CATEGORY_ORDER = [
+    'Assignments',
+    'Practice',
+    'Quizzes',
+    'Uniform Test',
+    'Exam',
+    'Internal Assessment'
+];
+
+const getCategoryRank = category => {
+    const index = DASHBOARD_CATEGORY_ORDER.indexOf(category);
+    return index === -1 ? DASHBOARD_CATEGORY_ORDER.length : index;
+};
+
+const CATEGORY_STYLES = {
+    Assignments: { bar: 'bg-blue-600', soft: 'bg-blue-50', text: 'text-blue-800', border: 'border-blue-300', badge: 'bg-blue-100 text-blue-800' },
+    Practice: { bar: 'bg-emerald-600', soft: 'bg-emerald-50', text: 'text-emerald-800', border: 'border-emerald-300', badge: 'bg-emerald-100 text-emerald-800' },
+    Quizzes: { bar: 'bg-amber-500', soft: 'bg-amber-50', text: 'text-amber-800', border: 'border-amber-300', badge: 'bg-amber-100 text-amber-800' },
+    'Uniform Test': { bar: 'bg-violet-600', soft: 'bg-violet-50', text: 'text-violet-800', border: 'border-violet-300', badge: 'bg-violet-100 text-violet-800' },
+    Exam: { bar: 'bg-rose-600', soft: 'bg-rose-50', text: 'text-rose-800', border: 'border-rose-300', badge: 'bg-rose-100 text-rose-800' },
+    'Internal Assessment': { bar: 'bg-fuchsia-600', soft: 'bg-fuchsia-50', text: 'text-fuchsia-800', border: 'border-fuchsia-300', badge: 'bg-fuchsia-100 text-fuchsia-800' }
+};
+
+const DEFAULT_CATEGORY_STYLE = {
+    bar: 'bg-slate-500',
+    soft: 'bg-slate-50',
+    text: 'text-slate-800',
+    border: 'border-slate-300',
+    badge: 'bg-slate-100 text-slate-700'
+};
+
+const getCategoryStyle = category =>
+    CATEGORY_STYLES[category] || DEFAULT_CATEGORY_STYLE;
+
+const formatDisplayDate = value => {
+    const text = String(value || '');
+    const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return match ? `${match[3]}/${match[2]}/${match[1]}` : text;
+};
+
+// The same disclosure rules as before, now shared by both list views
+// and by the category averages. Hidden items never reveal marks.
+const getDashboardItemAccess = (item, linkableDocs, isAdmin) => {
+    const linkedDoc = linkableDocs.find(
+        archive => archive.id === item.linkedDocId
+    );
+
+    const linkedSections = (item.sectionsConfig || [])
+        .filter(section => section.linkedDocId);
+
+    const sectionDocuments = linkedSections.map(
+        section => linkableDocs.find(
+            archive => archive.id === section.linkedDocId
+        )
+    );
+
+    const hasLinkedDoc =
+        Boolean(linkedDoc) ||
+        sectionDocuments.some(Boolean);
+
+    let isTierUnlocked = Boolean(isAdmin);
+
+    if (!isTierUnlocked && linkedDoc) {
+        isTierUnlocked =
+            linkedDoc.archiveAccess?.tierUnlocked === true;
+    } else if (!isTierUnlocked && linkedSections.length > 0) {
+        isTierUnlocked = sectionDocuments.every(
+            archive => archive?.archiveAccess?.tierUnlocked === true
+        );
+    }
+
+    const isEffectivelyDisclosed =
+        item.isDisclosed !== false ||
+        (hasLinkedDoc && isTierUnlocked);
+
+    return {
+        linkedDoc,
+        hasLinkedDoc,
+        isEffectivelyDisclosed
+    };
+};
+
+// NEW: searchable class picker. Works with mouse, iPad and phone.
+function ClassPicker({
+    classes,
+    selectedClass,
+    onSelect,
+    classInfo,
+    currentEmail,
+    t
+}) {
+    const [open, setOpen] = useState(false);
+    const [search, setSearch] = useState('');
+    const searchRef = React.useRef(null);
+
+    useEffect(() => {
+        if (!open) return;
+
+        setSearch('');
+
+        // Only focus the search box automatically on computers,
+        // so the phone/iPad keyboard does not jump up immediately.
+        const finePointer =
+            window.matchMedia?.('(pointer: fine)').matches;
+
+        const timer = finePointer
+            ? setTimeout(() => searchRef.current?.focus(), 30)
+            : null;
+
+        const handleKey = event => {
+            if (event.key === 'Escape') setOpen(false);
+        };
+
+        window.addEventListener('keydown', handleKey);
+
+        return () => {
+            if (timer) clearTimeout(timer);
+            window.removeEventListener('keydown', handleKey);
+        };
+    }, [open]);
+
+    const ownEmail = String(currentEmail || '').toLowerCase().trim();
+
+    const describe = name => {
+        const info = classInfo?.[name];
+        if (!info) return '';
+
+        const parts = [`${info.linkedStudents} ${t('linked students')}`];
+
+        if (info.owner && info.owner !== ownEmail) {
+            parts.push(info.owner);
+        }
+
+        return parts.join(' · ');
+    };
+
+    const getGroupLabel = name => {
+        const match = visibleClassName(name).match(/^\s*s?\s*([1-6])/i);
+        return match ? `S${match[1]}` : t('Other groups');
+    };
+
+    const keyword = search.trim().toLowerCase();
+
+    const filtered = classes.filter(name => {
+        if (!keyword) return true;
+
+        return `${visibleClassName(name)} ${classInfo?.[name]?.owner || ''}`
+            .toLowerCase()
+            .includes(keyword);
+    });
+
+    const groups = [];
+
+    filtered.forEach(name => {
+        const label = getGroupLabel(name);
+        let group = groups.find(entry => entry.label === label);
+
+        if (!group) {
+            group = { label, names: [] };
+            groups.push(group);
+        }
+
+        group.names.push(name);
+    });
+
+    const groupRank = label => (/^S\d$/.test(label) ? 0 : 1);
+
+    groups.sort((a, b) =>
+        groupRank(a.label) - groupRank(b.label) ||
+        a.label.localeCompare(b.label, undefined, { numeric: true })
+    );
+
+    const selectedDescription = describe(selectedClass);
+
+    return (
+        <div className="w-full min-w-0 sm:max-w-md">
+            <span className="mb-1 block text-xs font-bold text-slate-500">
+                {t("Class / Group")}
+            </span>
+
+            <button
+                type="button"
+                onClick={() => setOpen(true)}
+                aria-haspopup="dialog"
+                aria-expanded={open}
+                className="flex w-full min-h-[52px] items-center justify-between gap-3 rounded-xl border-2 border-slate-300 bg-white px-4 py-2 text-left shadow-sm transition-colors hover:border-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+            >
+                <span className="min-w-0">
+                    <span className="block truncate text-base font-bold text-slate-800">
+                        {visibleClassName(selectedClass) || t('Choose a class')}
+                    </span>
+
+                    {selectedDescription && (
+                        <span className="block truncate text-xs text-slate-500">
+                            {selectedDescription}
+                        </span>
+                    )}
+                </span>
+
+                <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-slate-500">
+                    {classes.length > 1 && `${classes.length} ${t('classes')}`}
+                    <ChevronDown size={18} className="text-slate-600" />
+                </span>
+            </button>
+
+            {open && (
+                <>
+                    <div
+                        className="fixed inset-0 z-[90] bg-black/40"
+                        onClick={() => setOpen(false)}
+                        aria-hidden="true"
+                    />
+
+                    <div
+                        role="dialog"
+                        aria-modal="true"
+                        aria-label={t("Class / Group")}
+                        className="fixed inset-x-3 top-16 bottom-4 z-[91] flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl sm:inset-x-auto sm:bottom-auto sm:left-1/2 sm:top-24 sm:w-[28rem] sm:max-h-[70vh] sm:-translate-x-1/2"
+                    >
+                        <div className="flex items-center gap-2 border-b border-slate-200 p-3">
+                            <div className="relative flex-1">
+                                <Search
+                                    size={16}
+                                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                                />
+
+                                <input
+                                    ref={searchRef}
+                                    type="search"
+                                    value={search}
+                                    onChange={event => setSearch(event.target.value)}
+                                    placeholder={t("Search classes...")}
+                                    className="w-full rounded-lg border border-slate-300 bg-slate-50 py-2.5 pl-9 pr-3 text-base outline-none focus:border-blue-500"
+                                />
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={() => setOpen(false)}
+                                className="rounded-full p-2 text-slate-500 hover:bg-slate-100"
+                                aria-label="Close"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto overscroll-contain p-2">
+                            {groups.length === 0 ? (
+                                <p className="p-6 text-center text-sm text-slate-500">
+                                    {t("No matching classes.")}
+                                </p>
+                            ) : groups.map(group => (
+                                <div key={group.label} className="mb-2">
+                                    <div className="sticky top-0 z-10 bg-white px-2 py-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                                        {group.label}
+                                    </div>
+
+                                    {group.names.map(name => {
+                                        const active = name === selectedClass;
+                                        const description = describe(name);
+
+                                        return (
+                                            <button
+                                                key={name}
+                                                type="button"
+                                                onClick={() => {
+                                                    onSelect(name);
+                                                    setOpen(false);
+                                                }}
+                                                className={`flex w-full min-h-[48px] items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition-colors ${active
+                                                    ? 'bg-blue-600 text-white'
+                                                    : 'text-slate-800 hover:bg-slate-100'
+                                                    }`}
+                                            >
+                                                <span className="min-w-0">
+                                                    <span className="block truncate font-bold">
+                                                        {visibleClassName(name)}
+                                                    </span>
+
+                                                    {description && (
+                                                        <span className={`flex items-center gap-1 truncate text-xs ${active ? 'text-blue-100' : 'text-slate-500'}`}>
+                                                            <Users size={12} className="shrink-0" />
+                                                            {description}
+                                                        </span>
+                                                    )}
+                                                </span>
+
+                                                {active && <Check size={18} className="shrink-0" />}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </>
+            )}
+        </div>
+    );
+}
+
 export default function StudentDashboard() {
     const { user, authLoading } = useAuth();
     const navigate = useNavigate();
@@ -227,6 +604,29 @@ export default function StudentDashboard() {
     const [loadedClass, setLoadedClass] = useState('');
     const [classReload, setClassReload] = useState(0);
     const [catalogueLoading, setCatalogueLoading] = useState(false);
+
+    // NEW: work list view. Always starts with the date list.
+    const [workView, setWorkView] = useState('date');
+
+    // NEW: extra class details for the administrator class picker.
+    const [classInfo, setClassInfo] = useState({});
+
+    // NEW: Export BIS dialog.
+    const [showExportDialog, setShowExportDialog] = useState(false);
+    const [exportLevel, setExportLevel] = useState('S4');
+    const [exportTerms, setExportTerms] = useState([]);
+    const [exportClassOptions, setExportClassOptions] = useState([]);
+    const [exportClass, setExportClass] = useState('');
+    const [exportItems, setExportItems] = useState([]);
+    const [exportItemsLoading, setExportItemsLoading] = useState(false);
+    const [exportError, setExportError] = useState('');
+const [pdfFileName, setPdfFileName] = useState('Assessment_Content.pdf');
+    const [exportArchives, setExportArchives] = useState([]);
+
+    // NEW: remember data already loaded during this visit,
+    // so switching back to a class is instant.
+    const classStudentsCacheRef = React.useRef(new Map());
+    const classDataCacheRef = React.useRef(new Map());
 
     const designatedLinkRevisionRef = React.useRef(null);
 
@@ -325,6 +725,15 @@ export default function StudentDashboard() {
         setRecommendedQuestions([]);
         setPreviewPdfUrl(null);
         setGraphMetric('percentage');
+        setWorkView('date');
+        setClassInfo({});
+        setShowExportDialog(false);
+        setExportClassOptions([]);
+        setExportClass('');
+        setExportItems([]);
+        setExportError('');
+        classStudentsCacheRef.current = new Map();
+        classDataCacheRef.current = new Map();
 
         if (authLoading) {
             return () => {
@@ -371,23 +780,103 @@ export default function StudentDashboard() {
                             : c
                     );
 
-                    loadedClasses = classObjects
-                        .filter(c =>
-                            c &&
-                            typeof c.name === 'string' &&
-                            !c.isArchived &&
-                            (isSuperAdmin || c.owner === email)
-                        )
-                        .map(c => c.name);
+                    const ownedClasses = classObjects.filter(c =>
+                        c &&
+                        typeof c.name === 'string' &&
+                        !c.isArchived &&
+                        (isSuperAdmin || c.owner === email)
+                    );
 
-                    // Student names are loaded later, for the selected class only.
+                    const ownedNames = [
+                        ...new Set(ownedClasses.map(c => c.name))
+                    ];
+
+                    // NEW: Export BIS can use EVERY active class,
+                    // including junior classes and classes without linked emails.
+                    if (!cancelled) {
+                        setExportClassOptions(
+                            [...ownedNames].sort((a, b) =>
+                                visibleClassName(a).localeCompare(
+                                    visibleClassName(b),
+                                    undefined,
+                                    { numeric: true }
+                                )
+                            )
+                        );
+                    }
+
+                    // NEW: junior classes (1A–3D) never appear on the dashboard.
+                    const dashboardNames = ownedNames.filter(
+                        name => !isJuniorClass(name)
+                    );
+
+                    // Only classes with at least one (not deleted)
+                    // student linked to an email appear on the dashboard.
+                    const studentLists = await Promise.all(
+                        dashboardNames.map(async className => {
+                            try {
+                                return [
+                                    className,
+                                    await loadClassStudents(className)
+                                ];
+                            } catch (error) {
+                                console.warn(
+                                    `Could not check linked emails for ${className}:`,
+                                    error
+                                );
+                                return [className, null];
+                            }
+                        })
+                    );
+
+                    if (cancelled) return;
+
+                    const info = {};
+                    loadedClasses = [];
+
+                    studentLists.forEach(([className, students]) => {
+                        if (!students) return;
+
+                        const linked = students.filter(student =>
+                            !student.isDeleted &&
+                            typeof student.email === 'string' &&
+                            student.email.trim()
+                        );
+
+                        if (!linked.length) return;
+
+                        // Reused later, so this class's students are not read twice.
+                        classStudentsCacheRef.current.set(className, students);
+                        loadedClasses.push(className);
+
+                        const owner = ownedClasses.find(
+                            c => c.name === className
+                        )?.owner || '';
+
+                        info[className] = {
+                            owner: String(owner).toLowerCase().trim(),
+                            linkedStudents: linked.length
+                        };
+                    });
+
+                    loadedClasses.sort((a, b) =>
+                        visibleClassName(a).localeCompare(
+                            visibleClassName(b),
+                            undefined,
+                            { numeric: true }
+                        )
+                    );
+
+                    setClassInfo(info);
                 } else {
                     // The saved access mapping is authoritative.
                     // Do not add extra classes from student records.
                     const access = await getUserClassAccess(email);
 
                     currentRole = access.role || 'viewer';
-                    loadedClasses = access.classes;
+                    loadedClasses = (access.classes || []).filter(
+                        name => !isJuniorClass(name)
+                    );
 
                     const profileSnap = await getDocsFromServer(
                         query(
@@ -534,6 +1023,8 @@ export default function StudentDashboard() {
     }, [dashboardIdentity, authLoading]);
 
     // Load ONE class at a time.
+    // NEW: a class already opened during this visit is shown again instantly.
+    // NEW: the student list and the assessments are requested together.
     useEffect(() => {
         let cancelled = false;
 
@@ -549,19 +1040,14 @@ export default function StudentDashboard() {
             };
         }
 
-        setLoadedClass('');
         setDashboardError('');
-        setItems([]);
-        setAllItems([]);
-        setArchives([]);
-        setLinkableDocs([]);
-        setStudentMap({});
         setIsEditing(false);
         setEditForm(null);
         setShowAddModal(false);
         setSelectedCommentId(null);
         setShowRecommendations(false);
         setRecommendedQuestions([]);
+        setShowExportDialog(false);
 
         setPreviewPdfUrl(previous => {
             if (previous?.startsWith('blob:')) {
@@ -571,15 +1057,65 @@ export default function StudentDashboard() {
             return null;
         });
 
+        const applyClassData = data => {
+            setStudentMap(data.names);
+            setArchives(data.archives);
+            setLinkableDocs(data.documents);
+            setAllItems(data.assessments);
+            setItems(
+                data.assessments
+                    .filter(item =>
+                        item.classes?.includes(selectedClass) ||
+                        item.className === selectedClass
+                    )
+                    .sort(compareDashboardItems)
+            );
+            setLoadedClass(selectedClass);
+        };
+
+        const cached = classDataCacheRef.current.get(selectedClass);
+
+        if (cached && cached.reload === classReload) {
+            applyClassData(cached.data);
+
+            return () => {
+                cancelled = true;
+            };
+        }
+
+        setLoadedClass('');
+        setItems([]);
+        setAllItems([]);
+        setArchives([]);
+        setLinkableDocs([]);
+        setStudentMap({});
+
+        const tagStage = stageName => error =>
+            Promise.reject({ dashboardStage: stageName, cause: error });
+
         const loadSelectedClass = async () => {
             let stage = 'class assessments';
 
             try {
-const receivedAssessments =
-                    await loadAssignedClassAssessments(
-                        selectedClass,
-                        user.email
-                    );
+                const cachedStudents =
+                    classStudentsCacheRef.current.get(selectedClass);
+
+                const studentsRequest = !user.isAdmin
+                    ? Promise.resolve([])
+                    : cachedStudents
+                        ? Promise.resolve(cachedStudents)
+                        : loadClassStudents(selectedClass);
+
+                const [receivedAssessments, classStudents] =
+                    await Promise.all([
+                        loadAssignedClassAssessments(
+                            selectedClass,
+                            user.email
+                        ).catch(tagStage('class assessments')),
+                        studentsRequest.catch(
+                            tagStage('administrator student list')
+                        )
+                    ]);
 
                 if (cancelled) return;
 
@@ -595,13 +1131,11 @@ const receivedAssessments =
                     dashboardItemCanAppear
                 );
 
-                let classStudents = [];
-
                 if (user.isAdmin) {
-                    stage = 'administrator student list';
-                    classStudents = await loadClassStudents(selectedClass);
-
-                    if (cancelled) return;
+                    classStudentsCacheRef.current.set(
+                        selectedClass,
+                        classStudents
+                    );
                 }
 
                 stage = 'linked archive documents';
@@ -634,7 +1168,7 @@ const receivedAssessments =
                 assessments.sort(compareDashboardItems);
                 const names = {};
 
-                classStudents
+                (classStudents || [])
                     .filter(student => !student.isDeleted)
                     .forEach(student => {
                         names[student.id] =
@@ -667,22 +1201,36 @@ const receivedAssessments =
                     });
                 });
 
-                setStudentMap(names);
-                setArchives(linkedArchives);
-                setLinkableDocs(documents);
-                setAllItems(assessments);
-            } catch (error) {
+                const data = {
+                    names,
+                    archives: linkedArchives,
+                    documents,
+                    assessments
+                };
+
+                classDataCacheRef.current.set(selectedClass, {
+                    reload: classReload,
+                    data
+                });
+
+                applyClassData(data);
+            } catch (rawError) {
                 if (cancelled) return;
 
+                const failedStage = rawError?.dashboardStage || stage;
+                const error = rawError?.dashboardStage
+                    ? rawError.cause
+                    : rawError;
+
                 console.error(
-                    `Dashboard selected-class failure at ${stage}:`,
+                    `Dashboard selected-class failure at ${failedStage}:`,
                     error
                 );
 
                 setDashboardError(
-                    `Could not load ${stage}.\n` +
-                    `${error.code || 'dashboard-load-error'}: ` +
-                    (error.message || 'Please try again.')
+                    `Could not load ${failedStage}.\n` +
+                    `${error?.code || 'dashboard-load-error'}: ` +
+                    (error?.message || 'Please try again.')
                 );
             } finally {
                 if (!cancelled) {
@@ -732,7 +1280,7 @@ const receivedAssessments =
             return;
         }
 
-const filtered = allItems
+        const filtered = allItems
             .filter(dashboardItemCanAppear)
             .filter(item =>
                 item.classes?.includes(selectedClass) ||
@@ -804,6 +1352,7 @@ const filtered = allItems
         if (!window.confirm(t("Delete this item from the list?"))) return;
         try {
             await deleteDoc(doc(db, "assessments", id));
+            classDataCacheRef.current = new Map();
             setAllItems(previous =>
                 previous.filter(item => item.id !== id)
             );
@@ -883,6 +1432,8 @@ const filtered = allItems
                 updateDoc(doc(db, "assessments", item.id), { order: idx })
             ));
 
+            classDataCacheRef.current = new Map();
+
             // Also update the allItems state so switching tabs doesn't immediately lose the order
             setAllItems(prevAll => {
                 const newAll = [...prevAll];
@@ -943,7 +1494,7 @@ const filtered = allItems
     };
 
     // --- GRAPH LOGIC ---
- const getStudentTotal = (item, studentId) =>
+    const getStudentTotal = (item, studentId) =>
         getAssessmentStudentTotal(item, studentId);
 
     const calculateItemStats = (item) => {
@@ -1051,7 +1602,7 @@ const filtered = allItems
         };
     };
 
-const graphData = React.useMemo(() => {
+    const graphData = React.useMemo(() => {
         if (!items || items.length === 0) return [];
 
         const filtered = items.filter(item => {
@@ -1371,6 +1922,271 @@ const graphData = React.useMemo(() => {
             }))
             .sort((a, b) => b.averagePercentile - a.averagePercentile); // Highest percentile first
     }, [items, user?.isAdmin, percentileTopic, archives, studentMap]);
+    // NEW: the terms that exist in the class chosen inside Export BIS.
+    const exportTermOptions = React.useMemo(
+        () => buildExportTermOptions(exportItems),
+        [exportItems]
+    );
+
+// Export BIS loading.
+    // Senior classes (S4–S6, incl. special groups such as EMI History):
+    //   the SAME data the dashboard uses, exactly as before.
+    // Junior classes (1A–3D): every item in Marks.
+    useEffect(() => {
+        if (!showExportDialog || !exportClass || !user?.isAdmin) return;
+
+        let cancelled = false;
+        const junior = isJuniorClass(exportClass);
+
+        setExportItemsLoading(true);
+        setExportError('');
+        setExportItems([]);
+        setExportArchives([]);
+        setExportTerms([]);
+
+        const belongsToClass = item =>
+            item.classes?.includes(exportClass) ||
+            item.className === exportClass;
+
+        // Reads every assessment record of the class directly.
+        const loadDirect = async () => {
+            const results = await Promise.allSettled([
+                getDocsFromServer(
+                    query(
+                        collection(db, 'assessments'),
+                        where('classes', 'array-contains', exportClass)
+                    )
+                ),
+                getDocsFromServer(
+                    query(
+                        collection(db, 'assessments'),
+                        where('className', '==', exportClass)
+                    )
+                )
+            ]);
+
+            const succeeded = results.filter(
+                result => result.status === 'fulfilled'
+            );
+
+            if (!succeeded.length) throw results[0].reason;
+
+            const byId = new Map();
+
+            succeeded.forEach(result => {
+                result.value.docs.forEach(document => {
+                    byId.set(document.id, {
+                        ...document.data(),
+                        id: document.id
+                    });
+                });
+            });
+
+            return [...byId.values()].filter(
+                item => item.isDeleted !== true
+            );
+        };
+
+// Senior classes: EVERY item in Marks.
+        // Linked documents are only used to find each item's History topic.
+        const loadSenior = async () => {
+            const list = (await loadDirect()).filter(belongsToClass);
+
+            const linkedIds = new Set();
+
+            const addLink = value => {
+                if (typeof value === 'string' && value) linkedIds.add(value);
+            };
+
+            list.forEach(item => {
+                addLink(item.linkedDocId);
+                (item.sectionsConfig || []).forEach(section =>
+                    addLink(section.linkedDocId)
+                );
+            });
+
+            let linkedArchives = [];
+
+            if (linkedIds.size) {
+                try {
+                    linkedArchives = await loadAccessibleArchives({
+                        effectiveEmail: user.email,
+                        linkedIds: [...linkedIds]
+                    });
+                } catch (error) {
+                    // Topics cannot be found, but every item is still exported.
+                    console.warn('Export BIS: could not load linked documents.', error);
+                }
+            }
+
+            return { list, archives: linkedArchives };
+        };
+
+        const pickLevel = options => {
+            const countFor = level =>
+                options
+                    .filter(option => getTermLevel(option.term) === level)
+                    .reduce((sum, option) => sum + option.count, 0);
+
+            if (!junior) {
+                // ORIGINAL rule: the S4/S5/S6 level with the most items.
+                const ranked = ['S4', 'S5', 'S6']
+                    .map(level => [level, countFor(level)])
+                    .sort((a, b) => b[1] - a[1]);
+
+                if (ranked[0][1] > 0) return ranked[0][0];
+
+                const match = visibleClassName(exportClass).match(/^\s*s?\s*([4-6])/i);
+                return match ? `S${match[1]}` : 'S4';
+            }
+
+            // Junior: from the class name (1A -> S1, 3D -> S3).
+            const fromName = getClassLevel(exportClass);
+            if (['S1', 'S2', 'S3'].includes(fromName)) return fromName;
+
+            const ranked = ['S1', 'S2', 'S3']
+                .map(level => [level, countFor(level)])
+                .sort((a, b) => b[1] - a[1]);
+
+            return ranked[0][1] > 0 ? ranked[0][0] : 'S1';
+        };
+
+        const run = async () => {
+            try {
+                const result = junior
+                    ? { list: await loadDirect(), archives: [] }
+                    : await loadSenior();
+
+                if (cancelled) return;
+
+                const options = buildExportTermOptions(result.list);
+                const level = pickLevel(options);
+
+                const matchingTerms = options
+                    .filter(option => getTermLevel(option.term) === level)
+                    .map(option => option.term);
+
+                setExportItems(result.list);
+                setExportArchives(result.archives);
+                setExportLevel(level);
+                setExportTerms(
+                    junior && !matchingTerms.length
+                        ? options.map(option => option.term)
+                        : matchingTerms
+                );
+            } catch (error) {
+                if (cancelled) return;
+
+                console.error('Could not load items for Export BIS:', error);
+                setExportError(
+                    error?.message || 'Could not load the items of this class.'
+                );
+            } finally {
+                if (!cancelled) setExportItemsLoading(false);
+            }
+        };
+
+        run();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [showExportDialog, exportClass, user?.isAdmin, user?.email, classReload]);
+
+    // NEW: "By category" view data.
+    // Students: average of their own DISCLOSED marks only.
+    // Administrators: class average.
+    const categoryView = React.useMemo(() => {
+        const summarise = list => {
+            const percentages = list
+                .filter(item =>
+                    !(item.name || '').toLowerCase().includes('corr')
+                )
+                .filter(item =>
+                    user?.isAdmin ||
+                    getDashboardItemAccess(
+                        item,
+                        linkableDocs,
+                        false
+                    ).isEffectivelyDisclosed
+                )
+                .map(item => calculateItemStats(item).percentage)
+                .filter(value =>
+                    value !== null && Number.isFinite(value)
+                );
+
+            return {
+                count: list.length,
+                average: percentages.length
+                    ? percentages.reduce((sum, value) => sum + value, 0) /
+                    percentages.length
+                    : null
+            };
+        };
+
+        const groupByCategory = list => {
+            const map = new Map();
+
+            list.forEach(item => {
+                const category = item.category || 'Others';
+                if (!map.has(category)) map.set(category, []);
+                map.get(category).push(item);
+            });
+
+            return [...map.entries()]
+                .sort(([a], [b]) =>
+                    getCategoryRank(a) - getCategoryRank(b) ||
+                    a.localeCompare(b)
+                )
+                .map(([category, categoryItems]) => {
+                    const sorted = [...categoryItems].sort((a, b) =>
+                        ((Date.parse(b.date || '') || 0) -
+                            (Date.parse(a.date || '') || 0)) ||
+                        compareDashboardItems(a, b)
+                    );
+
+                    return {
+                        category,
+                        items: sorted,
+                        stats: summarise(sorted)
+                    };
+                });
+        };
+
+        const termEntries = [];
+        const termMap = new Map();
+
+        items.forEach(item => {
+            const term = String(item.term || '');
+
+            if (!termMap.has(term)) {
+                const entry = { term, items: [] };
+                termMap.set(term, entry);
+                termEntries.push(entry);
+            }
+
+            termMap.get(term).items.push(item);
+        });
+
+        return {
+            overall: groupByCategory(items).map(group => ({
+                category: group.category,
+                stats: group.stats
+            })),
+            terms: termEntries.map(entry => ({
+                term: entry.term,
+                count: entry.items.length,
+                categories: groupByCategory(entry.items)
+            }))
+        };
+    }, [
+        items,
+        linkableDocs,
+        user?.isAdmin,
+        currentStudentId,
+        currentStudentData,
+        studentMap
+    ]);
     // --- END GRAPH LOGIC ---
 
     // --- RECOMMENDATION LOGIC ---
@@ -1673,18 +2489,28 @@ const graphData = React.useMemo(() => {
     };
     // --- END RECOMMENDATION LOGIC ---
 
-    const handleGeneratePDF = async (level) => {
+// ===== SENIOR classes (S4–S6, incl. special groups such as EMI History):
+    // the ORIGINAL Export BIS layout, unchanged. =====
+    const handleGenerateSeniorPDF = async (
+        className,
+        level,
+        selectedTerms = [],
+        sourceItems = [],
+        sourceArchives = []
+    ) => {
+        if (!selectedTerms.length) {
+            alert('Please choose at least one term.');
+            return;
+        }
+
         setIsLoading(true);
         try {
             const { PDFDocument, rgb, StandardFonts } = await import('pdf-lib');
             const isS6Export = level === 'S6';
 
-            // Keep the existing S4/S5 term selection unchanged.
-            const terms = level === 'S4'
-                ? ['S4 Term 1', 'S4 Term 2']
-                : level === 'S5'
-                    ? ['S5 Term 1', 'S5 Term 2']
-                    : [];
+            const chosenTerms = new Set(
+                selectedTerms.map(term => String(term ?? ''))
+            );
 
             const normalizeBisText = (value) =>
                 String(value ?? '')
@@ -1693,11 +2519,11 @@ const graphData = React.useMemo(() => {
                     .trim()
                     .toLowerCase();
 
-            const isCorrectionItem = (item) =>
-                normalizeBisText(item.name).includes('corr');
+const isCorrectionItem = (item) => {
+                const name = normalizeBisText(item.name);
+                return name.includes('corr') || name.includes('改正');
+            };
 
-            // Every S6 item belongs to exactly one export group.
-            // Corrections take priority over the saved category.
             const getS6BisGroup = (item) => {
                 if (isCorrectionItem(item)) {
                     return 'Internal Assessments';
@@ -1730,93 +2556,34 @@ const graphData = React.useMemo(() => {
                     return 'Quizzes';
                 }
 
-                // Assignments, Practice, Others, and other non-test
-                // categories stay in the export under Assignments.
                 return 'Assignments';
             };
 
-const filteredItems = allItems.filter(item => {
-                if (!dashboardItemCanAppear(item)) return false;
-
+const filteredItems = sourceItems.filter(item => {
                 const matchesClass =
-                    item.classes?.includes(selectedClass) ||
-                    item.className === selectedClass;
+                    item.classes?.includes(className) ||
+                    item.className === className;
 
                 if (!matchesClass) return false;
 
-                if (isS6Export) {
-                    const term = normalizeBisText(item.term);
-
-                    // Include "S6" as well as "S6 Term 1",
-                    // "S6 Term 2", "S6 Mock", and other S6-labelled terms.
-                    // Do not pull in S4/S5 items from the same class.
-                    return /^s\s*6(?:\b|(?=term|mock))/.test(term);
-                }
-
-                return terms.includes(item.term);
+                return chosenTerms.has(String(item.term ?? ''));
             });
 
-            if (isS6Export && filteredItems.length === 0) {
+            if (filteredItems.length === 0) {
                 alert(
-                    'No S6 records were found in the loaded data for this class. ' +
-                    'Please check that the items belong to the selected class ' +
-                    'and have a term such as "S6", "S6 Term 1", or "S6 Mock".'
+                    'No records were found for the chosen term(s) in this class.'
                 );
                 setIsLoading(false);
                 return;
             }
 
-            const getBisDateValue = (value) => {
-                if (!value) return Number.POSITIVE_INFINITY;
-
-                const time = new Date(value).getTime();
-
-                // Put missing or invalid dates after dated items.
-                return Number.isFinite(time)
-                    ? time
-                    : Number.POSITIVE_INFINITY;
-            };
-
-            const reversedItems = [...filteredItems].sort((a, b) => {
-                if (isS6Export) {
-                    const dateA = getBisDateValue(a.date);
-                    const dateB = getBisDateValue(b.date);
-
-                    if (dateA !== dateB) {
-                        return dateA < dateB ? -1 : 1;
-                    }
-
-                    // Stable, predictable ordering when dates are equal.
-                    const nameDifference = String(a.name ?? '').localeCompare(
-                        String(b.name ?? ''),
-                        undefined,
-                        { numeric: true }
-                    );
-
-                    if (nameDifference !== 0) return nameDifference;
-
-                    return String(a.id ?? '').localeCompare(
-                        String(b.id ?? '')
-                    );
-                }
-
-                // Preserve the previous S4/S5 ordering.
-                const orderA = a.order !== undefined ? a.order : -1;
-                const orderB = b.order !== undefined ? b.order : -1;
-                if (orderA !== orderB) return orderB - orderA;
-
-                const weightA = getTermWeight(a.term);
-                const weightB = getTermWeight(b.term);
-                if (weightA !== weightB) return weightA - weightB;
-
-                return new Date(a.date) - new Date(b.date);
-            });
+            const reversedItems = [...filteredItems].sort(compareExportItems);
 
             const getDocGroups = (docId) => {
                 if (!docId) return [];
                 const parts = docId.split('_');
                 const baseId = parts[0];
-                const doc = archives.find(a => a.id === baseId);
+                const doc = sourceArchives.find(a => a.id === baseId);
                 if (!doc) return [];
                 let tagsAndTopics = [];
                 if (doc.topic) tagsAndTopics.push(...(Array.isArray(doc.topic) ? doc.topic : [doc.topic]));
@@ -1854,11 +2621,9 @@ const filteredItems = allItems.filter(item => {
 
             const pdfDoc = await PDFDocument.create();
 
-            // Register fontkit to support custom fonts
             const fontkit = await import('@pdf-lib/fontkit').then(m => m.default || m);
             pdfDoc.registerFontkit(fontkit);
 
-            // Fetch Noto Sans CJK TC from the official static repository
             const [fontBytes, boldFontBytes] = await Promise.all([
                 fetch('https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk@main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf').then(res => res.arrayBuffer()),
                 fetch('https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk@main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Bold.otf').then(res => res.arrayBuffer())
@@ -1866,12 +2631,10 @@ const filteredItems = allItems.filter(item => {
 
             const cjkFont = await pdfDoc.embedFont(fontBytes);
             const cjkBoldFont = await pdfDoc.embedFont(boldFontBytes);
-
-            // Embed Standard Times New Roman for English and syntax
             const engFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
             const engBoldFont = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
 
-            let page = pdfDoc.addPage([595.28, 841.89]); // A4 size
+            let page = pdfDoc.addPage([595.28, 841.89]);
             let y = 780;
             const margin = 70;
 
@@ -1882,7 +2645,6 @@ const filteredItems = allItems.filter(item => {
                 const currentCjkFont = isBold ? cjkBoldFont : cjkFont;
                 const currentEngFont = isBold ? engBoldFont : engFont;
 
-                // Helper to measure text width with mixed fonts
                 const measureWidth = (str) => {
                     let w = 0;
                     for (let i = 0; i < str.length; i++) {
@@ -1903,7 +2665,6 @@ const filteredItems = allItems.filter(item => {
                 if (align === 'center') xPos = x - totalWidth / 2;
                 if (align === 'right') xPos = x - totalWidth;
 
-                // Draw text chunk by chunk depending on language
                 let currentX = xPos;
                 let currentChunk = '';
                 let currentIsCjk = null;
@@ -1917,7 +2678,6 @@ const filteredItems = allItems.filter(item => {
 
                 for (let i = 0; i < t.length; i++) {
                     const char = t[i];
-                    // Match Chinese characters and CJK punctuations
                     const isCjk = /[\u3400-\u9FBF\u3000-\u303F\uFF00-\uFFEF]/.test(char);
 
                     if (currentIsCjk === null) {
@@ -1935,6 +2695,64 @@ const filteredItems = allItems.filter(item => {
             };
 
             drawText(tr('Kowloon True Light School', '九龍真光中學'), 595.28 / 2, y, 16, true, 'center'); y -= 24;
+            // Long item names: shown on two lines inside the cell (no "...").
+            const measureNameWidth = (str, size) => {
+                let w = 0;
+                for (const char of str) {
+                    const isCjk = /[\u3400-\u9FBF\u3000-\u303F\uFF00-\uFFEF]/.test(char);
+                    w += (isCjk ? cjkFont : engFont).widthOfTextAtSize(char, size);
+                }
+                return w;
+            };
+
+            const splitName = (text, size, maxWidth) => {
+                const chars = [...text];
+                let cut = 0;
+
+                while (
+                    cut < chars.length &&
+                    measureNameWidth(chars.slice(0, cut + 1).join(''), size) <= maxWidth
+                ) cut++;
+
+                if (cut >= chars.length) return [text];
+                if (cut === 0) cut = 1;
+
+                // Prefer breaking at a space, so English words are not cut.
+                const lastSpace = chars.slice(0, cut + 1).lastIndexOf(' ');
+                if (lastSpace > 0) cut = lastSpace;
+
+                return [
+                    chars.slice(0, cut).join('').trim(),
+                    chars.slice(cut).join('').trim()
+                ];
+            };
+
+            const drawNameInCell = (text, centerX, yPos, maxWidth) => {
+                const name = String(text ?? '').trim();
+                if (!name) return;
+
+                if (measureNameWidth(name, 12) <= maxWidth) {
+                    drawText(name, centerX, yPos, 12, false, 'center');
+                    return;
+                }
+
+                for (let size = 12; size >= 7; size -= 0.5) {
+                    const lines = splitName(name, size, maxWidth);
+
+                    if (lines.length === 1) {
+                        drawText(lines[0], centerX, yPos, size, false, 'center');
+                        return;
+                    }
+
+                    if (measureNameWidth(lines[1], size) <= maxWidth || size <= 7) {
+                        // Single line spacing: the two lines sit close together.
+                        drawText(lines[0], centerX, yPos + size / 2, size, false, 'center');
+                        drawText(lines[1], centerX, yPos - size / 2, size, false, 'center');
+                        return;
+                    }
+                }
+            };
+
             drawText(tr(`${level} History`, level === 'S4' ? '中四級歷史科' : level === 'S5' ? '中五級歷史科' : '中六級歷史科'), 595.28 / 2, y, 16, true, 'center'); y -= 24;
             drawText(tr('Assessment Content', '目錄'), 595.28 / 2, y, 16, true, 'center'); y -= 40;
 
@@ -1980,16 +2798,13 @@ const filteredItems = allItems.filter(item => {
                 drawText(counter.toString(), colX[0] + colW[0] / 2, y, 12, false, 'center');
                 drawText(date, colX[1] + colW[1] / 2, y, 12, false, 'center');
                 drawText(origin, colX[2] + colW[2] / 2, y, 12, false, 'center');
-                drawText(name, colX[3] + colW[3] / 2, y, 12, false, 'center', colW[3] - 10);
+                drawNameInCell(name, colX[3] + colW[3] / 2, y, colW[3] - 10);
                 drawText(marks, colX[4] + colW[4] - 5, y, 12, false, 'right');
                 counter++;
                 y -= 30;
             };
 
             if (isS6Export) {
-                // S6: no topic lookup, no archive-link requirement.
-                // These headings use the same style as the S4/S5
-                // topic headings. Rows use the same fonts and columns.
                 const s6Groups = [
                     {
                         key: 'Assignments',
@@ -2008,14 +2823,12 @@ const filteredItems = allItems.filter(item => {
                 ];
 
                 s6Groups.forEach(group => {
-                    // reversedItems is already sorted by date for S6.
                     const groupItems = reversedItems.filter(
                         item => getS6BisGroup(item) === group.key
                     );
 
                     if (groupItems.length === 0) return;
 
-                    // Keep the heading with at least its first item.
                     if (y < 80) {
                         page = pdfDoc.addPage([595.28, 841.89]);
                         y = 800;
@@ -2044,7 +2857,7 @@ const filteredItems = allItems.filter(item => {
                     let typeCounter = 1;
 
                     groupItems.forEach(item => {
-const marks =
+                        const marks =
                             getAssessmentFullMark(item) || '';
 
                         const typeName = tr(
@@ -2061,51 +2874,96 @@ const marks =
                     });
                 });
             } else {
-                // S4/S5: retain the existing topic-based BIS output.
+// S4/S5: grouped by History topic, with Practice / Quiz numbering.
+                // EVERY item is included. Items without a topic go under "Others".
                 const topicsOrder = ["World War I", "World War II", "Cold War", "Japan", "Hong Kong", "China", "International Cooperation"];
                 const topicsZhMap = {
                     "World War I": "一戰", "World War II": "二戰", "Cold War": "冷戰",
-                    "Japan": "日本", "Hong Kong": "香港", "China": "中國", "International Cooperation": "國際合作"
+                    "Japan": "日本", "Hong Kong": "香港", "China": "中國", "International Cooperation": "國際合作",
+                    "Others": "其他"
                 };
-                const originsOrder = ["Assignments", "Quizzes", "Others"];
                 const typeZhMap = { "Practice": "練習", "Quiz": "小測", "Task": "其他" };
+                const typeRank = { "Practice": 0, "Quiz": 1, "Task": 2 };
 
-                topicsOrder.forEach(topic => {
-                    let topicItems = [];
-                    originsOrder.forEach(origin => {
-                        const items = reversedItems.filter(item => item.category === origin && !item.name?.toLowerCase().includes('corr') && getDocGroups(item.linkedDocId).includes(topic));
-                        topicItems.push(...items);
-                    });
+                const getS45Type = item => {
+                    const category = normalizeBisText(item.category).replace(/[\s_-]+/g, ' ');
 
-                    if (topicItems.length > 0) {
-                        checkPageBreak();
-                        page.drawRectangle({ x: colX[0], y: y - 10, width: colX[4] + colW[4] - colX[0], height: 30, color: rgb(0.95, 0.95, 0.95), borderColor: rgb(0, 0, 0), borderWidth: 1 });
-                        drawText(tr(topic, topicsZhMap[topic]), colX[0] + 5, y, 12, true);
-                        y -= 30;
+                    if (['quiz', 'quizzes'].includes(category)) return 'Quiz';
 
-                        let typeCounters = { 'Assignments': 1, 'Quizzes': 1, 'Others': 1 };
-                        topicItems.forEach(item => {
-                            const marks = getAssessmentFullMark(item) || '';
-                            let typeNameEn = item.category === 'Assignments' ? 'Practice' : (item.category === 'Quizzes' ? 'Quiz' : 'Task');
-                            let typeName = tr(typeNameEn, typeZhMap[typeNameEn]);
-                            drawRow(formatDate(item.date), `${typeName} ${typeCounters[item.category]++}`, item.name, marks ? `/${marks}` : '');
-                        });
+                    if ([
+                        'assignment', 'assignments',
+                        'practice', 'practices',
+                        'homework', 'classwork'
+                    ].includes(category)) return 'Practice';
+
+                    return 'Task';
+                };
+
+                // One topic per item (the first matching topic), or "Others".
+                const getItemTopic = item => {
+                    const links = [
+                        item.linkedDocId,
+                        ...(item.sectionsConfig || []).map(section => section.linkedDocId)
+                    ].filter(Boolean);
+
+                    const found = new Set();
+                    links.forEach(link =>
+                        getDocGroups(link).forEach(group => found.add(group))
+                    );
+
+                    return topicsOrder.find(topic => found.has(topic)) || 'Others';
+                };
+
+                // Everything that is not an Internal Assessment.
+                const outsideItems = reversedItems.filter(
+                    item => getS6BisGroup(item) !== 'Internal Assessments'
+                );
+
+                [...topicsOrder, 'Others'].forEach(topic => {
+                    const topicItems = outsideItems
+                        .map((item, index) => ({ item, index }))
+                        .filter(entry => getItemTopic(entry.item) === topic)
+                        .sort((a, b) =>
+                            typeRank[getS45Type(a.item)] - typeRank[getS45Type(b.item)] ||
+                            a.index - b.index
+                        )
+                        .map(entry => entry.item);
+
+                    if (topicItems.length === 0) return;
+
+                    // Keep the heading together with its first row.
+                    if (y < 80) {
+                        page = pdfDoc.addPage([595.28, 841.89]);
+                        y = 800;
                     }
+
+                    page.drawRectangle({ x: colX[0], y: y - 10, width: colX[4] + colW[4] - colX[0], height: 30, color: rgb(0.95, 0.95, 0.95), borderColor: rgb(0, 0, 0), borderWidth: 1 });
+                    drawText(tr(topic, topicsZhMap[topic]), colX[0] + 5, y, 12, true);
+                    y -= 30;
+
+                    const typeCounters = { 'Practice': 1, 'Quiz': 1, 'Task': 1 };
+
+                    topicItems.forEach(item => {
+                        const marks = getAssessmentFullMark(item) || '';
+                        const typeEn = getS45Type(item);
+                        const typeName = tr(typeEn, typeZhMap[typeEn]);
+
+                        drawRow(
+                            formatDate(item.date),
+                            `${typeName} ${typeCounters[typeEn]++}`,
+                            item.name,
+                            marks ? `/${marks}` : ''
+                        );
+                    });
                 });
             }
 
-            const internalItems = reversedItems.filter(item => {
-                if (isS6Export) {
-                    return getS6BisGroup(item) === 'Internal Assessments';
-                }
-
-                // Keep the previous S4/S5 inclusion rules unchanged.
-                return ['Uniform Test', 'Exam'].includes(item.category) ||
-                    item.name?.toLowerCase().includes('corr');
-            });
+            // S4, S5 and S6: tests, exams, mocks and corrections.
+            const internalItems = reversedItems.filter(
+                item => getS6BisGroup(item) === 'Internal Assessments'
+            );
 
             if (internalItems.length > 0) {
-                // For S6, keep the group heading with its first item.
                 if (isS6Export && y < 80) {
                     page = pdfDoc.addPage([595.28, 841.89]);
                     y = 800;
@@ -2131,8 +2989,6 @@ const marks =
                     page.drawRectangle({ x: colX[2], y: y - 10, width: colW[2] + colW[3], height: 30, borderColor: rgb(0, 0, 0), borderWidth: 1 });
                     page.drawRectangle({ x: colX[4], y: y - 10, width: colW[4], height: 30, borderColor: rgb(0, 0, 0), borderWidth: 1 });
 
-                    // Preserve existing language rules.
-                    // Do not rename correction items as the original exam.
                     let displayName = item.name;
 
                     if (isS6Export) {
@@ -2140,8 +2996,6 @@ const marks =
                             .replace(/[\s_-]+/g, ' ');
 
                         if (isCorrectionItem(item)) {
-                            // Keep the saved correction title in both versions,
-                            // just as ordinary item titles are preserved.
                             displayName = item.name;
                         } else if (
                             category === 'uniform test' ||
@@ -2169,7 +3023,6 @@ const marks =
                             displayName = internalZhMap[item.name];
                         }
                     } else {
-                        // Existing S4/S5 translations remain unchanged.
                         if (isZh && internalZhMap[item.name]) {
                             displayName = internalZhMap[item.name];
                         }
@@ -2177,7 +3030,7 @@ const marks =
 
                     drawText(counter.toString(), colX[0] + colW[0] / 2, y, 12, false, 'center');
                     drawText(formatDate(item.date), colX[1] + colW[1] / 2, y, 12, false, 'center');
-                    drawText(displayName, colX[2] + (colW[2] + colW[3]) / 2, y, 12, false, 'center');
+                    drawNameInCell(displayName, colX[2] + (colW[2] + colW[3]) / 2, y, colW[2] + colW[3] - 10);
                     drawText(marks ? `/${marks}` : '', colX[4] + colW[4] - 5, y, 12, false, 'right');
                     counter++;
                     y -= 30;
@@ -2187,12 +3040,409 @@ const marks =
             const pdfBytes = await pdfDoc.save();
             const blob = new Blob([pdfBytes], { type: 'application/pdf' });
             const url = URL.createObjectURL(blob);
-            setPreviewPdfUrl(url);
+
+            const safeName =
+                visibleClassName(className).replace(/[\\/:*?"<>|\s]+/g, '_') || 'Class';
+
+            setPdfFileName(`BIS_${safeName}_${level}.pdf`);
+
+            setPreviewPdfUrl(previous => {
+                if (previous?.startsWith('blob:')) URL.revokeObjectURL(previous);
+                return url;
+            });
         } catch (error) {
             console.error("Error generating PDF:", error);
             alert("Failed to generate PDF.");
         }
         setIsLoading(false);
+    };
+
+    // ===== JUNIOR classes (1A–3D): the new layout. =====
+    const handleGenerateJuniorPDF = async (
+        className,
+        level,
+        selectedTerms = [],
+        sourceItems = []
+    ) => {
+        if (!selectedTerms.length) {
+            alert('Please choose at least one term.');
+            return;
+        }
+
+        const chosenTerms = new Set(
+            selectedTerms.map(term => String(term ?? ''))
+        );
+
+        // ALL items of the chosen terms. No linked-document requirement.
+        const filteredItems = sourceItems.filter(item =>
+            chosenTerms.has(String(item.term ?? ''))
+        );
+
+        if (filteredItems.length === 0) {
+            alert('No records were found for the chosen term(s) in this class.');
+            return;
+        }
+
+        setIsLoading(true);
+
+        try {
+            const { PDFDocument, rgb, StandardFonts } = await import('pdf-lib');
+
+            const normalizeBisText = value =>
+                String(value ?? '')
+                    .normalize('NFKC')
+                    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+                    .trim()
+                    .toLowerCase();
+
+            // "Corr" or "改正" anywhere in the name.
+            const isCorrectionItem = item => {
+                const name = normalizeBisText(item.name);
+                return name.includes('corr') || name.includes('改正');
+            };
+
+            const getCategoryKey = item =>
+                normalizeBisText(item.category).replace(/[\s_-]+/g, ' ');
+
+            const INTERNAL_CATEGORIES = [
+                'uniform test', 'uniform tests', 'test', 'tests',
+                'exam', 'exams', 'examination', 'examinations',
+                'internal assessment', 'internal assessments',
+                'mock', 'mock examination',
+                'pre mock', 'pre mock examination'
+            ];
+
+            // Every item goes into exactly one BIS group.
+            const getBisGroup = item => {
+                // Corrections always go to Internal Assessments in the BIS,
+                // even though they are labelled Assignments elsewhere.
+                if (isCorrectionItem(item)) return 'Internal Assessments';
+
+                const category = getCategoryKey(item);
+
+                if (INTERNAL_CATEGORIES.includes(category)) {
+                    return 'Internal Assessments';
+                }
+
+                if (
+                    /\brac\b/.test(category) ||
+                    category.includes('reading across') ||
+                    category.includes('跨課程')
+                ) {
+                    return 'RAC';
+                }
+
+                if (['quiz', 'quizzes'].includes(category)) return 'Quizzes';
+
+                if ([
+                    'assignment', 'assignments',
+                    'practice', 'practices',
+                    'homework', 'classwork'
+                ].includes(category)) {
+                    return 'Assignments';
+                }
+
+                return 'Others';
+            };
+
+            // Term by term, oldest date first.
+            const sortedItems = [...filteredItems].sort(compareExportItems);
+
+            const isZh = language === 'zh' || language === 'zh-HK' || language === 'zh-TW';
+            const tr = (en, zh) => (isZh ? zh : en);
+
+            const levelNumber = Number(String(level).replace(/\D/g, '')) || 0;
+            const zhNumber = ['一', '二', '三', '四', '五', '六'][levelNumber - 1];
+            const titleZh = zhNumber ? `中${zhNumber}級歷史科` : `${level} 歷史科`;
+
+            const pdfDoc = await PDFDocument.create();
+
+            const fontkit = await import('@pdf-lib/fontkit').then(m => m.default || m);
+            pdfDoc.registerFontkit(fontkit);
+
+            const [fontBytes, boldFontBytes] = await Promise.all([
+                fetch('https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk@main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf').then(res => res.arrayBuffer()),
+                fetch('https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk@main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Bold.otf').then(res => res.arrayBuffer())
+            ]);
+
+            const cjkFont = await pdfDoc.embedFont(fontBytes);
+            const cjkBoldFont = await pdfDoc.embedFont(boldFontBytes);
+            const engFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
+            const engBoldFont = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
+
+            let page = pdfDoc.addPage([595.28, 841.89]); // A4
+            let y = 780;
+            const margin = 70;
+
+            const drawText = (text, x, yPos, size, isBold = false, align = 'left', maxWidth = null) => {
+                if (text === null || text === undefined || text === '') return;
+                let t = String(text);
+
+                const currentCjkFont = isBold ? cjkBoldFont : cjkFont;
+                const currentEngFont = isBold ? engBoldFont : engFont;
+                const isCjkChar = char => /[\u3400-\u9FBF\u3000-\u303F\uFF00-\uFFEF]/.test(char);
+
+                const measureWidth = str => {
+                    let w = 0;
+                    for (let i = 0; i < str.length; i++) {
+                        const char = str[i];
+                        w += (isCjkChar(char) ? currentCjkFont : currentEngFont).widthOfTextAtSize(char, size);
+                    }
+                    return w;
+                };
+
+                if (maxWidth) {
+                    while (measureWidth(t) > maxWidth && t.length > 0) { t = t.slice(0, -1); }
+                    if (t.length < String(text).length) t += '...';
+                }
+
+                const totalWidth = measureWidth(t);
+                let xPos = x;
+                if (align === 'center') xPos = x - totalWidth / 2;
+                if (align === 'right') xPos = x - totalWidth;
+
+                let currentX = xPos;
+                let currentChunk = '';
+                let currentIsCjk = null;
+
+                const drawChunk = (chunk, isCjk) => {
+                    if (!chunk) return;
+                    const f = isCjk ? currentCjkFont : currentEngFont;
+                    page.drawText(chunk, { x: currentX, y: yPos, size, font: f, color: rgb(0, 0, 0) });
+                    currentX += f.widthOfTextAtSize(chunk, size);
+                };
+
+                for (let i = 0; i < t.length; i++) {
+                    const char = t[i];
+                    const isCjk = isCjkChar(char);
+
+                    if (currentIsCjk === null) {
+                        currentIsCjk = isCjk;
+                        currentChunk += char;
+                    } else if (currentIsCjk === isCjk) {
+                        currentChunk += char;
+                    } else {
+                        drawChunk(currentChunk, currentIsCjk);
+                        currentChunk = char;
+                        currentIsCjk = isCjk;
+                    }
+                }
+                drawChunk(currentChunk, currentIsCjk);
+            };
+
+            // Long item names: shown on two lines inside the cell (no "...").
+            const measureNameWidth = (str, size) => {
+                let w = 0;
+                for (const char of str) {
+                    const isCjk = /[\u3400-\u9FBF\u3000-\u303F\uFF00-\uFFEF]/.test(char);
+                    w += (isCjk ? cjkFont : engFont).widthOfTextAtSize(char, size);
+                }
+                return w;
+            };
+
+            const splitName = (text, size, maxWidth) => {
+                const chars = [...text];
+                let cut = 0;
+
+                while (
+                    cut < chars.length &&
+                    measureNameWidth(chars.slice(0, cut + 1).join(''), size) <= maxWidth
+                ) cut++;
+
+                if (cut >= chars.length) return [text];
+                if (cut === 0) cut = 1;
+
+                // Prefer breaking at a space, so English words are not cut.
+                const lastSpace = chars.slice(0, cut + 1).lastIndexOf(' ');
+                if (lastSpace > 0) cut = lastSpace;
+
+                return [
+                    chars.slice(0, cut).join('').trim(),
+                    chars.slice(cut).join('').trim()
+                ];
+            };
+
+            const drawNameInCell = (text, centerX, yPos, maxWidth) => {
+                const name = String(text ?? '').trim();
+                if (!name) return;
+
+                if (measureNameWidth(name, 12) <= maxWidth) {
+                    drawText(name, centerX, yPos, 12, false, 'center');
+                    return;
+                }
+
+                for (let size = 12; size >= 7; size -= 0.5) {
+                    const lines = splitName(name, size, maxWidth);
+
+                    if (lines.length === 1) {
+                        drawText(lines[0], centerX, yPos, size, false, 'center');
+                        return;
+                    }
+
+                    if (measureNameWidth(lines[1], size) <= maxWidth || size <= 7) {
+                        // Single line spacing: the two lines sit close together.
+                        drawText(lines[0], centerX, yPos + size / 2, size, false, 'center');
+                        drawText(lines[1], centerX, yPos - size / 2, size, false, 'center');
+                        return;
+                    }
+                }
+            };
+
+            // Title follows the class: 1A -> S1, 3D -> S3, etc.
+            drawText(tr('Kowloon True Light School', '九龍真光中學'), 595.28 / 2, y, 16, true, 'center'); y -= 24;
+            drawText(tr(`${level} History`, titleZh), 595.28 / 2, y, 16, true, 'center'); y -= 24;
+            drawText(tr('Assessment Content', '目錄'), 595.28 / 2, y, 16, true, 'center'); y -= 40;
+
+            drawText(tr('Name: ______________________', '姓名: ______________________'), margin, y, 12);
+            drawText(tr(`Class: ${level} _______ (          )`, `班別: ${level} _______ (          )`), 595.28 - margin, y, 12, false, 'right'); y -= 35;
+
+            const colX = [margin, margin + 25, margin + 95, margin + 160, 595.28 - margin - 55];
+            const colW = [25, 70, 65, colX[4] - (margin + 160), 55];
+            const contentX = colX[2];
+            const contentW = colW[2] + colW[3];
+            const fullWidth = colX[4] + colW[4] - colX[0];
+
+            const newPage = () => {
+                page = pdfDoc.addPage([595.28, 841.89]);
+                y = 800;
+            };
+
+            const checkPageBreak = () => {
+                if (y < 50) newPage();
+            };
+
+            const drawBox = (x, width) => {
+                page.drawRectangle({ x, y: y - 10, width, height: 30, borderColor: rgb(0, 0, 0), borderWidth: 1 });
+            };
+
+            // Table header
+            checkPageBreak();
+            drawBox(colX[0], colW[0]);
+            drawBox(colX[1], colW[1]);
+            drawBox(contentX, contentW);
+            drawBox(colX[4], colW[4]);
+            drawText(tr('Date', '日期'), colX[1] + colW[1] / 2, y, 12, true, 'center');
+            drawText(tr('Content', '內容'), contentX + contentW / 2, y, 12, true, 'center');
+            drawText(tr('Marks', '分數'), colX[4] + colW[4] / 2, y, 12, true, 'center');
+            y -= 30;
+
+            let counter = 1;
+
+            // One row: No. | Date | Item name | /Full mark
+            const drawRow = (date, content, marks) => {
+                checkPageBreak();
+                drawBox(colX[0], colW[0]);
+                drawBox(colX[1], colW[1]);
+                drawBox(contentX, contentW);
+                drawBox(colX[4], colW[4]);
+
+                drawText(String(counter), colX[0] + colW[0] / 2, y, 12, false, 'center');
+                drawText(date, colX[1] + colW[1] / 2, y, 12, false, 'center');
+                drawNameInCell(content, contentX + contentW / 2, y, contentW - 10);
+                drawText(marks, colX[4] + colW[4] - 5, y, 12, false, 'right');
+
+                counter++;
+                y -= 30;
+            };
+
+            const drawHeading = text => {
+                // Keep the heading together with at least its first row.
+                if (y < 80) newPage();
+
+                page.drawRectangle({
+                    x: colX[0],
+                    y: y - 10,
+                    width: fullWidth,
+                    height: 30,
+                    color: rgb(0.95, 0.95, 0.95),
+                    borderColor: rgb(0, 0, 0),
+                    borderWidth: 1
+                });
+
+                drawText(text, colX[0] + 5, y, 12, true);
+                y -= 30;
+            };
+
+            const internalZhMap = {
+                "1st Term Uniform Test": "上測",
+                "2nd Term Uniform Test": "下測",
+                "1st Exam": "上考",
+                "2nd Exam": "下考"
+            };
+
+            const getDisplayName = (item, groupKey) => {
+                const name = String(item.name ?? '').trim() || tr('Untitled', '未命名');
+
+                if (groupKey !== 'Internal Assessments' || isCorrectionItem(item)) {
+                    return name;
+                }
+
+                const category = getCategoryKey(item);
+
+                // Existing S6 naming is kept.
+                if (level === 'S6') {
+                    if (['uniform test', 'uniform tests', 'pre mock', 'pre mock examination'].includes(category)) {
+                        return tr('Pre-mock Examination', '模擬預試');
+                    }
+
+                    if (['exam', 'exams', 'examination', 'examinations', 'mock', 'mock examination'].includes(category)) {
+                        return tr('Mock Examination', '模擬試');
+                    }
+                }
+
+                if (isZh && internalZhMap[name]) return internalZhMap[name];
+
+                return name;
+            };
+
+            // Order: Assignments -> RAC -> Quizzes -> Others -> Internal Assessments
+            const BIS_GROUPS = [
+                { key: 'Assignments', en: 'Assignments', zh: '練習' },
+                { key: 'RAC', en: 'RAC', zh: '跨課程閱讀' },
+                { key: 'Quizzes', en: 'Quizzes', zh: '小測' },
+                { key: 'Others', en: 'Others', zh: '其他' },
+                { key: 'Internal Assessments', en: 'Internal Assessments', zh: '測考項目' }
+            ];
+
+            BIS_GROUPS.forEach(group => {
+                const groupItems = sortedItems.filter(
+                    item => getBisGroup(item) === group.key
+                );
+
+                if (groupItems.length === 0) return;
+
+                drawHeading(tr(group.en, group.zh));
+
+                groupItems.forEach(item => {
+                    const fullMark = getAssessmentFullMark(item);
+
+                    drawRow(
+                        formatDisplayDate(item.date),
+                        getDisplayName(item, group.key),
+                        fullMark > 0 ? `/${formatAssessmentMark(fullMark)}` : ''
+                    );
+                });
+            });
+
+            const pdfBytes = await pdfDoc.save();
+            const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+            const url = URL.createObjectURL(blob);
+
+            const safeName =
+                visibleClassName(className).replace(/[\\/:*?"<>|\s]+/g, '_') || 'Class';
+
+            setPdfFileName(`BIS_${safeName}_${level}.pdf`);
+
+            setPreviewPdfUrl(previous => {
+                if (previous?.startsWith('blob:')) URL.revokeObjectURL(previous);
+                return url;
+            });
+        } catch (error) {
+            console.error("Error generating PDF:", error);
+            alert("Failed to generate PDF.");
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     if (authLoading) {
@@ -2256,13 +3506,404 @@ const marks =
                 </h2>
                 <p className="text-sm text-slate-600 mt-2">
                     {user.isAdmin
-                        ? 'No active classes are available for this administrator.'
+                        ? 'None of your active classes has a student with a linked email yet. ' +
+                        'Link emails in Record → Manage Classes & Students → click a student → Linked email.'
                         : 'Your account has website access, but no valid class assignment. ' +
                         'Ask the superadmin to use Grant / Update Class Access.'}
                 </p>
             </div>
         );
     }
+
+    // ===== NEW: shared pieces used by both work-list views =====
+    const dateColumnCount = isEditing ? 9 : 7;
+
+    const getSmallWording = item => {
+        if (!['Assignments', 'Quizzes'].includes(item.category)) return null;
+
+        const resolved = resolveDashboardDocument(archives, item.linkedDocId);
+        if (!resolved) return null;
+
+        const children = resolved.parent.subQuestions || [];
+        const question = resolved.child || children[children.length - 1];
+        if (!question) return null;
+
+        return language.startsWith('zh')
+            ? question.contentChi || question.content
+            : question.content || question.contentChi;
+    };
+
+    // Same mark rules as before (dummy accounts, hidden marks, sections).
+    const getStudentMarkContent = (item, access) => {
+        const { isEffectivelyDisclosed } = access;
+        let studentMark = '-';
+
+        if (!user?.isAdmin && currentStudentData?.isDummy) {
+            if (!isEffectivelyDisclosed) {
+                studentMark = <span className="text-xs text-amber-600 italic font-medium">{t("To be disclosed")}</span>;
+            } else {
+                const pseudoRandom = (item.id.charCodeAt(0) + item.id.charCodeAt(item.id.length - 1)) % 41 + 60;
+                const fullMark = getAssessmentFullMark(item);
+                const generatedMark = ((pseudoRandom / 100) * fullMark).toFixed(1);
+
+                studentMark = (
+                    <div className="flex flex-col items-center justify-center text-sm leading-tight">
+                        <span className="font-bold text-teal-600 text-base">{generatedMark} / {fullMark}</span>
+                        <span className="text-xs text-teal-500 font-normal mt-1">{t("Generated (Dummy)")}</span>
+                    </div>
+                );
+            }
+        } else if (
+            !user?.isAdmin &&
+            currentStudentId &&
+            item.marks?.[currentStudentId] !== undefined &&
+            item.marks?.[currentStudentId] !== null &&
+            item.marks?.[currentStudentId] !== ''
+        ) {
+            if (!isEffectivelyDisclosed) {
+                studentMark = <span className="text-xs text-amber-600 italic font-medium">{t("To be disclosed")}</span>;
+            } else {
+                const markVal = item.marks[currentStudentId];
+                const deduction = parseFloat(item.marks[`${currentStudentId}_deduction`]) || 0;
+                const finalTotal = getStudentTotal(item, currentStudentId);
+
+                if (typeof markVal === 'object' && assessmentHasSections(item)) {
+                    const breakdown = [];
+
+                    item.sectionsConfig.forEach(section => {
+                        const parts = section.hasSubSections
+                            ? section.subSections || []
+                            : [section];
+
+                        parts.forEach(part => {
+                            const value = markVal[part.id];
+
+                            if (
+                                value === undefined ||
+                                value === null ||
+                                String(value).trim() === ''
+                            ) {
+                                return;
+                            }
+
+                            const mark = Number(value);
+
+                            if (!Number.isFinite(mark)) return;
+
+                            const label = section.hasSubSections
+                                ? `${section.name} - ${part.name}`
+                                : section.name;
+
+                            breakdown.push(
+                                `${label}: ${formatAssessmentMark(mark)}/${formatAssessmentMark(part.fullMark)}`
+                            );
+                        });
+                    });
+
+                    if (finalTotal !== null) {
+                        studentMark = (
+                            <div className="flex flex-col items-center justify-center text-[10px] md:text-sm leading-tight">
+                                <span className="font-bold text-blue-700 text-[11px] md:text-base mb-0.5 md:mb-0">
+                                    {formatAssessmentMark(finalTotal)}
+                                    {' / '}
+                                    {formatAssessmentMark(getAssessmentFullMark(item))}
+                                </span>
+
+                                <div className="flex flex-col text-[8px] md:text-xs text-slate-500 font-normal mt-0.5 md:mt-1 gap-0.5">
+                                    {breakdown.map((text, partIndex) => (
+                                        <span key={partIndex} className="whitespace-nowrap">
+                                            {text}
+                                        </span>
+                                    ))}
+                                </div>
+
+                                {deduction > 0 && (
+                                    <span className="text-[8px] md:text-xs text-red-500 mt-0.5">
+                                        - {formatAssessmentMark(deduction)} {t("(Deduction)")}
+                                    </span>
+                                )}
+                            </div>
+                        );
+                    }
+                } else {
+                    studentMark = finalTotal !== null
+                        ? formatAssessmentMark(finalTotal)
+                        : (typeof markVal === 'object' ? '-' : markVal);
+                }
+            }
+        }
+
+        if (React.isValidElement(studentMark)) return studentMark;
+
+        return studentMark !== '-'
+            ? `${studentMark} / ${formatAssessmentMark(getAssessmentFullMark(item))}`
+            : '-';
+    };
+
+    const renderProgressButtons = (docId, large) => {
+        const box = large ? 'md:w-7 md:h-7' : 'md:w-6 md:h-6';
+        const icon = large ? 'md:w-3.5 md:h-3.5' : 'md:w-3 md:h-3';
+        const isStarred = starredItems.includes(docId);
+        const isDone = doneItems.includes(docId);
+
+        return (
+            <div className="flex gap-0.5">
+                <button
+                    type="button"
+                    onClick={() => toggleStar(docId)}
+                    className={`inline-flex items-center justify-center w-4 h-4 ${box} rounded border transition-colors ${isStarred ? 'bg-yellow-100 border-yellow-300 text-yellow-600' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
+                    title={t("Star / To-Do Later")}
+                >
+                    <Star size={8} className={`${icon} ${isStarred ? 'fill-current' : ''}`} />
+                </button>
+                <button
+                    type="button"
+                    onClick={() => toggleMarkAsDone(docId)}
+                    className={`inline-flex items-center justify-center w-4 h-4 ${box} rounded border transition-colors ${isDone ? 'bg-green-100 border-green-300 text-green-700' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
+                    title={isDone ? t("Done") : t("Mark as Done")}
+                >
+                    <Check size={8} className={`${icon} ${isDone ? 'opacity-100' : 'opacity-30'}`} />
+                </button>
+            </div>
+        );
+    };
+
+    // Same document-link and comment rules as before.
+    const renderQuestionSet = (item, access) => {
+        const { linkedDoc, hasLinkedDoc, isEffectivelyDisclosed } = access;
+        const archiveLang = language.startsWith('zh') ? 'zh' : 'en';
+
+        return (
+            <div className="flex flex-col md:flex-row items-center justify-center gap-1 md:gap-3">
+                {!isEffectivelyDisclosed && !user?.isAdmin && !hasLinkedDoc ? (
+                    <span className="text-[8px] md:text-xs text-slate-400 italic">{t("Available after disclosure")}</span>
+                ) : item.sectionsConfig && item.sectionsConfig.some(sec => sec.linkedDocId) ? (
+                    <div className="flex flex-col gap-1 md:gap-2 items-center">
+                        {item.sectionsConfig.filter(sec => sec.linkedDocId).map(sec => {
+                            const lDoc = linkableDocs.find(a => a.id === sec.linkedDocId);
+
+                            return lDoc ? (
+                                <div key={sec.id} className="flex items-center gap-0.5 md:gap-2 flex-wrap justify-center">
+                                    <a href={`/?search=${encodeURIComponent(lDoc.title)}&viewId=${encodeURIComponent(lDoc.id)}&archiveLang=${archiveLang}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-[8px] md:text-xs text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-1 py-0.5 md:px-2 md:py-1 rounded border border-blue-100 shadow-sm">
+                                        <FileText size={8} className="md:w-3 md:h-3" /> {sec.name}
+                                    </a>
+                                    {!user?.isAdmin && renderProgressButtons(lDoc.id, false)}
+                                </div>
+                            ) : null;
+                        })}
+                    </div>
+                ) : linkedDoc ? (
+                    <div className="flex items-center gap-0.5 md:gap-2 flex-wrap justify-center">
+                        <a href={`/?search=${encodeURIComponent(linkedDoc.title)}&viewId=${encodeURIComponent(linkedDoc.id)}&archiveLang=${archiveLang}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-[8px] md:text-sm text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-1 py-0.5 md:px-2 md:py-1 rounded border border-blue-100 shadow-sm">
+                            <FileText size={8} className="md:w-3.5 md:h-3.5" /> {t("View")}
+                        </a>
+                        {!user?.isAdmin && renderProgressButtons(linkedDoc.id, true)}
+                    </div>
+                ) : (
+                    <span className="text-[8px] md:text-xs text-slate-400 italic">{t("No file attached")}</span>
+                )}
+
+                {!user?.isAdmin && currentStudentId && item.marks?.[`${currentStudentId}_comment`] && isEffectivelyDisclosed && (
+                    <div className="relative group inline-block mt-1 md:mt-0">
+                        <button
+                            type="button"
+                            onClick={() => setSelectedCommentId(selectedCommentId === item.id ? null : item.id)}
+                            className="inline-flex items-center justify-center w-4 h-4 md:w-6 md:h-6 bg-amber-100 text-amber-700 rounded-full font-bold hover:bg-amber-200 transition-colors cursor-pointer text-[8px] md:text-sm"
+                        >
+                            !
+                        </button>
+
+                        {selectedCommentId !== item.id && (
+                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 md:mb-3 hidden group-hover:block w-max max-w-[200px] md:max-w-xs bg-slate-800 text-white text-[10px] md:text-sm font-medium px-2 py-1 md:px-3 md:py-2 rounded shadow-lg z-10 pointer-events-none">
+                                {t("Click to view teacher's comment")}
+                                <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
+                            </div>
+                        )}
+
+                        {selectedCommentId === item.id && (
+                            <div className="absolute top-1/2 -translate-y-1/2 right-full mr-2 md:left-full md:mr-0 md:ml-4 w-48 md:w-64 bg-white rounded-xl shadow-[0_0_20px_rgba(0,0,0,0.1)] border border-slate-200 p-3 md:p-4 z-40 text-left cursor-default">
+                                <button
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); setSelectedCommentId(null); }}
+                                    className="absolute top-2 right-2 md:top-3 md:right-3 text-slate-400 hover:text-slate-600 transition-colors"
+                                >
+                                    <X size={14} className="md:w-4 md:h-4" />
+                                </button>
+                                <h3 className="text-xs md:text-sm font-bold text-slate-800 mb-1.5 md:mb-2 flex items-center gap-1 md:gap-1.5">
+                                    <FileText size={14} className="text-amber-500 md:w-4 md:h-4" />
+                                    {t("Teacher's Comment")}
+                                </h3>
+                                <div className="bg-amber-50/50 border border-amber-100 rounded-lg p-2 md:p-3 text-slate-700 text-[10px] md:text-sm whitespace-pre-wrap leading-relaxed">
+                                    {item.marks[`${currentStudentId}_comment`]}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    const renderEditButtons = item => (
+        <div className="flex justify-center gap-1 md:gap-2">
+            <button type="button" onClick={() => openAddModal(item)} className="text-slate-400 hover:text-blue-600"><Edit size={12} className="md:w-4 md:h-4" /></button>
+            <button type="button" onClick={() => handleDelete(item.id)} className="text-slate-400 hover:text-red-600"><Trash2 size={12} className="md:w-4 md:h-4" /></button>
+        </div>
+    );
+
+    // "By date" row: the original list, with clear term separators.
+    const renderDateRow = (item, index) => {
+        const access = getDashboardItemAccess(item, linkableDocs, user?.isAdmin);
+        const smallWording = getSmallWording(item);
+        const style = getCategoryStyle(item.category);
+
+        let showTerm = false;
+        let rowSpan = 1;
+
+        if (index === 0 || items[index - 1].term !== item.term) {
+            showTerm = true;
+
+            for (let i = index + 1; i < items.length; i++) {
+                if (items[i].term === item.term) rowSpan++;
+                else break;
+            }
+        }
+
+        const startsNewTerm = showTerm && index > 0;
+
+        return (
+            <React.Fragment key={item.id}>
+                {showTerm && (
+                    <tr className="md:hidden">
+                        <td
+                            colSpan={dateColumnCount}
+                            className="bg-slate-700 px-2 py-1.5 text-[11px] font-bold text-white"
+                        >
+                            {item.term || t('Unassigned')} · {rowSpan} {t('items')}
+                        </td>
+                    </tr>
+                )}
+
+                <tr
+                    className={`hover:bg-slate-50 ${draggedIndex === index ? 'opacity-50 bg-blue-50' : ''}`}
+                    style={startsNewTerm ? { borderTop: '3px solid #64748b' } : undefined}
+                    draggable={isEditing}
+                    onDragStart={isEditing ? () => handleDragStart(index) : undefined}
+                    onDragOver={isEditing ? (e) => handleDragOver(e, index) : undefined}
+                    onDragEnd={isEditing ? handleDrop : undefined}
+                >
+                    {isEditing && (
+                        <td className="p-1 md:p-4 text-center cursor-move text-slate-400 hover:text-slate-600 align-middle">
+                            <GripHorizontal size={14} className="mx-auto md:w-4 md:h-4" />
+                        </td>
+                    )}
+
+                    {/* Mobile Combined Column */}
+                    <td className="p-1 md:hidden align-top text-center border-r border-slate-100">
+                        <div className="text-[9px] font-bold text-slate-700 leading-tight">{formatDisplayDate(item.date)}</div>
+                        <div className="text-[8px] text-slate-500 mt-0.5">#{items.length - index}</div>
+                        <div className={`mt-1 inline-block px-1 py-[2px] ${style.badge} text-[8px] font-bold rounded tracking-tighter`}>
+                            {t(item.category)}
+                        </div>
+                    </td>
+
+                    {/* PC Separate Columns */}
+                    {showTerm && (
+                        <td rowSpan={rowSpan} className="hidden md:table-cell p-4 text-center align-middle bg-slate-100 border-r-2 border-slate-300">
+                            <div className="font-bold text-slate-800">{item.term || t('Unassigned')}</div>
+                            <div className="mt-1 text-xs font-medium text-slate-500">{rowSpan} {t('items')}</div>
+                        </td>
+                    )}
+                    <td className="hidden md:table-cell p-4 text-center font-medium text-slate-500">{items.length - index}</td>
+                    <td className="hidden md:table-cell p-4">
+                        <span className={`px-2 py-1 ${style.badge} text-xs font-bold rounded-md`}>
+                            {t(item.category)}
+                        </span>
+                    </td>
+
+                    <td className="p-1.5 md:p-4 font-medium text-slate-800 text-[11px] md:text-base align-top md:align-middle">
+                        <div className="leading-tight">{item.name}</div>
+                        {item.date && (
+                            <div className="hidden md:block text-xs text-slate-500 mt-0.5 font-normal">
+                                {formatDisplayDate(item.date)}
+                            </div>
+                        )}
+                        {smallWording && (
+                            <div className="text-[9px] md:text-xs text-slate-400 mt-1 line-clamp-2 italic font-normal">
+                                {smallWording}
+                            </div>
+                        )}
+                    </td>
+                    <td className="p-1 md:p-4 text-center font-bold text-blue-700 text-[9px] md:text-base align-top md:align-middle">
+                        {getStudentMarkContent(item, access)}
+                    </td>
+                    <td className="p-1 md:p-4 text-center align-top md:align-middle">
+                        {renderQuestionSet(item, access)}
+                    </td>
+                    {isEditing && (
+                        <td className="p-1 md:p-4 text-center align-middle">
+                            {renderEditButtons(item)}
+                        </td>
+                    )}
+                </tr>
+            </React.Fragment>
+        );
+    };
+
+    // "By category" row.
+    const renderCategoryRow = (item, number) => {
+        const access = getDashboardItemAccess(item, linkableDocs, user?.isAdmin);
+        const smallWording = getSmallWording(item);
+
+        return (
+            <tr key={item.id} className="hover:bg-slate-50 align-top md:align-middle">
+                <td className="p-2 md:p-3 text-center text-xs md:text-sm font-bold text-slate-500">{number}</td>
+                <td className="p-2 md:p-3 text-xs md:text-sm text-slate-600 whitespace-nowrap">{formatDisplayDate(item.date) || '—'}</td>
+                <td className="p-2 md:p-3 text-xs md:text-base font-medium text-slate-800">
+                    <div className="leading-tight">{item.name}</div>
+                    {smallWording && (
+                        <div className="text-[10px] md:text-xs text-slate-400 mt-1 line-clamp-2 italic font-normal">
+                            {smallWording}
+                        </div>
+                    )}
+                </td>
+                <td className="p-2 md:p-3 text-center font-bold text-blue-700 text-xs md:text-base">
+                    {getStudentMarkContent(item, access)}
+                </td>
+                <td className="p-2 md:p-3 text-center">
+                    {renderQuestionSet(item, access)}
+                </td>
+                {isEditing && (
+                    <td className="p-2 md:p-3 text-center">
+                        {renderEditButtons(item)}
+                    </td>
+                )}
+            </tr>
+        );
+    };
+
+    // NEW: Export BIS dialog helpers.
+    const termsForLevel = level =>
+        exportTermOptions
+            .filter(option => getTermLevel(option.term) === level)
+            .map(option => option.term);
+
+    const chooseExportLevel = level => {
+        setExportLevel(level);
+        setExportTerms(termsForLevel(level));
+    };
+
+    const openExportDialog = () => {
+        if (!exportClassOptions.length) return;
+
+        setExportClass(
+            exportClassOptions.includes(selectedClass)
+                ? selectedClass
+                : exportClassOptions[0]
+        );
+
+        setShowExportDialog(true);
+    };
 
     return (
         <div className="dashboard-page w-full min-w-0 max-w-6xl mx-auto p-3 md:p-6">
@@ -2283,35 +3924,15 @@ const marks =
                 </h1>
                 {user?.isAdmin && (
                     <div className="flex gap-2">
-                        <details className="relative">
-                            <summary className="cursor-pointer list-none px-3 py-2 bg-indigo-100 text-indigo-700 rounded-lg text-sm font-bold flex items-center gap-1">
-                                <FileText size={16} />
-                                Export BIS
-                            </summary>
-
-                            <div className="absolute left-0 top-full mt-1 w-40 rounded-lg border border-slate-200 bg-white shadow-lg z-50 overflow-hidden">
-                                {[
-                                    ['S4', 'S4 Terms 1-2'],
-                                    ['S5', 'S5 Terms 1-2'],
-                                    ['S6', 'S6']
-                                ].map(([level, label]) => (
-                                    <button
-                                        key={level}
-                                        type="button"
-                                        onClick={event => {
-                                            event.currentTarget
-                                                .closest('details')
-                                                ?.removeAttribute('open');
-
-                                            handleGeneratePDF(level);
-                                        }}
-                                        className="block w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50"
-                                    >
-                                        {label}
-                                    </button>
-                                ))}
-                            </div>
-                        </details>
+                        <button
+                            type="button"
+                            onClick={openExportDialog}
+                            disabled={exportClassOptions.length === 0}
+                            className="px-3 py-2 bg-indigo-100 text-indigo-700 rounded-lg text-sm font-bold flex items-center gap-1 hover:bg-indigo-200 disabled:opacity-50"
+                        >
+                            <FileText size={16} />
+                            Export BIS
+                        </button>
                         <button
                             onClick={() => setIsEditing(!isEditing)}
                             className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors ${isEditing ? 'bg-amber-100 text-amber-700' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}
@@ -2327,46 +3948,17 @@ const marks =
                 )}
             </div>
 
-            {/* Class/Group Tabs (Filtered by Role) */}
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4 pb-2">
+            {/* Class/Group picker (NEW) */}
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4 mb-4 pb-2">
                 {classes.length > 0 && (
-                    <div className="w-full min-w-0 sm:flex-1">
-                        <label className="compact-phone-only">
-                            <span className="mb-1 block text-xs font-bold text-slate-500">
-                                {t("Class / Group")}
-                            </span>
-
-                            <select
-                                value={selectedClass}
-                                onChange={event =>
-                                    setSelectedClass(event.target.value)
-                                }
-                                className="w-full min-w-0 rounded-lg border border-slate-300 bg-white p-2.5 text-base text-slate-800"
-                            >
-                                {classes.map(className => (
-                                    <option key={className} value={className}>
-                                        {className.replace(/\u200B/g, '')}
-                                    </option>
-                                ))}
-                            </select>
-                        </label>
-
-                        <div className="compact-desktop-only flex max-w-full gap-2 overflow-x-auto pb-1">
-                            {classes.map(className => (
-                                <button
-                                    key={className}
-                                    type="button"
-                                    onClick={() => setSelectedClass(className)}
-                                    className={`shrink-0 px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap ${selectedClass === className
-                                        ? 'bg-blue-600 text-white'
-                                        : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-                                        }`}
-                                >
-                                    {className.replace(/\u200B/g, '')}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
+                    <ClassPicker
+                        classes={classes}
+                        selectedClass={selectedClass}
+                        onSelect={setSelectedClass}
+                        classInfo={classInfo}
+                        currentEmail={user?.email}
+                        t={t}
+                    />
                 )}
 
                 {!user?.isAdmin && (
@@ -2438,7 +4030,7 @@ const marks =
                                 {t("No data available for the selected categories.")}
                             </div>
                         ) : (
-<ResponsiveContainer width="100%" height="100%">
+                            <ResponsiveContainer width="100%" height="100%">
                                 <LineChart
                                     data={graphData}
                                     margin={{
@@ -2487,10 +4079,9 @@ const marks =
                                             fill: '#64748b'
                                         }}
                                         tickFormatter={value =>
-                                            `${value}${
-                                                graphMetric === 'percentage'
-                                                    ? '%'
-                                                    : ''
+                                            `${value}${graphMetric === 'percentage'
+                                                ? '%'
+                                                : ''
                                             }`
                                         }
                                     />
@@ -2777,395 +4368,181 @@ const marks =
             )}
             {/* --- END ADMIN STUDENT PERCENTILE TABLE --- */}
 
-            <p className="compact-phone-only mb-2 text-xs text-slate-500">
-                {t("Swipe the work table sideways to see all columns.")}
-            </p>
+            {/* --- NEW: WORK LIST WITH VIEW SWITCH --- */}
+            <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <h2 className="flex items-center gap-2 text-lg font-bold text-slate-800">
+                    <FileText className="text-blue-600" size={20} />
+                    {t("Work List")}
+                </h2>
 
-            <div className="dashboard-work-table bg-white rounded-xl shadow-sm border border-slate-200 w-full overflow-x-auto">
-                <table className="w-full text-left">
-                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 text-[9px] md:text-sm uppercase">
-                        <tr>
-                            {isEditing && <th className="p-1 md:p-4 w-6 md:w-12 text-center"></th>}
-                            {/* Mobile Combined Header */}
-                            <th className="p-1 md:hidden w-14 text-center">{t("Info")}</th>
-                            {/* PC Separate Headers */}
-                            <th className="hidden md:table-cell p-4 w-32 text-center border-r border-slate-200">{t("Term")}</th>
-                            <th className="hidden md:table-cell p-4 w-16 text-center">{t("No.")}</th>
-                            <th className="hidden md:table-cell p-4 w-32">{t("Origin")}</th>
-
-                            <th className="p-1 md:p-4">{t("Name of Work")}</th>
-                            <th className="p-1 md:p-4 w-12 md:w-32 text-center">{t("Mark")}</th>
-                            <th className="p-1 md:p-4 w-[72px] md:w-40 text-center">
-                                <span className="md:hidden">{t("Action")}</span>
-                                <span className="hidden md:inline">{t("Question Set")}</span>
-                            </th>
-                            {isEditing && <th className="p-1 md:p-4 w-10 md:w-24 text-center">{t("Edit")}</th>}
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                        {items.length === 0 ? (
-                            <tr><td colSpan="6" className="p-8 text-center text-slate-500">{t("No assignments or quizzes found.")}</td></tr>
-                        ) : (
-                            items.map((item, index) => {
-                                const linkedDoc = linkableDocs.find(
-                                    archive => archive.id === item.linkedDocId
-                                );
-
-                                const linkedSections = (item.sectionsConfig || [])
-                                    .filter(section => section.linkedDocId);
-
-                                const sectionDocuments = linkedSections.map(
-                                    section => linkableDocs.find(
-                                        archive => archive.id === section.linkedDocId
-                                    )
-                                );
-
-                                const hasLinkedDoc =
-                                    Boolean(linkedDoc) ||
-                                    sectionDocuments.some(Boolean);
-
-                                let isTierUnlocked = Boolean(user?.isAdmin);
-
-                                if (!isTierUnlocked && linkedDoc) {
-                                    isTierUnlocked =
-                                        linkedDoc.archiveAccess?.tierUnlocked === true;
-                                } else if (
-                                    !isTierUnlocked &&
-                                    linkedSections.length > 0
-                                ) {
-                                    isTierUnlocked = sectionDocuments.every(
-                                        archive =>
-                                            archive?.archiveAccess?.tierUnlocked === true
-                                    );
-                                }
-
-                                // Keep mark disclosure separate from whether
-                                // the server permits an assigned document.
-                                const isEffectivelyDisclosed =
-                                    item.isDisclosed !== false ||
-                                    (hasLinkedDoc && isTierUnlocked);
-
-                                let studentMark = '-';
-
-                                // --- NEW: Generate fake marks if the user is a dummy account ---
-                                if (!user?.isAdmin && currentStudentData?.isDummy) {
-                                    if (!isEffectivelyDisclosed) {
-                                        studentMark = <span className="text-xs text-amber-600 italic font-medium">{t("To be disclosed")}</span>;
-                                    } else {
-                                        // Generate a pseudo-random mark (60% to 100%) based on the assessment ID length/characters so it stays consistent on refresh
-                                        const pseudoRandom = (item.id.charCodeAt(0) + item.id.charCodeAt(item.id.length - 1)) % 41 + 60;
-                               const fullMark = getAssessmentFullMark(item);
-                                        const generatedMark = ((pseudoRandom / 100) * fullMark).toFixed(1);
-
-                                        studentMark = (
-                                            <div className="flex flex-col items-center justify-center text-sm leading-tight">
-                                                <span className="font-bold text-teal-600 text-base">{generatedMark} / {fullMark}</span>
-                                                <span className="text-xs text-teal-500 font-normal mt-1">{t("Generated (Dummy)")}</span>
-                                            </div>
-                                        );
-                                    }
-                                }
-                                // --- END NEW ---
-                                else if (
-                                    !user?.isAdmin &&
-                                    currentStudentId &&
-                                    item.marks?.[currentStudentId] !== undefined &&
-                                    item.marks?.[currentStudentId] !== null &&
-                                    item.marks?.[currentStudentId] !== ''
-                                ) {
-                                    if (!isEffectivelyDisclosed) {
-                                        studentMark = <span className="text-xs text-amber-600 italic font-medium">{t("To be disclosed")}</span>;
-                                    } else {
-                                        const markVal = item.marks[currentStudentId];
-                                        const deduction = parseFloat(item.marks[`${currentStudentId}_deduction`]) || 0;
-
-const finalTotal = getStudentTotal(
-                                            item,
-                                            currentStudentId
-                                        );
-
-                                        if (
-                                            typeof markVal === 'object' &&
-                                            assessmentHasSections(item)
-                                        ) {
-                                            const breakdown = [];
-
-                                            item.sectionsConfig.forEach(section => {
-                                                const parts = section.hasSubSections
-                                                    ? section.subSections || []
-                                                    : [section];
-
-                                                parts.forEach(part => {
-                                                    const value = markVal[part.id];
-
-                                                    if (
-                                                        value === undefined ||
-                                                        value === null ||
-                                                        String(value).trim() === ''
-                                                    ) {
-                                                        return;
-                                                    }
-
-                                                    const mark = Number(value);
-
-                                                    if (!Number.isFinite(mark)) return;
-
-                                                    const label = section.hasSubSections
-                                                        ? `${section.name} - ${part.name}`
-                                                        : section.name;
-
-                                                    breakdown.push(
-                                                        `${label}: ${formatAssessmentMark(mark)}/${formatAssessmentMark(part.fullMark)}`
-                                                    );
-                                                });
-                                            });
-
-                                            if (finalTotal !== null) {
-                                                studentMark = (
-                                                    <div className="flex flex-col items-center justify-center text-[10px] md:text-sm leading-tight">
-                                                        <span className="font-bold text-blue-700 text-[11px] md:text-base mb-0.5 md:mb-0">
-                                                            {formatAssessmentMark(finalTotal)}
-                                                            {' / '}
-                                                            {formatAssessmentMark(getAssessmentFullMark(item))}
-                                                        </span>
-
-                                                        <div className="flex flex-col text-[8px] md:text-xs text-slate-500 font-normal mt-0.5 md:mt-1 gap-0.5">
-                                                            {breakdown.map((text, partIndex) => (
-                                                                <span
-                                                                    key={partIndex}
-                                                                    className="whitespace-nowrap"
-                                                                >
-                                                                    {text}
-                                                                </span>
-                                                            ))}
-                                                        </div>
-
-                                                        {deduction > 0 && (
-                                                            <span className="text-[8px] md:text-xs text-red-500 mt-0.5">
-                                                                - {formatAssessmentMark(deduction)} {t("(Deduction)")}
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                );
-                                            }
-                                        } else {
-                                            studentMark = finalTotal !== null
-                                                ? formatAssessmentMark(finalTotal)
-                                                : (
-                                                    typeof markVal === 'object'
-                                                        ? '-'
-                                                        : markVal
-                                                );
-                                        }
-                                    }
-                                }
-
-                                // Prefer the website's selected language.
-                                // Fall back only when that language has no text.
-                                let smallWording = null;
-
-                                if (
-                                    ['Assignments', 'Quizzes'].includes(item.category)
-                                ) {
-                                    const resolved = resolveDashboardDocument(
-                                        archives,
-                                        item.linkedDocId
-                                    );
-
-                                    if (resolved) {
-                                        const children =
-                                            resolved.parent.subQuestions || [];
-
-                                        const question = resolved.child ||
-                                            children[children.length - 1];
-
-                                        if (question) {
-                                            smallWording = language.startsWith('zh')
-                                                ? question.contentChi || question.content
-                                                : question.content || question.contentChi;
-                                        }
-                                    }
-                                }
-
-                                // Calculate rowSpan for the Term column
-                                let showTerm = false;
-                                let rowSpan = 1;
-                                if (index === 0 || items[index - 1].term !== item.term) {
-                                    showTerm = true;
-                                    for (let i = index + 1; i < items.length; i++) {
-                                        if (items[i].term === item.term) rowSpan++;
-                                        else break;
-                                    }
-                                }
-
-                                return (
-                                    <tr
-                                        key={item.id}
-                                        className={`hover:bg-slate-50 ${draggedIndex === index ? 'opacity-50 bg-blue-50' : ''}`}
-                                        draggable={isEditing}
-                                        onDragStart={isEditing ? () => handleDragStart(index) : undefined}
-                                        onDragOver={isEditing ? (e) => handleDragOver(e, index) : undefined}
-                                        onDragEnd={isEditing ? handleDrop : undefined}
-                                    >
-                                        {isEditing && (
-                                            <td className="p-1 md:p-4 text-center cursor-move text-slate-400 hover:text-slate-600 align-middle">
-                                                <GripHorizontal size={14} className="mx-auto md:w-4 md:h-4" />
-                                            </td>
-                                        )}
-                                        {/* Mobile Combined Column */}
-                                        <td className="p-1 md:hidden align-top text-center border-r border-slate-100">
-                                            <div className="text-[9px] font-bold text-slate-700 leading-tight">{item.term || t('Unassigned')}</div>
-                                            <div className="text-[8px] text-slate-500 mt-0.5">#{items.length - index}</div>
-                                            <div className="mt-1 inline-block px-1 py-[2px] bg-indigo-50 text-indigo-700 text-[8px] font-bold rounded tracking-tighter">
-                                                {t(item.category)}
-                                            </div>
-                                        </td>
-                                        {/* PC Separate Columns */}
-                                        {showTerm && (
-                                            <td rowSpan={rowSpan} className="hidden md:table-cell p-4 text-center font-bold text-slate-700 bg-slate-50 border-r border-slate-200 align-middle">
-                                                {item.term || t('Unassigned')}
-                                            </td>
-                                        )}
-                                        <td className="hidden md:table-cell p-4 text-center font-medium text-slate-500">{items.length - index}</td>
-                                        <td className="hidden md:table-cell p-4">
-                                            <span className="px-2 py-1 bg-indigo-50 text-indigo-700 text-xs font-bold rounded-md">
-                                                {t(item.category)}
-                                            </span>
-                                        </td>
-
-                                        <td className="p-1.5 md:p-4 font-medium text-slate-800 text-[11px] md:text-base align-top md:align-middle">
-                                            <div className="leading-tight">{item.name}</div>
-                                            {smallWording && (
-                                                <div className="text-[9px] md:text-xs text-slate-400 mt-1 line-clamp-2 italic font-normal">
-                                                    {smallWording}
-                                                </div>
-                                            )}
-                                        </td>
-                                        <td className="p-1 md:p-4 text-center font-bold text-blue-700 text-[9px] md:text-base align-top md:align-middle">
-                                          {React.isValidElement(studentMark)
-                                                ? studentMark
-                                                : studentMark !== '-'
-                                                    ? `${studentMark} / ${formatAssessmentMark(getAssessmentFullMark(item))}`
-                                                    : '-'}
-                                        </td>
-                                        <td className="p-1 md:p-4 text-center align-top md:align-middle">
-                                            <div className="flex flex-col md:flex-row items-center justify-center gap-1 md:gap-3">
-                                                {!isEffectivelyDisclosed && !user?.isAdmin && !hasLinkedDoc ? (
-                                                    <span className="text-[8px] md:text-xs text-slate-400 italic">{t("Available after disclosure")}</span>
-                                                ) : item.sectionsConfig && item.sectionsConfig.some(sec => sec.linkedDocId) ? (
-                                                    <div className="flex flex-col gap-1 md:gap-2 items-center">
-                                                        {item.sectionsConfig.filter(sec => sec.linkedDocId).map(sec => {
-                                                            const lDoc = linkableDocs.find(a => a.id === sec.linkedDocId);
-                                                            return lDoc ? (
-                                                                <div key={sec.id} className="flex items-center gap-0.5 md:gap-2 flex-wrap justify-center">
-                                                                    <a href={`/?search=${encodeURIComponent(lDoc.title)}&viewId=${encodeURIComponent(lDoc.id)}&archiveLang=${language.startsWith('zh') ? 'zh' : 'en'}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-[8px] md:text-xs text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-1 py-0.5 md:px-2 md:py-1 rounded border border-blue-100 shadow-sm">
-                                                                        <FileText size={8} className="md:w-3 md:h-3" /> {sec.name}
-                                                                    </a>
-                                                                    {!user?.isAdmin && (
-                                                                        <div className="flex gap-0.5">
-                                                                            <button
-                                                                                onClick={() => toggleStar(lDoc.id)}
-                                                                                className={`inline-flex items-center justify-center w-4 h-4 md:w-6 md:h-6 rounded border transition-colors ${starredItems.includes(lDoc.id) ? 'bg-yellow-100 border-yellow-300 text-yellow-600' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
-                                                                                title={t("Star / To-Do Later")}
-                                                                            >
-                                                                                <Star size={8} className={`md:w-3 md:h-3 ${starredItems.includes(lDoc.id) ? 'fill-current' : ''}`} />
-                                                                            </button>
-                                                                            <button
-                                                                                onClick={() => toggleMarkAsDone(lDoc.id)}
-                                                                                className={`inline-flex items-center justify-center w-4 h-4 md:w-6 md:h-6 rounded border transition-colors ${doneItems.includes(lDoc.id) ? 'bg-green-100 border-green-300 text-green-700' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
-                                                                                title={doneItems.includes(lDoc.id) ? t("Done") : t("Mark as Done")}
-                                                                            >
-                                                                                <Check size={8} className={`md:w-3 md:h-3 ${doneItems.includes(lDoc.id) ? 'opacity-100' : 'opacity-30'}`} />
-                                                                            </button>
-                                                                        </div>
-                                                                    )}
-                                                                </div>
-                                                            ) : null;
-                                                        })}
-                                                    </div>
-                                                ) : linkedDoc ? (
-                                                    <div className="flex items-center gap-0.5 md:gap-2 flex-wrap justify-center">
-                                                        <a href={`/?search=${encodeURIComponent(linkedDoc.title)}&viewId=${encodeURIComponent(linkedDoc.id)}&archiveLang=${language.startsWith('zh') ? 'zh' : 'en'}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-[8px] md:text-sm text-blue-600 hover:text-blue-800 font-medium bg-blue-50 px-1 py-0.5 md:px-2 md:py-1 rounded border border-blue-100 shadow-sm">
-                                                            <FileText size={8} className="md:w-3.5 md:h-3.5" /> {t("View")}
-                                                        </a>
-                                                        {!user?.isAdmin && (
-                                                            <div className="flex gap-0.5">
-                                                                <button
-                                                                    onClick={() => toggleStar(linkedDoc.id)}
-                                                                    className={`inline-flex items-center justify-center w-4 h-4 md:w-7 md:h-7 rounded border transition-colors ${starredItems.includes(linkedDoc.id) ? 'bg-yellow-100 border-yellow-300 text-yellow-600' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
-                                                                    title={t("Star / To-Do Later")}
-                                                                >
-                                                                    <Star size={8} className={`md:w-3.5 md:h-3.5 ${starredItems.includes(linkedDoc.id) ? 'fill-current' : ''}`} />
-                                                                </button>
-                                                                <button
-                                                                    onClick={() => toggleMarkAsDone(linkedDoc.id)}
-                                                                    className={`inline-flex items-center justify-center w-4 h-4 md:w-7 md:h-7 rounded border transition-colors ${doneItems.includes(linkedDoc.id) ? 'bg-green-100 border-green-300 text-green-700' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}
-                                                                    title={doneItems.includes(linkedDoc.id) ? t("Done") : t("Mark as Done")}
-                                                                >
-                                                                    <Check size={8} className={`md:w-3.5 md:h-3.5 ${doneItems.includes(linkedDoc.id) ? 'opacity-100' : 'opacity-30'}`} />
-                                                                </button>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                ) : (
-                                                    <span className="text-[8px] md:text-xs text-slate-400 italic">{t("No file attached")}</span>
-                                                )}
-
-                                                {/* Teacher Comment Button */}
-                                                {!user?.isAdmin && currentStudentId && item.marks?.[`${currentStudentId}_comment`] && isEffectivelyDisclosed && (
-                                                    <div className="relative group inline-block mt-1 md:mt-0">
-                                                        <button
-                                                            onClick={() => setSelectedCommentId(selectedCommentId === item.id ? null : item.id)}
-                                                            className="inline-flex items-center justify-center w-4 h-4 md:w-6 md:h-6 bg-amber-100 text-amber-700 rounded-full font-bold hover:bg-amber-200 transition-colors cursor-pointer text-[8px] md:text-sm"
-                                                        >
-                                                            !
-                                                        </button>
-
-                                                        {/* Custom Tooltip (Hidden when popover is open) */}
-                                                        {selectedCommentId !== item.id && (
-                                                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 md:mb-3 hidden group-hover:block w-max max-w-[200px] md:max-w-xs bg-slate-800 text-white text-[10px] md:text-sm font-medium px-2 py-1 md:px-3 md:py-2 rounded shadow-lg z-10 pointer-events-none">
-                                                                {t("Click to view teacher's comment")}
-                                                                <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
-                                                            </div>
-                                                        )}
-
-                                                        {/* Inline Comment Popover */}
-                                                        {selectedCommentId === item.id && (
-                                                            <div className="absolute top-1/2 -translate-y-1/2 right-full mr-2 md:left-full md:mr-0 md:ml-4 w-48 md:w-64 bg-white rounded-xl shadow-[0_0_20px_rgba(0,0,0,0.1)] border border-slate-200 p-3 md:p-4 z-40 text-left cursor-default">
-                                                                <button
-                                                                    onClick={(e) => { e.stopPropagation(); setSelectedCommentId(null); }}
-                                                                    className="absolute top-2 right-2 md:top-3 md:right-3 text-slate-400 hover:text-slate-600 transition-colors"
-                                                                >
-                                                                    <X size={14} className="md:w-4 md:h-4" />
-                                                                </button>
-                                                                <h3 className="text-xs md:text-sm font-bold text-slate-800 mb-1.5 md:mb-2 flex items-center gap-1 md:gap-1.5">
-                                                                    <FileText size={14} className="text-amber-500 md:w-4 md:h-4" />
-                                                                    {t("Teacher's Comment")}
-                                                                </h3>
-                                                                <div className="bg-amber-50/50 border border-amber-100 rounded-lg p-2 md:p-3 text-slate-700 text-[10px] md:text-sm whitespace-pre-wrap leading-relaxed">
-                                                                    {item.marks[`${currentStudentId}_comment`]}
-                                                                </div>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </td>
-                                        {isEditing && (
-                                            <td className="p-1 md:p-4 text-center align-middle">
-                                                <div className="flex justify-center gap-1 md:gap-2">
-                                                    <button onClick={() => openAddModal(item)} className="text-slate-400 hover:text-blue-600"><Edit size={12} className="md:w-4 md:h-4" /></button>
-                                                    <button onClick={() => handleDelete(item.id)} className="text-slate-400 hover:text-red-600"><Trash2 size={12} className="md:w-4 md:h-4" /></button>
-                                                </div>
-                                            </td>
-                                        )}
-                                    </tr>
-                                );
-                            })
-                        )}
-                    </tbody>
-                </table>
+                <div
+                    role="group"
+                    aria-label={t("Choose how to show the work list")}
+                    className="grid grid-cols-2 gap-1 rounded-xl border-2 border-slate-300 bg-white p-1 sm:inline-grid"
+                >
+                    {[
+                        ['date', CalendarDays, t('By date')],
+                        ['category', LayoutGrid, t('By category')]
+                    ].map(([value, Icon, label]) => (
+                        <button
+                            key={value}
+                            type="button"
+                            aria-pressed={workView === value}
+                            onClick={() => setWorkView(value)}
+                            className={`flex min-h-[44px] items-center justify-center gap-2 rounded-lg px-4 text-sm font-bold transition-colors ${workView === value
+                                ? 'bg-blue-600 text-white shadow-sm'
+                                : 'text-slate-600 hover:bg-slate-100'
+                                }`}
+                        >
+                            <Icon size={16} /> {label}
+                        </button>
+                    ))}
+                </div>
             </div>
+
+            {workView === 'date' ? (
+                <>
+                    <p className="compact-phone-only mb-2 text-xs text-slate-500">
+                        {t("Swipe the work table sideways to see all columns.")}
+                    </p>
+
+                    <div className="dashboard-work-table bg-white rounded-xl shadow-sm border-2 border-slate-300 w-full overflow-x-auto">
+                        <table className="w-full text-left">
+                            <thead className="bg-slate-50 border-b-2 border-slate-300 text-slate-600 text-[9px] md:text-sm uppercase">
+                                <tr>
+                                    {isEditing && <th className="p-1 md:p-4 w-6 md:w-12 text-center"></th>}
+                                    <th className="p-1 md:hidden w-14 text-center">{t("Info")}</th>
+                                    <th className="hidden md:table-cell p-4 w-32 text-center border-r-2 border-slate-300">{t("Term")}</th>
+                                    <th className="hidden md:table-cell p-4 w-16 text-center">{t("No.")}</th>
+                                    <th className="hidden md:table-cell p-4 w-32">{t("Origin")}</th>
+                                    <th className="p-1 md:p-4">{t("Name of Work")}</th>
+                                    <th className="p-1 md:p-4 w-12 md:w-32 text-center">{t("Mark")}</th>
+                                    <th className="p-1 md:p-4 w-[72px] md:w-40 text-center">
+                                        <span className="md:hidden">{t("Action")}</span>
+                                        <span className="hidden md:inline">{t("Question Set")}</span>
+                                    </th>
+                                    {isEditing && <th className="p-1 md:p-4 w-10 md:w-24 text-center">{t("Edit")}</th>}
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200">
+                                {items.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={dateColumnCount} className="p-8 text-center text-slate-500">
+                                            {t("No assignments or quizzes found.")}
+                                        </td>
+                                    </tr>
+                                ) : (
+                                    items.map((item, index) => renderDateRow(item, index))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </>
+            ) : (
+                <div className="space-y-6">
+                    {items.length === 0 ? (
+                        <div className="rounded-xl border-2 border-slate-300 bg-white p-8 text-center text-slate-500">
+                            {t("No assignments or quizzes found.")}
+                        </div>
+                    ) : (
+                        <>
+                            {isEditing && (
+                                <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                                    {t("To change the order by dragging, switch to By date.")}
+                                </p>
+                            )}
+
+                            {/* Category performance summary */}
+                            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                                {categoryView.overall.map(({ category, stats }) => {
+                                    const style = getCategoryStyle(category);
+
+                                    return (
+                                        <div key={category} className={`rounded-xl border-2 ${style.border} ${style.soft} p-3`}>
+                                            <div className={`flex items-center gap-2 text-xs font-bold uppercase tracking-wide ${style.text}`}>
+                                                <span className={`h-2.5 w-2.5 rounded-full ${style.bar}`} />
+                                                {t(category)}
+                                            </div>
+                                            <div className="mt-1 text-2xl font-extrabold text-slate-800">
+                                                {stats.average !== null ? `${stats.average.toFixed(1)}%` : '—'}
+                                            </div>
+                                            <div className="text-[11px] text-slate-600">
+                                                {user?.isAdmin ? t('Class average') : t('Your average')} · {stats.count} {t('items')}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+
+                            {categoryView.terms.map(termGroup => (
+                                <section
+                                    key={termGroup.term || '__unassigned'}
+                                    className="overflow-hidden rounded-xl border-2 border-slate-400 bg-white shadow-sm"
+                                >
+                                    <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-800 px-4 py-3 text-white">
+                                        <h3 className="text-base font-bold md:text-lg">
+                                            {termGroup.term || t('Unassigned')}
+                                        </h3>
+                                        <span className="text-xs text-slate-200">
+                                            {termGroup.count} {t('items')}
+                                        </span>
+                                    </div>
+
+                                    <div className="space-y-4 p-3 md:p-4">
+                                        {termGroup.categories.map(group => {
+                                            const style = getCategoryStyle(group.category);
+
+                                            return (
+                                                <div key={group.category} className={`overflow-hidden rounded-lg border-2 ${style.border}`}>
+                                                    <div className={`flex flex-wrap items-center justify-between gap-2 border-b-2 ${style.border} ${style.soft} px-3 py-2`}>
+                                                        <div className="flex items-center gap-2">
+                                                            <span className={`h-3 w-3 rounded-full ${style.bar}`} />
+                                                            <h4 className={`text-sm font-bold md:text-base ${style.text}`}>
+                                                                {t(group.category)}
+                                                            </h4>
+                                                            <span className="text-xs text-slate-600">
+                                                                {group.items.length} {t('items')}
+                                                            </span>
+                                                        </div>
+                                                        <div className="text-xs font-bold text-slate-700 md:text-sm">
+                                                            {user?.isAdmin ? t('Class average') : t('Your average')}
+                                                            {': '}
+                                                            {group.stats.average !== null
+                                                                ? `${group.stats.average.toFixed(1)}%`
+                                                                : '—'}
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="overflow-x-auto">
+                                                        <table className="w-full min-w-[520px] text-left">
+                                                            <thead className="border-b border-slate-200 bg-white text-[10px] uppercase text-slate-500 md:text-xs">
+                                                                <tr>
+                                                                    <th className="w-12 p-2 text-center md:p-3">{t("No.")}</th>
+                                                                    <th className="w-24 p-2 md:p-3">{t("Date")}</th>
+                                                                    <th className="p-2 md:p-3">{t("Name of Work")}</th>
+                                                                    <th className="w-28 p-2 text-center md:p-3">{t("Mark")}</th>
+                                                                    <th className="w-40 p-2 text-center md:p-3">{t("Question Set")}</th>
+                                                                    {isEditing && <th className="w-16 p-2 text-center md:p-3">{t("Edit")}</th>}
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody className="divide-y divide-slate-100">
+                                                                {group.items.map((item, idx) =>
+                                                                    renderCategoryRow(item, group.items.length - idx)
+                                                                )}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </section>
+                            ))}
+                        </>
+                    )}
+                </div>
+            )}
+            {/* --- END WORK LIST --- */}
 
             {/* Admin Add/Edit Modal */}
             {showAddModal && user?.isAdmin && editForm && (
@@ -3288,6 +4665,185 @@ const finalTotal = getStudentTotal(
                 </div>
             )}
 
+{/* --- NEW: EXPORT BIS DIALOG --- */}
+            {showExportDialog && user?.isAdmin && (
+                <div
+                    className="fixed inset-0 z-[80] flex items-end justify-center bg-black/60 sm:items-center sm:p-4"
+                    onClick={() => setShowExportDialog(false)}
+                >
+                    <div
+                        role="dialog"
+                        aria-modal="true"
+                        className="w-full max-h-[90dvh] overflow-y-auto rounded-t-2xl bg-white p-5 shadow-2xl sm:max-w-lg sm:rounded-2xl"
+                        onClick={event => event.stopPropagation()}
+                    >
+                        <div className="mb-4 flex items-start justify-between gap-3">
+                            <h2 className="flex items-center gap-2 text-lg font-bold text-slate-800">
+                                <FileText size={18} className="text-indigo-600" />
+                                Export BIS
+                            </h2>
+                            <button
+                                type="button"
+                                onClick={() => setShowExportDialog(false)}
+                                className="rounded-full p-2 text-slate-400 hover:bg-slate-100"
+                                aria-label="Close"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        {/* 1. Class */}
+                        <div className="mb-2 text-sm font-bold text-slate-700">
+                            1. Choose the class
+                        </div>
+                        <select
+                            value={exportClass}
+                            onChange={event => setExportClass(event.target.value)}
+                            className="mb-5 w-full min-h-[48px] rounded-xl border-2 border-slate-300 bg-white px-3 text-base font-bold text-slate-800 outline-none focus:border-indigo-500"
+                        >
+                            {exportClassOptions.map(name => (
+                                <option key={name} value={name}>
+                                    {visibleClassName(name)}
+                                    {classes.includes(name) ? '' : '  (not on dashboard)'}
+                                </option>
+                            ))}
+                        </select>
+
+                        {/* 2. Form */}
+                        <div className="mb-2 text-sm font-bold text-slate-700">
+                            2. Choose the form printed on the BIS
+                        </div>
+                        <div className="mb-2 grid grid-cols-3 gap-2">
+                            {(isJuniorClass(exportClass)
+                                ? ['S1', 'S2', 'S3']
+                                : ['S4', 'S5', 'S6']
+                            ).map(level => (
+                                <button
+                                    key={level}
+                                    type="button"
+                                    onClick={() => chooseExportLevel(level)}
+                                    className={`min-h-[48px] rounded-xl border-2 text-base font-bold transition-colors ${exportLevel === level
+                                        ? 'border-indigo-600 bg-indigo-600 text-white'
+                                        : 'border-slate-300 bg-white text-slate-700 hover:border-indigo-400'
+                                        }`}
+                                >
+                                    {level}
+                                </button>
+                            ))}
+                        </div>
+                        <p className="mb-5 text-xs text-slate-500">
+                            {isJuniorClass(exportClass)
+                                ? `Junior layout: Assignments → RAC → Quizzes → Others → Internal Assessments. Title: "${exportLevel} History".`
+                                : exportLevel === 'S6'
+                                    ? 'S6 layout: Assignments, Quizzes, then Internal Assessments.'
+                                    : `${exportLevel} layout: grouped by History topic, then Internal Assessments.`}
+                        </p>
+
+                        {/* 3. Terms */}
+                        <div className="mb-2 text-sm font-bold text-slate-700">
+                            3. Choose the term data to include
+                        </div>
+
+                        {exportItemsLoading ? (
+                            <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                                <Loader2 size={16} className="animate-spin" />
+                                Loading items...
+                            </div>
+                        ) : exportError ? (
+                            <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                                {exportError}
+                            </p>
+                        ) : exportTermOptions.length === 0 ? (
+                            <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                                No items were found for this class.
+                            </p>
+                        ) : (
+                            <>
+                                {termsForLevel(exportLevel).length === 0 && (
+                                    <p className="mb-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                                        No term in this class has "{exportLevel}" in its name.
+                                        Tick the term(s) that belong to {exportLevel}.
+                                    </p>
+                                )}
+
+                                <div className="space-y-2">
+                                    {exportTermOptions.map(option => {
+                                        const checked = exportTerms.includes(option.term);
+
+                                        return (
+                                            <label
+                                                key={option.term || '__none'}
+                                                className={`flex min-h-[48px] cursor-pointer items-center gap-3 rounded-xl border-2 px-3 py-2 ${checked
+                                                    ? 'border-indigo-500 bg-indigo-50'
+                                                    : 'border-slate-200 bg-white hover:border-slate-300'
+                                                    }`}
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    checked={checked}
+                                                    onChange={() =>
+                                                        setExportTerms(previous =>
+                                                            previous.includes(option.term)
+                                                                ? previous.filter(term => term !== option.term)
+                                                                : [...previous, option.term]
+                                                        )
+                                                    }
+                                                    className="h-5 w-5 accent-indigo-600"
+                                                />
+                                                <span className="flex-1 font-medium text-slate-800">
+                                                    {option.term || t('Unassigned')}
+                                                </span>
+                                                <span className="text-xs text-slate-500">
+                                                    {option.count} {t('items')}
+                                                </span>
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+                            </>
+                        )}
+
+                        <p className="mt-3 text-xs text-slate-500">
+                            {isJuniorClass(exportClass)
+                                ? 'All items are included. Within each group, oldest date first. Items with "Corr" or "改正" in the name go to Internal Assessments. Dates and full marks come from Marks.'
+                                : 'Items are printed term by term, oldest date first (the "By date" list read from the bottom up). The "By category" view does not change this.'}
+                        </p>
+
+                        <div className="mt-5 flex gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setShowExportDialog(false)}
+                                className="min-h-[44px] flex-1 rounded-lg border border-slate-300 bg-white font-bold text-slate-700 hover:bg-slate-50"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                disabled={exportItemsLoading || exportTerms.length === 0}
+                                onClick={() => {
+                                    const terms = [...exportTerms];
+                                    const itemsToExport = [...exportItems];
+                                    const archivesToUse = [...exportArchives];
+                                    const className = exportClass;
+                                    const level = exportLevel;
+
+                                    setShowExportDialog(false);
+
+                                    if (isJuniorClass(className)) {
+                                        handleGenerateJuniorPDF(className, level, terms, itemsToExport);
+                                    } else {
+                                        handleGenerateSeniorPDF(className, level, terms, itemsToExport, archivesToUse);
+                                    }
+                                }}
+                                className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-indigo-600 font-bold text-white hover:bg-indigo-700 disabled:opacity-50"
+                            >
+                                <Download size={16} /> Generate PDF
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* --- GENERATED PDF PREVIEW MODAL --- */}
             {previewPdfUrl && (
                 <div className="fixed inset-0 bg-black/90 z-[100] flex flex-col">
@@ -3298,7 +4854,7 @@ const finalTotal = getStudentTotal(
                         <div className="flex items-center gap-3">
                             <a
                                 href={previewPdfUrl}
-                                download="Assessment_Content.pdf"
+                                download={pdfFileName}
                                 className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-700 flex items-center gap-2 transition-colors"
                             >
                                 <Download size={16} /> Download PDF

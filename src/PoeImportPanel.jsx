@@ -288,7 +288,11 @@ export default function PoeImportPanel({
             files.map(entry => `${entry.label}: ${entry.file.name}`).join('\n') +
             '\n\nThe full PDFs will leave this website and be sent to Poe.' +
             '\nThis can consume Poe points. There are no automatic retries.' +
-            '\nThe result is a draft only; no archive records will be saved.'
+(
+                mode === 'generator'
+                    ? '\nThe result is a draft only. Your editor and save slots will not be changed automatically.'
+                    : '\nThe result is a draft only; no archive records will be saved.'
+            )
         );
 
         if (!approved) return;
@@ -340,6 +344,20 @@ export default function PoeImportPanel({
                 );
             }
 
+if (
+                mode === 'generator' &&
+                (
+                    prepared.length !== 1 ||
+                    prepared[0].file.size > 20 * 1024 * 1024 ||
+                    totalPages > 40
+                )
+            ) {
+                throw new Error(
+                    'Nothing uploaded. The document generator accepts one PDF ' +
+                    'of at most 20 MiB and 40 pages.'
+                );
+            }
+
             if (!sameFiles(selected, latestFiles.current)) {
                 throw new Error('The selected files changed. Generate a fresh draft.');
             }
@@ -382,9 +400,11 @@ export default function PoeImportPanel({
                 throw new Error('The signed-in account changed. Nothing sent to Poe.');
             }
 
-            const prompt = mode === 'sample'
-                ? buildPrompt?.()
-                : BATCH_PROMPT;
+const prompt = mode === 'generator'
+                ? 'Use the backend document-generator extraction instructions.'
+                : mode === 'sample'
+                    ? buildPrompt?.()
+                    : BATCH_PROMPT;
 
             if (typeof prompt !== 'string' || !prompt.trim()) {
                 throw new Error('The extraction prompt is missing.');
@@ -442,12 +462,16 @@ export default function PoeImportPanel({
                 `The backend sent all ${manifest.length} listed PDFs.\n` +
                 'The model reported complete inspection, but that claim does not ' +
                 'prove the extraction is correct. Check the PDFs yourself.\n\n' +
-                (mode === 'sample'
-                    ? 'The JSON has been placed in the sample importer below. ' +
-                    'Click Fill Sample Form, review it, then use Upload Data.'
-                    : 'Open the English or Chinese tab and click ' +
-                    '"Fill Form from Poe Draft" in the Questions toolbar. ' +
-                    'Review the result before Upload Data.') +
+(mode === 'generator'
+                    ? 'The draft is ready below. Review its warnings, then click ' +
+                    '"Apply PDF draft to editor". This replaces the current editor ' +
+                    'only after you confirm. Save it separately if you want to keep it.'
+                    : mode === 'sample'
+                        ? 'The JSON has been placed in the sample importer below. ' +
+                        'Click Fill Sample Form, review it, then use Upload Data.'
+                        : 'Open the English or Chinese tab and click ' +
+                        '"Fill Form from Poe Draft" in the Questions toolbar. ' +
+                        'Review the result before Upload Data.') +
                 (response.data.warnings?.length
                     ? '\n\nMODEL WARNINGS:\n' + response.data.warnings.join('\n')
                     : '')

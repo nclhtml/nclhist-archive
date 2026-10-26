@@ -8,6 +8,7 @@ import {
 } from "./api.js";
 
 import AssignmentProgress from "./AssignmentProgress.jsx";
+import AssignmentPerformance from "./AssignmentPerformance.jsx";
 
 function scheduleStatus(schedule) {
     if (schedule.cancelled) return "Cancelled";
@@ -105,8 +106,21 @@ export default function SavedAssignmentSchedules({
                                         </small>
                                     </td>
 
-                                    <td>
-                                        <div className="kt-row">
+<td>
+                                        <details className="kt-details">
+                                            <summary>
+                                                View assignment scores and reports
+                                            </summary>
+
+                                            <AssignmentPerformance
+                                                key={assignment.id}
+                                                assignmentId={assignment.id}
+                                                busy={busy}
+                                                run={run}
+                                            />
+                                        </details>
+
+                                        <div className="kt-row kt-spaced">
                                             {!assignmentClosed(assignment) && (
                                                 <button
                                                     type="button"

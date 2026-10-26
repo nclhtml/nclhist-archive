@@ -14,6 +14,10 @@ export function makePaperSource(label = "A") {
     description: "",
     type: "extract",
 
+    captionEnabled: false,
+    caption: "",
+    captionZh: "",
+
     extract: "",
 
     rows: 3,
@@ -392,12 +396,27 @@ export function paperSectionId(block, paper) {
     : paper.sections[0]?.id;
 }
 
+function keepSourceReferencesTogether(value) {
+  return String(value ?? "").replace(
+    /\b(Sources?)[ \t\u00A0]+([A-Z])\b/gi,
+    "$1\u00A0$2"
+  );
+}
+
 function Rich({
   text,
   automaticNumbers = false,
   language = "en"
 }) {
-  const parts = richParts(text).flatMap(part => {
+  /*
+   * automaticNumbers is enabled for question wording.
+   * Keep source references together in that wording.
+   */
+  const outputText = automaticNumbers
+    ? keepSourceReferencesTogether(text)
+    : text;
+
+  const parts = richParts(outputText).flatMap(part => {
     if (part.emphasized || !automaticNumbers) {
       return [part];
     }
@@ -601,7 +620,7 @@ function PreviewSource({ source, language = "en" }) {
         </div>
       )}
 
-      {source.type === "picture" && (
+{source.type === "picture" && (
         <div
           className="qp-preview-picture"
           style={{
@@ -611,6 +630,15 @@ function PreviewSource({ source, language = "en" }) {
           Picture space — paste your picture into Word
           after downloading
         </div>
+      )}
+
+      {source.captionEnabled && source.caption?.trim() && (
+        <p className="qp-source-caption">
+          <Rich
+            text={source.caption}
+            language={language}
+          />
+        </p>
       )}
     </div>
   );
@@ -635,8 +663,9 @@ export function localizePaper(paper, language = "en") {
       sources: section.sources.map(source => ({
         ...source,
 
-        description: source.descriptionZh || "",
+description: source.descriptionZh || "",
         extract: source.extractZh || "",
+        caption: source.captionZh || "",
 
         cells: Array.from(
           { length: source.rows },
@@ -688,11 +717,14 @@ function mergeChinesePaper(original, edited) {
           return {
             ...source,
 
-            description: oldSource?.description || "",
+description: oldSource?.description || "",
             descriptionZh: source.description,
 
             extract: oldSource?.extract || "",
             extractZh: source.extract,
+
+            caption: oldSource?.caption || "",
+            captionZh: source.caption || "",
 
             cells: resizedCells(
               oldSource?.cells,
@@ -1113,7 +1145,7 @@ Remove group
                       </label>
                     </div>
 
-                    <Field
+<Field
                       label="Source description — appears below SOURCE heading"
                       multiline
                       value={source.description}
@@ -1128,6 +1160,63 @@ Remove group
                         )
                       }
                     />
+
+                    <div className="qp-caption-settings">
+                      <label className="msg-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={source.captionEnabled === true}
+                          onChange={event => {
+                            const captionEnabled = event.target.checked;
+
+                            updateSource(
+                              section.id,
+                              source.id,
+                              current => ({
+                                ...current,
+                                captionEnabled
+                              })
+                            );
+                          }}
+                        />
+
+                        <span>
+                          {language === "zh"
+                            ? "在資料框下方加入註解"
+                            : "Add a caption below this source"}
+                        </span>
+                      </label>
+
+                      {source.captionEnabled && (
+                        <>
+                          <Field
+                            label={
+                              language === "zh"
+                                ? "中文註解 — 顯示在資料框外的下方"
+                                : "English caption — appears below and outside the source border"
+                            }
+                            multiline
+                            value={source.caption || ""}
+                            onChange={caption =>
+                              updateSource(
+                                section.id,
+                                source.id,
+                                current => ({
+                                  ...current,
+                                  caption
+                                })
+                              )
+                            }
+                          />
+
+                          <p className="msg-note">
+                            {language === "zh"
+                              ? "註解與資料框左邊對齊，使用單行行距，不加入額外空白行。中英文註解分開儲存。取消勾選只會隱藏註解，不會刪除文字。"
+                              : "The caption starts at the source border's left edge, uses single line spacing, and adds no extra blank lines. English and Chinese captions are stored separately. Unchecking hides the caption without deleting its text."}
+                          </p>
+                        </>
+                      )}
+                    </div>
 
                     {source.type === "table" && (
                       <>
@@ -1491,8 +1580,18 @@ English whole words “one” and “two” are
                           <div>{block.part}</div>
                           <div>{block.sub}</div>
 
-                          <div className="qp-preview-question-text">
-<Rich
+<div
+                            className="qp-preview-question-text"
+                            style={{
+                              textAlign:
+                                /\bSources?[ \t\u00A0]+[A-Z]\b/i.test(
+                                  block.paperQuestion || ""
+                                )
+                                  ? "left"
+                                  : "justify"
+                            }}
+                          >
+                            <Rich
                               text={block.paperQuestion || ""}
                               automaticNumbers
                               language={language}

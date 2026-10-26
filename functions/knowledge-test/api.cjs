@@ -265,20 +265,33 @@ function requireAdmin(actor) {
 async function permittedClasses(actor) {
     if (actor.superadmin) return null;
 
-    const snap = await db.collection("user_students").doc(actor.email).get();
+    const snap = await db.collection("user_students")
+        .doc(actor.email)
+        .get();
+
+    // Missing or invalid permissions must never grant access to everyone.
     if (!snap.exists) return [];
 
     const mapping = snap.data();
+
     if (
         mapping.role !== actor.role ||
         !Array.isArray(mapping.assignedClasses)
-    ) return [];
+    ) {
+        return [];
+    }
 
     const classes = [...new Set(
-        mapping.assignedClasses.filter(c => typeof c === "string" && c.length > 0)
+        mapping.assignedClasses
+            .filter(value => typeof value === "string")
+            .map(value => value.trim())
+            .filter(Boolean)
     )];
 
-    if (mapping.classAccessMode === "ownClass" && classes.length !== 1) {
+    if (
+        mapping.classAccessMode === "ownClass" &&
+        classes.length !== 1
+    ) {
         return [];
     }
 
@@ -317,7 +330,10 @@ async function rosterFor(actor) {
         const matches = profiles.get(email) || [];
         const allowed = actor.superadmin
             ? matches
-            : matches.filter(p => classes.includes(p.className));
+            : matches.filter(profile =>
+                typeof profile.className === "string" &&
+                classes.includes(profile.className.trim())
+            );
 
         if (!actor.superadmin && allowed.length === 0) return;
 
@@ -1153,8 +1169,98 @@ async function profileFor(actor, data) {
     };
 }
 
+async function assignmentPerformanceFor(actor, data) {
+    requireAdmin(actor);
+
+    const assignmentId = idOf(data.id);
+    const assignmentSnapshot = await assignments
+        .doc(assignmentId)
+        .get();
+
+    requireValue(
+        assignmentSnapshot.exists,
+        "Assignment not found.",
+        "not-found"
+    );
+
+    const assignment = {
+        ...assignmentSnapshot.data(),
+        id: assignmentSnapshot.id
+    };
+
+    requireValue(
+        typeof assignment.email === "string" &&
+        assignment.email.length > 0,
+        "This assignment has no valid student account.",
+        "failed-precondition"
+    );
+
+    // The student account comes from the saved assignment.
+    // A client cannot substitute another student's email.
+    const email = await authorizeTarget(actor, assignment.email);
+
+    // Administrator tests remain private to their owner,
+    // except that the superadmin may inspect them.
+    if (assignment.testOnly === true) {
+        requireValue(
+            actor.superadmin ||
+            (
+                assignment.email === actor.email &&
+                assignment.ownerUid === actor.uid
+            ),
+            "This administrator test belongs to another account.",
+            "permission-denied"
+        );
+    }
+
+    // Query only attempts linked to this exact assignment.
+    // Document-ID ordering provides a stable pagination order.
+    let query = attemptsRef(email)
+        .where("assignmentId", "==", assignmentId)
+        .orderBy(admin.firestore.FieldPath.documentId())
+        .limit(21);
+
+    if (data.cursor) {
+        const cursorSnapshot = await attemptsRef(email)
+            .doc(idOf(data.cursor))
+            .get();
+
+        requireValue(
+            cursorSnapshot.exists &&
+            cursorSnapshot.data().assignmentId === assignmentId,
+            "This assignment's history changed. Close and reopen its performance.",
+            "failed-precondition"
+        );
+
+        query = query.startAfter(cursorSnapshot);
+    }
+
+    const snapshot = await query.get();
+    const documents = snapshot.docs.slice(0, 20);
+
+    return {
+        email,
+        assignment: assignmentLifecycle.project(assignment),
+        records: documents.map(document =>
+            attemptSummary({
+                ...document.data(),
+                id: document.id
+            })
+        ),
+        next: snapshot.size > 20
+            ? documents[documents.length - 1].id
+            : null
+    };
+}
+
 async function adminOverview(actor) {
-    const roster = await rosterFor(actor);
+    requireAdmin(actor);
+
+    const [roster, permittedClassNames] = await Promise.all([
+        rosterFor(actor),
+        permittedClasses(actor)
+    ]);
+
     const records = [];
 
     for (let i = 0; i < roster.length; i += 100) {
@@ -1182,6 +1288,10 @@ async function adminOverview(actor) {
     );
 
     return {
+        scope: {
+            allStudents: actor.superadmin,
+            classes: permittedClassNames || []
+        },
         students: records,
         assignments: assignmentSnap.docs
             .map(document => ({
@@ -1785,6 +1895,9 @@ exports.knowledgeApi = functions
 
                 case "profile":
                     return await profileFor(actor, data);
+
+                case "assignmentPerformance":
+                    return await assignmentPerformanceFor(actor, data);
 
                 case "history": {
                     const email = await authorizeTarget(actor, data.email);

@@ -201,11 +201,31 @@ function validate(data) {
         fail("invalid-argument", "Invalid source type.");
       }
 
+if (
+        source.captionEnabled !== undefined &&
+        typeof source.captionEnabled !== "boolean"
+      ) {
+        fail(
+          "invalid-argument",
+          "Invalid source caption setting."
+        );
+      }
+
       const result = {
         label,
         type: source.type,
+
         description: countedText(
           source.description,
+          10000
+        ),
+
+        captionEnabled: source.captionEnabled === true,
+
+        caption: countedText(
+          source.caption === undefined
+            ? ""
+            : source.caption,
           10000
         )
       };
@@ -313,7 +333,7 @@ function validate(data) {
     }
 
     return {
-number: questionNumber(text(block.number, 100)),
+      number: questionNumber(text(block.number, 100)),
       part: parenthesized(text(block.part, 100)),
       sub: parenthesized(text(block.sub, 100)),
       marks: text(block.marks, 200),
@@ -338,7 +358,7 @@ number: questionNumber(text(block.number, 100)),
     );
   }
 
-let worksheet = {
+  let worksheet = {
     enabled: false
   };
 
@@ -363,21 +383,21 @@ let worksheet = {
         10
       );
 
-const oldNumber =
+      const oldNumber =
         rawWorksheet.quizNumber === undefined
           ? "4"
           : text(
-              rawWorksheet.quizNumber,
-              100
-            ).trim();
+            rawWorksheet.quizNumber,
+            100
+          ).trim();
 
       const assessmentEn = text(
         rawWorksheet.assessmentEn === undefined
           ? (
-              oldNumber
-                ? `Quiz ${oldNumber}`
-                : "Quiz"
-            )
+            oldNumber
+              ? `Quiz ${oldNumber}`
+              : "Quiz"
+          )
           : rawWorksheet.assessmentEn,
         200
       ).trim();
@@ -385,10 +405,10 @@ const oldNumber =
       const assessmentZh = text(
         rawWorksheet.assessmentZh === undefined
           ? (
-              oldNumber
-                ? `小測${oldNumber}`
-                : "小測"
-            )
+            oldNumber
+              ? `小測${oldNumber}`
+              : "小測"
+          )
           : rawWorksheet.assessmentZh,
         200
       ).trim();
@@ -432,7 +452,7 @@ const oldNumber =
         );
       }
 
-worksheet = {
+      worksheet = {
         enabled: true,
         academicYear,
         level,
@@ -514,7 +534,7 @@ function runs(value, {
         );
       }
 
-richParts(
+      richParts(
         line,
         automaticNumbers,
         language
@@ -544,17 +564,22 @@ richParts(
   return result.length
     ? result
     : [
-        new TextRun({
-          text: "",
-          font: FONT,
-          size: 24
-        })
-      ];
+      new TextRun({
+        text: "",
+        font: FONT,
+        size: 24
+      })
+    ];
 }
 
 function paragraph(value = "", options = {}) {
   return new Paragraph({
-    keepNext: options.keepNext || false,
+    keepNext: options.keepNext === true,
+    keepLines: true,
+
+    alignment: options.justify
+      ? AlignmentType.JUSTIFIED
+      : AlignmentType.LEFT,
 
     indent: options.indented
       ? { left: NUMBER_WIDTH }
@@ -640,7 +665,7 @@ function table(widths, rows, visible = false) {
     alignment: AlignmentType.LEFT,
 
     indent: {
-      size: NUMBER_WIDTH,
+      size: 0,
       type: WidthType.DXA
     },
 
@@ -709,6 +734,64 @@ function scaledWidths(weights) {
   return widths;
 }
 
+/*
+ * One complete source or complete question group goes
+ * inside one outer row.
+ *
+ * Word can move the entire row to the next page instead
+ * of separating its heading, description and contents.
+ *
+ * An item taller than a whole page cannot remain intact.
+ */
+function unbrokenGroup(children) {
+  return new Table({
+    alignment: AlignmentType.LEFT,
+
+    indent: {
+      size: NUMBER_WIDTH,
+      type: WidthType.DXA
+    },
+
+    width: {
+      size: CONTENT_WIDTH,
+      type: WidthType.DXA
+    },
+
+    columnWidths: [CONTENT_WIDTH],
+    layout: TableLayoutType.FIXED,
+
+    borders: {
+      ...borders(false),
+      insideHorizontal: noBorder,
+      insideVertical: noBorder
+    },
+
+    margins: {
+      top: 0,
+      bottom: 0,
+      left: 0,
+      right: 0
+    },
+
+    rows: [
+      new TableRow({
+        cantSplit: true,
+
+        children: [
+          cell(
+            CONTENT_WIDTH,
+
+            /*
+             * A paragraph is required after a nested table.
+             */
+            [...children, tinySeparator()]
+          )
+        ]
+      })
+    ]
+  });
+}
+
 function tableSource(source, language) {
   const widths = scaledWidths(source.widths);
 
@@ -727,6 +810,7 @@ function tableSource(source, language) {
             [
               paragraph(value, {
                 language,
+                justify: true,
                 bold:
                   source.headerRow && rowIndex === 0
               })
@@ -765,14 +849,15 @@ function extractSource(source, language) {
 
             paragraphs.length
               ? paragraphs.map((value, index) =>
-                  paragraph(value, {
-                    language,
-                    after:
-                      index < paragraphs.length - 1
-                        ? 240
-                        : 0
-                  })
-                )
+                paragraph(value, {
+                  language,
+                  justify: true,
+                  after:
+                    index < paragraphs.length - 1
+                      ? 240
+                      : 0
+                })
+              )
               : [paragraph("")],
 
             {
@@ -843,17 +928,41 @@ function questionMarks(value, language) {
   return `(${count}\u00A0${count === 1 ? "mark" : "marks"})`;
 }
 
+/*
+ * Keep the word "Source" or "Sources" attached to its
+ * first label, for example Source A or Sources A.
+ *
+ * Apply only to output, not to the stored editor text.
+ */
+function keepSourceReferencesTogether(value) {
+  return String(value ?? "").replace(
+    /\b(Sources?)[ \t\u00A0]+([A-Z])\b/gi,
+    "$1\u00A0$2"
+  );
+}
+
 function questionParagraphs(block, width, language) {
   const lines = block.paperQuestion
     .split(/\r\n|\r|\n/);
 
   const marks = questionMarks(block.marks, language);
 
+  /*
+   * Left-align questions containing English source
+   * references. This avoids stretching a short line
+   * when the complete "Source A" moves to the next line.
+   */
+  const hasSourceReference = /\bSources?[ \t\u00A0]+[A-Z]\b/i
+    .test(block.paperQuestion);
+
   return lines.map((line, index) => {
-    const children = runs(line, {
-      language,
-      automaticNumbers: true
-    });
+    const children = runs(
+      keepSourceReferencesTogether(line),
+      {
+        language,
+        automaticNumbers: true
+      }
+    );
 
     if (index === lines.length - 1 && marks) {
       children.push(
@@ -873,12 +982,25 @@ function questionParagraphs(block, width, language) {
       );
     }
 
-    return new Paragraph({
+return new Paragraph({
+      alignment: hasSourceReference
+        ? AlignmentType.LEFT
+        : AlignmentType.JUSTIFIED,
+
+      keepLines: true,
+
+      /*
+       * The final marks run follows this right tab.
+       * Marks stay together because questionMarks()
+       * uses nonbreaking spaces.
+       *
+       * If there is insufficient room on the final text
+       * line, Word may place the marks on the next line,
+       * still at the right edge.
+       */
       tabStops: [
         {
           type: TabStopType.RIGHT,
-
-          // Keep the tab inside the actual text area.
           position: width - 120
         }
       ],
@@ -924,12 +1046,12 @@ function questionsTable(blocks, language) {
           ...(
             hasSub
               ? [
-                  cell(
-                    subWidth,
-                    [paragraph(block.sub, { language })],
-                    { bottom: 240 }
-                  )
-                ]
+                cell(
+                  subWidth,
+                  [paragraph(block.sub, { language })],
+                  { bottom: 240 }
+                )
+              ]
               : []
           ),
 
@@ -963,19 +1085,19 @@ function worksheetHeading(
     S6: "中六級"
   }[worksheet.level];
 
-const baseTitle = language === "zh"
+  const baseTitle = language === "zh"
     ? [
-        worksheet.academicYear,
-        "歷史科",
-        chineseLevel,
-        worksheet.assessmentZh
-      ].filter(Boolean).join(" ")
+      worksheet.academicYear,
+      "歷史科",
+      chineseLevel,
+      worksheet.assessmentZh
+    ].filter(Boolean).join(" ")
     : [
-        worksheet.academicYear,
-        "History",
-        worksheet.level,
-        worksheet.assessmentEn
-      ].filter(Boolean).join(" ");
+      worksheet.academicYear,
+      "History",
+      worksheet.level,
+      worksheet.assessmentEn
+    ].filter(Boolean).join(" ");
 
   const title = topic
     ? `${baseTitle} - ${topic}`
@@ -1028,7 +1150,7 @@ const baseTitle = language === "zh"
     { language }
   );
 
-const scoreParagraph = new Paragraph({
+  const scoreParagraph = new Paragraph({
     alignment: AlignmentType.RIGHT,
 
     spacing: {
@@ -1087,7 +1209,7 @@ const scoreParagraph = new Paragraph({
     },
 
     rows: [
-new TableRow({
+      new TableRow({
         cantSplit: true,
 
         /*
@@ -1104,7 +1226,7 @@ new TableRow({
             borders: borders(false),
             verticalAlign: VerticalAlign.TOP,
 
-margins: {
+            margins: {
               top: 0,
               bottom: 0,
               left: 0,
@@ -1142,10 +1264,10 @@ margins: {
               type: WidthType.DXA
             },
 
-/*
-             * Slightly thicker border for the score box
-             * only. Source-table borders are unchanged.
-             */
+            /*
+                         * Slightly thicker border for the score box
+                         * only. Source-table borders are unchanged.
+                         */
             borders: {
               top: {
                 style: BorderStyle.SINGLE,
@@ -1232,10 +1354,10 @@ function buildQuestionPaper(data) {
       block => block.number.trim()
     )?.number || "";
 
-/*
-     * The worksheet heading already contains the topic.
-     * Do not repeat group topics below it when enabled.
-     */
+    /*
+         * The worksheet heading already contains the topic.
+         * Do not repeat group topics below it when enabled.
+         */
     const topic = worksheet.enabled
       ? ""
       : section.topic.trim();
@@ -1283,12 +1405,12 @@ function buildQuestionPaper(data) {
 
           indent: mainNumber
             ? {
-                left: NUMBER_WIDTH,
-                hanging: NUMBER_WIDTH
-              }
+              left: NUMBER_WIDTH,
+              hanging: NUMBER_WIDTH
+            }
             : {
-                left: NUMBER_WIDTH
-              },
+              left: NUMBER_WIDTH
+            },
 
           tabStops: [
             {
@@ -1323,7 +1445,7 @@ function buildQuestionPaper(data) {
     }
 
     section.sources.forEach(source => {
-      children.push(
+      const sourceChildren = [
         paragraph(
           language === "zh"
             ? `資料${source.label}`
@@ -1332,40 +1454,76 @@ function buildQuestionPaper(data) {
           {
             language,
             bold: true,
-            indented: true,
             before: 280,
             after: 280,
             keepNext: true
           }
         )
-      );
+      ];
 
       if (source.description.trim()) {
-        children.push(
+        sourceChildren.push(
           paragraph(source.description, {
             language,
-            indented: true,
+            justify: true,
             after: 200,
             keepNext: true
           })
         );
       }
 
-      if (source.type === "table") {
-        children.push(tableSource(source, language));
+if (source.type === "table") {
+        sourceChildren.push(
+          tableSource(source, language)
+        );
       } else if (source.type === "extract") {
-        children.push(extractSource(source, language));
+        sourceChildren.push(
+          extractSource(source, language)
+        );
       } else {
-        children.push(pictureSource(source));
+        sourceChildren.push(
+          pictureSource(source)
+        );
       }
 
-      children.push(tinySeparator());
+      /*
+       * The caption follows the source table directly.
+       *
+       * It is outside the source border but inside the
+       * same non-splitting source group.
+       *
+       * No indentation: its text starts at the source
+       * border's left edge.
+       *
+       * The paragraph helper uses single line spacing.
+       * No extra before/after spacing is added.
+       */
+if (
+        source.captionEnabled &&
+        source.caption.trim()
+      ) {
+        sourceChildren.push(
+          paragraph(source.caption, {
+            language,
+            before: 80, // 4 pt
+            after: 0
+          })
+        );
+      }
+
+      children.push(
+        unbrokenGroup(sourceChildren),
+        tinySeparator()
+      );
     });
 
     if (questions.length) {
       children.push(
-        paragraph("", { after: 240 }),
-        questionsTable(questions, language),
+        unbrokenGroup([
+          paragraph("", { after: 240 }),
+          questionsTable(questions, language)
+        ]),
+
         tinySeparator()
       );
     }

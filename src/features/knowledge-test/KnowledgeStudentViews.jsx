@@ -679,9 +679,9 @@ export function StudentPracticeHome({
                 {home.actor.admin && (
                     <div className="kt-preset-create">
                         <label className="kt-field">
-                            {tr(
-                                "Save this mix as a shared preset",
-                                "將此課題組合儲存為共用預設"
+{tr(
+                                "Save this mix as my private topic preset",
+                                "將此課題組合儲存為我的私人課題預設"
                             )}
 
                             <input
@@ -718,9 +718,9 @@ export function StudentPracticeHome({
             {!!home.presets.length && (
                 <section className="kt-card">
                     <h2>
-                        {tr(
-                            "Teacher-created practice groups",
-                            "老師設定的課題組合"
+{tr(
+                            "My private topic presets",
+                            "我的私人課題預設"
                         )}
                     </h2>
 

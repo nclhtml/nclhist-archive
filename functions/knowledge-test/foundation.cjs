@@ -783,9 +783,20 @@ module.exports = function makeFoundation({
 
             topics = cleanTopics(assigned.topics);
             title = assigned.title;
-        } else if (data.presetId) {
+} else if (data.presetId) {
             const snap = await presets.doc(idOf(data.presetId)).get();
-            requireValue(snap.exists, "Preset not found.", "not-found");
+
+            requireValue(
+                snap.exists,
+                "Preset not found.",
+                "not-found"
+            );
+
+            requireValue(
+                snap.data().creator === actor.email,
+                "This topic preset belongs to another account.",
+                "permission-denied"
+            );
 
             topics = cleanTopics(snap.data().topics);
             title = snap.data().name;

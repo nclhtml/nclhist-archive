@@ -262,40 +262,134 @@ function requireAdmin(actor) {
     requireValue(actor.admin, "Administrator access required.", "permission-denied");
 }
 
-async function permittedClasses(actor) {
-    if (actor.superadmin) return null;
+async function inspectionActorFor(actualActor, data) {
+    const requestedEmail = data.effectiveEmail
+        ? emailOf(data.effectiveEmail)
+        : actualActor.email;
 
-    const snap = await db.collection("user_students")
-        .doc(actor.email)
+    // Ordinary requests keep their actual authenticated identity.
+    if (requestedEmail === actualActor.email) {
+        return actualActor;
+    }
+
+    // Never trust the browser's displayed role or debug identity.
+    requireValue(
+        actualActor.superadmin,
+        "Only the superadmin may inspect another account.",
+        "permission-denied"
+    );
+
+    const roleSnapshot = await db.collection("user_roles")
+        .doc(requestedEmail)
         .get();
 
-    // Missing or invalid permissions must never grant access to everyone.
-    if (!snap.exists) return [];
+    requireValue(
+        roleSnapshot.exists,
+        "This account does not currently have website access.",
+        "permission-denied"
+    );
 
-    const mapping = snap.data();
+    const role = roleSnapshot.data().role;
 
-    if (
-        mapping.role !== actor.role ||
-        !Array.isArray(mapping.assignedClasses)
-    ) {
-        return [];
+    requireValue(
+        typeof role === "string" && role.length > 0,
+        "This account has no valid saved role.",
+        "failed-precondition"
+    );
+
+    // Private student-recipient groups are stored under the owner's
+    // Firebase UID. Resolve the REAL UID belonging to the inspected
+    // account; never use the superadmin's UID for its groups.
+    let account;
+
+    try {
+        account = await admin.auth().getUserByEmail(requestedEmail);
+    } catch (error) {
+        if (error.code === "auth/user-not-found") {
+            fail(
+                "This account has not created a Firebase login yet. Ask the account owner to sign in once before inspecting it.",
+                "failed-precondition"
+            );
+        }
+
+        throw error;
     }
 
-    const classes = [...new Set(
-        mapping.assignedClasses
-            .filter(value => typeof value === "string")
-            .map(value => value.trim())
-            .filter(Boolean)
-    )];
+    return {
+        email: requestedEmail,
+        uid: account.uid,
+        role,
+        admin: role === "admin",
+        superadmin: false,
+        impersonating: true,
+        readOnly: true
+    };
+}
 
-    if (
-        mapping.classAccessMode === "ownClass" &&
-        classes.length !== 1
-    ) {
-        return [];
-    }
+function requireInspectionReadAction(actor, action) {
+    if (!actor.impersonating) return;
 
-    return classes;
+    const readableActions = new Set([
+        "home",
+        "overview",
+        "profile",
+        "history",
+        "attempt",
+        "assignmentPerformance",
+        "studentGroupList",
+        "scheduleList",
+        "bank"
+    ]);
+
+    requireValue(
+        readableActions.has(action),
+        "Read-only inspection: you can view this account's permitted students, private groups, presets, assignments and reports, but you cannot save changes, assign work, start exercises or submit answers. Stop Debug Mode to make changes as yourself.",
+        "permission-denied"
+    );
+}
+
+async function permittedClasses(actor) {
+    requireAdmin(actor);
+
+    // null means unrestricted roster access for the superadmin.
+    if (actor.superadmin) return null;
+
+    // Use the SAME class ownership source as Record.jsx.
+    // An administrator's student-access mapping in user_students
+    // is not the source of their teaching-class ownership.
+    const snapshot = await db.collection("settings")
+        .doc("classes")
+        .get();
+
+    const savedList = snapshot.data()?.list;
+
+    // Missing or malformed class metadata grants no classes.
+    if (!Array.isArray(savedList)) return [];
+
+    const ownedClassNames = savedList
+        .map(classInfo =>
+            typeof classInfo === "string"
+                ? {
+                    name: classInfo,
+                    owner: SUPER_ADMIN,
+                    isArchived: false
+                }
+                : classInfo
+        )
+        .filter(classInfo =>
+            classInfo &&
+            typeof classInfo.name === "string" &&
+            classInfo.name.length > 0 &&
+            !classInfo.isArchived &&
+            String(classInfo.owner || "")
+                .toLowerCase()
+                .trim() === actor.email
+        )
+        // Preserve the EXACT saved class identifier.
+        // Do not trim, normalize or remove invisible characters.
+        .map(classInfo => classInfo.name);
+
+    return [...new Set(ownedClassNames)];
 }
 
 async function rosterFor(actor) {
@@ -328,11 +422,11 @@ async function rosterFor(actor) {
         if (role === "admin" || email === SUPER_ADMIN) return;
 
         const matches = profiles.get(email) || [];
-        const allowed = actor.superadmin
+const allowed = actor.superadmin
             ? matches
             : matches.filter(profile =>
                 typeof profile.className === "string" &&
-                classes.includes(profile.className.trim())
+                classes.includes(profile.className)
             );
 
         if (!actor.superadmin && allowed.length === 0) return;
@@ -686,10 +780,10 @@ async function historyFor(email, cursor) {
 }
 
 async function homeFor(actor) {
-    const [catalog, summary, presetSnap, assignmentSnap] = await Promise.all([
+const [catalog, summary, presetSnap, assignmentSnap] = await Promise.all([
         catalogRef.get(),
         userRef(actor.email).get(),
-        presets.get(),
+        presets.where("creator", "==", actor.email).get(),
         assignments.where("email", "==", actor.email).get()
     ]);
 
@@ -740,9 +834,21 @@ async function startAttempt(actor, data) {
 
         selectedTopics = assignment.topics;
         title = assignment.title;
-    } else if (data.presetId) {
+} else if (data.presetId) {
         const snap = await presets.doc(idOf(data.presetId)).get();
-        requireValue(snap.exists, "Preset not found.", "not-found");
+
+        requireValue(
+            snap.exists,
+            "Preset not found.",
+            "not-found"
+        );
+
+        requireValue(
+            snap.data().creator === actor.email,
+            "This topic preset belongs to another account.",
+            "permission-denied"
+        );
+
         selectedTopics = cleanTopics(snap.data().topics);
         title = snap.data().name;
     } else {
@@ -1365,9 +1471,21 @@ async function createAssignments(actor, data) {
     let selectedTopics;
     let title;
 
-    if (data.presetId) {
+if (data.presetId) {
         const preset = await presets.doc(idOf(data.presetId)).get();
-        requireValue(preset.exists, "Preset not found.");
+
+        requireValue(
+            preset.exists,
+            "Preset not found.",
+            "not-found"
+        );
+
+        requireValue(
+            preset.data().creator === actor.email,
+            "This topic preset belongs to another account.",
+            "permission-denied"
+        );
+
         selectedTopics = cleanTopics(preset.data().topics);
         title = preset.data().name;
     } else {
@@ -1750,14 +1868,29 @@ exports.knowledgeApi = functions
     .runWith({ timeoutSeconds: 120, memory: "512MB" })
     .https.onCall(async (data, context) => {
         try {
-            requireValue(data && typeof data === "object", "Invalid request.");
-            const actor = await actorFor(context);
+requireValue(
+                data &&
+                typeof data === "object" &&
+                !Array.isArray(data),
+                "Invalid request."
+            );
+
+            // Authentication always comes from the REAL Firebase login.
+            const actualActor = await actorFor(context);
 
             requireValue(
-                !data.expectedUid || data.expectedUid === actor.uid,
+                !data.expectedUid ||
+                data.expectedUid === actualActor.uid,
                 "The signed-in account changed. Sign in again with the account that owns this exercise.",
                 "failed-precondition"
             );
+
+            // Only the authenticated superadmin can request another
+            // account's read-only Knowledge Test view.
+            const actor = await inspectionActorFor(actualActor, data);
+
+            // Block mutations centrally before any action handler runs.
+            requireInspectionReadAction(actor, data.action);
 
             switch (data.action) {
                 case "studentGroupList":

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useLayoutEffect, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "../../firebase.js";
 import { useAuth } from "../../main.jsx";
@@ -20,6 +20,7 @@ import { localizeQuestion, localizedTopic } from "./quizLanguage.js";
 
 import {
     knowledgeApi,
+    setKnowledgeInspectionEmail,
     TOPICS,
     topicName,
     accuracy,
@@ -656,7 +657,7 @@ function PracticeHome({ home, busy, run, start, refresh }) {
                 {home.actor.admin && (
                     <div className="kt-preset-create">
                         <label className="kt-field">
-                            Save this mix as a shared preset
+Save this mix as my private topic preset
                             <input
                                 value={presetName}
                                 maxLength={100}
@@ -897,28 +898,43 @@ function AdminPanel({ home, busy, run, onProfile }) {
                     ) : (
                         <div className="kt-notice">
                             <p>
-                                Only students in your currently assigned
-                                classes are shown.
+                                Only website-authorized students in active
+                                classes owned by your account are shown.
+                                Class ownership comes from Class &amp; Record
+                                Management.
                             </p>
 
                             <p>
-                                <strong>
-                                    Classes allowed by the server:
-                                </strong>
+                                <strong>Your active classes:</strong>
                                 {" "}
                                 {overview.scope?.classes?.length
-                                    ? overview.scope.classes.join(", ")
+                                    ? overview.scope.classes
+                                        .map(name => name.replace(/\u200B/g, ""))
+                                        .join(", ")
                                     : "None"}
                             </p>
 
                             {!overview.scope?.classes?.length && (
                                 <p>
-                                    Your account has no valid class mapping
-                                    for this feature. Ask the superadmin to
-                                    check your assigned classes.
-                                    Access has not been expanded to all students.
+                                    No active classes owned by your account
+                                    were found. Create a class in Class &amp;
+                                    Record Management and import its students.
+                                    Students also need website access granted
+                                    separately by the superadmin.
                                 </p>
                             )}
+
+                            {!!overview.scope?.classes?.length &&
+                                !overview.students.length && (
+                                    <p>
+                                        Your classes were found, but no eligible
+                                        student accounts matched. Check that
+                                        your class students have linked emails,
+                                        that those emails have website access,
+                                        and that the students are not deleted
+                                        or dummy records.
+                                    </p>
+                                )}
                         </div>
                     )}
 
@@ -1491,9 +1507,26 @@ export default function KnowledgeTest() {
     const [profileEmail, setProfileEmail] = useState(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
-    const [authUid, setAuthUid] = useState(
+const [authUid, setAuthUid] = useState(
         () => auth.currentUser?.uid || null
     );
+
+    // Configure Knowledge Test before its data-loading effects run.
+    // Other website features and the real Firebase login are unchanged.
+    useLayoutEffect(() => {
+        setKnowledgeInspectionEmail(
+            user?.isImpersonating
+                ? user.email
+                : ""
+        );
+
+        return () => {
+            setKnowledgeInspectionEmail("");
+        };
+    }, [
+        user?.isImpersonating,
+        user?.email
+    ]);
 
     useEffect(() => {
         return onAuthStateChanged(auth, current => {
@@ -1527,20 +1560,20 @@ export default function KnowledgeTest() {
         setHome(result);
     };
 
-    useEffect(() => {
+useEffect(() => {
         setHome(null);
         setAttempt(null);
         setReport(null);
         setProfileEmail(null);
         setTab("practice");
+        setError("");
 
         if (
             authLoading ||
             !authUid ||
             !realUser?.isAuthorized ||
             String(auth.currentUser?.email || "").toLowerCase().trim() !==
-            String(realUser?.email || "").toLowerCase().trim() ||
-            user?.isImpersonating
+            String(realUser?.email || "").toLowerCase().trim()
         ) return undefined;
 
         let active = true;
@@ -1561,19 +1594,28 @@ export default function KnowledgeTest() {
         authUid,
         realUser?.email,
         realUser?.isAuthorized,
-        user?.isImpersonating
+        user?.isImpersonating,
+        user?.email
     ]);
 
-    const start = result => {
+const start = result => {
         if (!result) return;
 
         if (result.status === "submitted") {
             setAttempt(null);
             setReport(result);
-        } else {
-            setReport(null);
-            setAttempt(result);
+            return;
         }
+
+        if (user?.isImpersonating || home?.actor?.readOnly) {
+            setError(
+                "Read-only inspection: unfinished exercises cannot be opened in the answer editor. You can inspect submitted reports through the progress or assignment-performance views."
+            );
+            return;
+        }
+
+        setReport(null);
+        setAttempt(result);
     };
 
     const exit = async () => {
@@ -1624,37 +1666,17 @@ export default function KnowledgeTest() {
                 <StudentReport
                     key={report.id}
                     attempt={report}
-                    onBack={() => run(async () => {
+onBack={() => run(async () => {
                         setReport(null);
-
-                        if (!user?.isImpersonating) {
-                            await refreshHome();
-                        }
+                        await refreshHome();
                     })}
                 />
             );
         }
 
-        if (user?.isImpersonating) {
-            return (
-                <>
-                    <p className="kt-notice">
-                        {tr(
-                            "Read-only student inspection. Starting exercises, submitting answers and administrator changes are disabled while impersonating.",
-                            "目前為唯讀學生檢視模式，不能開始練習、提交答案或進行管理員修改。"
-                        )}
-                    </p>
-
-                    <StudentProfile
-                        key={user.email}
-                        email={user.email}
-                        busy={busy}
-                        run={run}
-                        onReport={setReport}
-                    />
-                </>
-            );
-        }
+// Inspected accounts now use their normal Knowledge Test interface.
+        // The backend supplies their actual role and permitted data.
+        // All mutations are blocked centrally during inspection.
 
         if (attempt) {
             return (
@@ -1753,15 +1775,20 @@ export default function KnowledgeTest() {
                                 {tr("Students & assignments", "學生及功課")}
                             </button>
 
-                            <button
-                                type="button"
-                                className={
-                                    tab === "assignment-test" ? "active" : ""
-                                }
-                                onClick={() => setTab("assignment-test")}
-                            >
-                                {tr("Test assigned practice", "測試指定練習")}
-                            </button>
+{!home.actor.readOnly && (
+                                <button
+                                    type="button"
+                                    className={
+                                        tab === "assignment-test" ? "active" : ""
+                                    }
+                                    onClick={() => setTab("assignment-test")}
+                                >
+                                    {tr(
+                                        "Test assigned practice",
+                                        "測試指定練習"
+                                    )}
+                                </button>
+                            )}
 
                             <button
                                 type="button"
@@ -1784,10 +1811,10 @@ export default function KnowledgeTest() {
                     />
                 )}
 
-                {tab === "progress" && (
+{tab === "progress" && (
                     <StudentProfile
-                        key={realUser.email}
-                        email={realUser.email}
+                        key={home.actor.email}
+                        email={home.actor.email}
                         busy={busy}
                         run={run}
                         onReport={setReport}
@@ -1803,7 +1830,9 @@ export default function KnowledgeTest() {
                     />
                 )}
 
-                {tab === "assignment-test" && home.actor.admin && (
+{tab === "assignment-test" &&
+                    home.actor.admin &&
+                    !home.actor.readOnly && (
                     <AdminAssignmentTest
                         home={home}
                         busy={busy}
@@ -1841,6 +1870,39 @@ export default function KnowledgeTest() {
                     )}
                 </p>
             </header>
+
+{user?.isImpersonating && (
+                <section className="kt-notice">
+                    <strong>
+                        {tr(
+                            "Read-only Knowledge Test inspection",
+                            "歷史知識測驗唯讀檢視模式"
+                        )}
+                    </strong>
+
+                    <p>
+                        {tr(
+                            "Inspecting account: ",
+                            "正在檢視帳戶："
+                        )}
+                        {home?.actor?.email || user.email}
+                    </p>
+
+                    <p>
+                        {tr(
+                            "The page uses this account's saved role, owned classes, permitted students, private groups and private topic presets. You can view saved assignments and reports. Saving changes, assigning work, starting exercises, submitting answers and cancelling work are blocked.",
+                            "此頁會使用該帳戶的已儲存角色、所擁有班別、可管理學生、私人學生群組及私人課題預設。你可以查看已儲存功課及報告，但不能儲存修改、指派功課、開始練習、提交答案或取消功課。"
+                        )}
+                    </p>
+
+                    <p>
+                        {tr(
+                            "Stop Debug Mode using the existing bug-icon menu to return to your own account.",
+                            "請使用現有的除錯圖示選單停止 Debug Mode，以返回你自己的帳戶。"
+                        )}
+                    </p>
+                </section>
+            )}
 
             {error && (
                 <div className="kt-error" role="alert">

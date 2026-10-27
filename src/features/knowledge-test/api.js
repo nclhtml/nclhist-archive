@@ -7,6 +7,24 @@ const callable = httpsCallable(
   { timeout: 120000 }
 );
 
+// This controls ONLY Knowledge Test requests.
+// It does not change the Firebase login or other website features.
+let inspectionEmail = "";
+let inspectionRevision = 0;
+
+function cleanEmail(value) {
+  return String(value || "").toLowerCase().trim();
+}
+
+export function setKnowledgeInspectionEmail(value = "") {
+  const next = cleanEmail(value);
+
+  if (next === inspectionEmail) return;
+
+  inspectionEmail = next;
+  inspectionRevision += 1;
+}
+
 export async function knowledgeApi(action, payload = {}) {
   const account = auth.currentUser;
 
@@ -16,7 +34,28 @@ export async function knowledgeApi(action, payload = {}) {
     );
   }
 
+  // Freeze the requested view for this particular request.
+  const requestedInspectionEmail = inspectionEmail;
+  const requestedInspectionRevision = inspectionRevision;
+
   const expectedUid = payload.expectedUid || account.uid;
+
+  const checkRequestIdentity = () => {
+    if (auth.currentUser?.uid !== expectedUid) {
+      throw new Error(
+        "The signed-in account changed. Reload the page before continuing."
+      );
+    }
+
+    if (
+      inspectionRevision !== requestedInspectionRevision ||
+      inspectionEmail !== requestedInspectionEmail
+    ) {
+      throw new Error(
+        "The inspected account changed. The previous account's response was not displayed."
+      );
+    }
+  };
 
   if (account.uid !== expectedUid) {
     throw new Error(
@@ -24,27 +63,23 @@ export async function knowledgeApi(action, payload = {}) {
     );
   }
 
-  // Refresh an expired token through Firebase before making the request.
   await account.getIdToken();
 
-  if (auth.currentUser?.uid !== expectedUid) {
-    throw new Error(
-      "The signed-in account changed. The previous exercise was not opened under the new account."
-    );
-  }
+  checkRequestIdentity();
 
   const result = await callable({
     ...payload,
     action,
-    expectedUid
+    expectedUid,
+
+    // Explicitly overwrite any payload value.
+    // The server independently checks whether the REAL login
+    // is allowed to request this account.
+    effectiveEmail:
+      requestedInspectionEmail || cleanEmail(account.email)
   });
 
-  // Do not display a response belonging to the previous account.
-  if (auth.currentUser?.uid !== expectedUid) {
-    throw new Error(
-      "The signed-in account changed while the request was running. Please reload the page."
-    );
-  }
+  checkRequestIdentity();
 
   return result.data;
 }

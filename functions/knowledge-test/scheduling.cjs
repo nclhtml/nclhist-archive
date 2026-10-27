@@ -180,8 +180,19 @@ module.exports = function makeScheduling({
                 "Invalid preset ID."
             );
 
-            const preset = await presets.doc(data.presetId).get();
-            requireValue(preset.exists, "Preset not found.");
+const preset = await presets.doc(data.presetId).get();
+
+            requireValue(
+                preset.exists,
+                "Preset not found.",
+                "not-found"
+            );
+
+            requireValue(
+                preset.data().creator === actor.email,
+                "This topic preset belongs to another account.",
+                "permission-denied"
+            );
 
             presetTopics = cleanTopics(preset.data().topics);
 
@@ -304,13 +315,17 @@ module.exports = function makeScheduling({
 
         // Reconcile older schedules using their already-recorded totals.
         // Process a few at a time to avoid launching every transaction at once.
-        const candidates = initial.docs.filter(document => {
-            const schedule = document.data();
+// Normal administrator requests may reconcile older schedules.
+        // Read-only inspection must not modify closure metadata or jobs.
+        const candidates = actor.impersonating
+            ? []
+            : initial.docs.filter(document => {
+                const schedule = document.data();
 
-            return !schedule.cancelled &&
-                !schedule.closed &&
-                !schedule.ended;
-        });
+                return !schedule.cancelled &&
+                    !schedule.closed &&
+                    !schedule.ended;
+            });
 
         for (let index = 0; index < candidates.length; index += 5) {
             await Promise.all(

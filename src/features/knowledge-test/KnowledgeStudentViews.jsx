@@ -15,6 +15,7 @@ import {
 } from "./quizLanguage.js";
 
 import AssignmentPriority from "./AssignmentPriority.jsx";
+import { QuestionIssueButton } from "./KnowledgeQuestionReports.jsx";
 
 function useText() {
     const { language } = useLanguage();
@@ -376,16 +377,27 @@ export function StudentReport({ attempt, onBack }) {
 
             {attempt.results
                 .filter(result => showAll || !result.correct)
-                .map(result => (
-                    <Review
-                        key={result.id}
-                        question={attempt.questions.find(question =>
-                            question.id === result.id
-                        )}
-                        submitted={result.submitted}
-                        correct={result.correct}
-                    />
-                ))}
+                .map(result => {
+                    const question = attempt.questions.find(
+                        item => item.id === result.id
+                    );
+
+                    if (!question) return null;
+
+                    return (
+                        <Review
+                            key={result.id}
+                            question={question}
+                            submitted={result.submitted}
+                            correct={result.correct}
+                        >
+                            <QuestionIssueButton
+                                attempt={attempt}
+                                question={question}
+                            />
+                        </Review>
+                    );
+                })}
         </section>
     );
 }

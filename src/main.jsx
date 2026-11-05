@@ -2,7 +2,20 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc, collection, getDocs, addDoc, query, orderBy, limit, updateDoc, setDoc, onSnapshot } from "firebase/firestore";
+import {
+  doc,
+  getDoc,
+  collection,
+  getDocs,
+  addDoc,
+  query,
+  where,
+  orderBy,
+  limit,
+  updateDoc,
+  setDoc,
+  onSnapshot
+} from "firebase/firestore";
 import { Loader2, ShieldAlert, Users, X, Bell, Bug, ChevronDown, Globe, LogOut } from 'lucide-react';
 
 // Import your components and firebase
@@ -37,6 +50,9 @@ import './archive-responsive.css';
 import './dashboard-record-responsive.css';
 import usePhoneLayout from './usePhoneLayout.js';
 import SiteNavigation from './SiteNavigation.jsx';
+import {
+  KnowledgeResolutionNotice
+} from './features/knowledge-test/KnowledgeQuestionReports.jsx';
 
 const SUPER_ADMIN = "clng@ktls.edu.hk";
 
@@ -410,33 +426,66 @@ const Layout = ({ children }) => {
 
   const fetchAdminLogs = async () => {
     setLoadingAdminLogs(true);
+
     try {
       const threeDaysAgo = new Date();
       threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
 
-      const logsQuery = query(collection(db, "admin_logs"), orderBy("timestamp", "desc"), limit(50));
-      const logsSnap = await getDocs(logsQuery);
+      const [recentSnapshot, reportSnapshot] = await Promise.all([
+        getDocs(
+          query(
+            collection(db, "admin_logs"),
+            orderBy("timestamp", "desc"),
+            limit(50)
+          )
+        ),
 
-      let fetchedLogs = [];
-      let unreadCount = 0;
+        // Open Knowledge Test report logs are removed only when
+        // the backend resolves the corresponding student report.
+        getDocs(
+          query(
+            collection(db, "admin_logs"),
+            where("type", "==", "KNOWLEDGE_REPORT")
+          )
+        )
+      ]);
 
-      logsSnap.docs.forEach(d => {
-        const data = d.data();
-        const logDate = new Date(data.timestamp);
+      const merged = new Map();
 
-        // Only keep logs from the last 3 days
-        if (logDate >= threeDaysAgo) {
-          fetchedLogs.push({ id: d.id, ...data });
-          if (!data.viewed) unreadCount++;
+      recentSnapshot.docs.forEach(document => {
+        const data = document.data();
+
+        if (new Date(data.timestamp) >= threeDaysAgo) {
+          merged.set(document.id, {
+            ...data,
+            id: document.id
+          });
         }
       });
 
+      reportSnapshot.docs.forEach(document => {
+        merged.set(document.id, {
+          ...document.data(),
+          id: document.id
+        });
+      });
+
+      const fetchedLogs = [...merged.values()].sort((a, b) =>
+        String(b.timestamp || "").localeCompare(
+          String(a.timestamp || "")
+        )
+      );
+
       setAdminLogs(fetchedLogs);
-      setUnreadAdminLogs(unreadCount);
+
+      setUnreadAdminLogs(
+        fetchedLogs.filter(log => !log.viewed).length
+      );
     } catch (error) {
       console.error("Error fetching admin logs:", error);
+    } finally {
+      setLoadingAdminLogs(false);
     }
-    setLoadingAdminLogs(false);
   };
 
   // Mark as viewed when opening the panel
@@ -455,7 +504,7 @@ const Layout = ({ children }) => {
     if (canUseSuperAdminTools && user?.email === SUPER_ADMIN) {
       fetchAdminLogs();
     }
-  }, [canUseSuperAdminTools, user?.email]);
+  }, [canUseSuperAdminTools, user?.email, showAdminLogs]);
 
   useEffect(() => {
     if (!canUseSuperAdminTools) {
@@ -754,7 +803,8 @@ const Layout = ({ children }) => {
                             <div className="absolute right-0 mt-2 bg-white rounded-xl shadow-2xl border border-slate-200 w-96 max-h-[60vh] flex flex-col z-[100]">
                               <div className="flex justify-between items-center p-3 border-b border-slate-200 bg-slate-50 rounded-t-xl">
                                 <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">
-                                  <Bell size={16} className="text-red-600" /> Super Admin Logs (Last 3 Days)
+                                  <Bell size={16} className="text-red-600" />
+                                  Super Admin Logs — recent activity &amp; open question reports
                                 </h2>
                                 <button onClick={() => setShowAdminLogs(false)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
                               </div>
@@ -765,8 +815,16 @@ const Layout = ({ children }) => {
                                   <div className="flex flex-col gap-3">
                                     {adminLogs.length === 0 && <div className="text-center text-slate-500 py-4 text-xs">No recent logs.</div>}
                                     {adminLogs.map((log) => {
-                                      const isAlert = log.type === 'SMTP_ERROR' || log.type === 'SUSPICIOUS_DOWNLOAD' || log.type === 'USER_REPORT';
-                                      const isSuccess = log.type === 'SMTP_SUCCESS' || log.type === 'EMAIL_SUCCESS' || log.type === 'SYSTEM_SUCCESS';
+                                      const isAlert =
+                                        log.type === 'SMTP_ERROR' ||
+                                        log.type === 'SUSPICIOUS_DOWNLOAD' ||
+                                        log.type === 'USER_REPORT' ||
+                                        log.type === 'KNOWLEDGE_REPORT';
+                                      const isSuccess =
+                                        log.type === 'SMTP_SUCCESS' ||
+                                        log.type === 'EMAIL_SUCCESS' ||
+                                        log.type === 'SYSTEM_SUCCESS' ||
+                                        log.type === 'KNOWLEDGE_BANK_EDIT';
 
                                       let bgClass = 'bg-blue-50 border-blue-100';
                                       let textClass = 'text-blue-800';
@@ -786,19 +844,69 @@ const Layout = ({ children }) => {
                                         <div
                                           key={log.id}
                                           onClick={() => {
+                                            if (
+                                              log.type === 'KNOWLEDGE_REPORT' &&
+                                              log.knowledgeReportId
+                                            ) {
+                                              setShowAdminLogs(false);
+                                              setImpersonatedEmail(null);
+
+                                              navigate(
+                                                `/knowledge-test?ktReport=${encodeURIComponent(
+                                                  log.knowledgeReportId
+                                                )}`
+                                              );
+                                              return;
+                                            }
+
+                                            if (
+                                              log.type === 'KNOWLEDGE_BANK_EDIT'
+                                            ) {
+                                              setShowAdminLogs(false);
+                                              setImpersonatedEmail(null);
+
+                                              navigate(
+                                                `/knowledge-test?ktAudit=${encodeURIComponent(
+                                                  log.id
+                                                )}`
+                                              );
+                                              return;
+                                            }
+
                                             if (log.viewId) {
                                               setShowAdminLogs(false);
-                                              window.location.href = `/?viewId=${log.viewId}`;
+                                              window.location.href =
+                                                `/?viewId=${encodeURIComponent(
+                                                  log.viewId
+                                                )}`;
                                             }
                                           }}
-                                          className={`border rounded-lg p-3 text-xs ${log.viewId ? 'cursor-pointer hover:shadow-md transition-shadow' : ''} ${bgClass}`}
+                                          className={`border rounded-lg p-3 text-xs ${
+                                            log.viewId ||
+                                            log.knowledgeReportId ||
+                                            log.type === 'KNOWLEDGE_BANK_EDIT'
+                                              ? 'cursor-pointer hover:shadow-md transition-shadow'
+                                              : ''
+                                          } ${bgClass}`}
                                         >
                                           <div className="flex justify-between items-start mb-1">
                                             <span className={`font-bold ${titleClass}`}>{log.type.replace('_', ' ')}</span>
                                             <span className="text-slate-500">{new Date(log.timestamp).toLocaleString('en-GB')}</span>
                                           </div>
                                           <p dangerouslySetInnerHTML={{ __html: log.message }} className={textClass}></p>
-                                          {log.viewId && <div className={`mt-2 font-bold text-[10px] uppercase ${titleClass}`}>Click to view document &rarr;</div>}
+                                          {(
+                                            log.viewId ||
+                                            log.knowledgeReportId ||
+                                            log.type === 'KNOWLEDGE_BANK_EDIT'
+                                          ) && (
+                                            <div className={`mt-2 font-bold text-[10px] uppercase ${titleClass}`}>
+                                              {log.knowledgeReportId
+                                                ? 'Click to edit the reported question →'
+                                                : log.type === 'KNOWLEDGE_BANK_EDIT'
+                                                  ? 'Click to proofread bank changes →'
+                                                  : 'Click to view document →'}
+                                            </div>
+                                          )}
                                         </div>
                                       );
                                     })}
@@ -888,6 +996,19 @@ const Layout = ({ children }) => {
           </div>
         </div>
       )}
+
+      <KnowledgeResolutionNotice
+        enabled={Boolean(
+          realUser?.isAuthorized &&
+          !user?.isImpersonating &&
+          user?.email === realUser?.email
+        )}
+        accountKey={realUser?.uid || ''}
+        language={language}
+        onOpen={reportId => navigate(
+          `/knowledge-test?ktResolved=${encodeURIComponent(reportId)}`
+        )}
+      />
 
       <div
         key={JSON.stringify([

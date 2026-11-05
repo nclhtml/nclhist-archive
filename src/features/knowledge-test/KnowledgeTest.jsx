@@ -1,5 +1,11 @@
-import React, { useEffect, useLayoutEffect, useState } from "react";
+import React, {
+    useEffect,
+    useLayoutEffect,
+    useRef,
+    useState
+} from "react";
 import { onAuthStateChanged } from "firebase/auth";
+import { useLocation } from "react-router-dom";
 import { auth } from "../../firebase.js";
 import { useAuth } from "../../main.jsx";
 import useCloudAnswers from "./useCloudAnswers.js";
@@ -10,6 +16,12 @@ import AdminAssignmentTest from "./AdminAssignmentTest.jsx";
 import { rememberKnowledgeLoginReturn } from "./loginReturn.js";
 import { useLanguage } from "../../LanguageContext.jsx";
 import FoundationRunner from "./FoundationRunner.jsx";
+import BankEditorPanel from "./BankEditorPanel.jsx";
+import {
+    ReportedQuestionEditor,
+    BankProofreadingEditor,
+    ResolvedKnowledgeQuestion
+} from "./KnowledgeQuestionReports.jsx";
 
 import {
     StudentPracticeHome,
@@ -1100,13 +1112,25 @@ function AdminPanel({ home, busy, run, onProfile }) {
     );
 }
 
-function Bank({ busy, run, refreshHome }) {
+function Bank({
+    busy,
+    run,
+    refreshHome,
+    readOnly = false,
+    reportId = "",
+    initialEditId = "",
+    auditId = ""
+}) {
     const [bank, setBank] = useState({ rows: [], total: 0 });
     const [search, setSearch] = useState("");
     const [offset, setOffset] = useState(0);
     const [upload, setUpload] = useState(null);
     const [errors, setErrors] = useState([]);
     const [message, setMessage] = useState("");
+
+    // Every batch in one prepared workbook shares this ID.
+    // Retain it after a network interruption.
+    const importAuditId = useRef("");
 
     const load = async (nextOffset = offset, nextSearch = search) => {
         setBank(await knowledgeApi("bank", { offset: nextOffset, search: nextSearch, size: 30 }));
@@ -1186,13 +1210,21 @@ function Bank({ busy, run, refreshHome }) {
         if (!upload?.length) return;
 
         const rows = upload;
+
+        if (!importAuditId.current) {
+            importAuditId.current = crypto.randomUUID();
+        }
+
         let imported = 0;
 
         try {
             for (let i = 0; i < rows.length; i += 75) {
                 const batch = rows.slice(i, i + 75);
                 setMessage(`Importing ${imported} / ${rows.length}…`);
-                await knowledgeApi("import", { rows: batch });
+                await knowledgeApi("import", {
+                    rows: batch,
+                    auditBatchId: importAuditId.current
+                });
                 imported += batch.length;
             }
 
@@ -1303,6 +1335,33 @@ function Bank({ busy, run, refreshHome }) {
 
     return (
         <>
+            {reportId ? (
+                <ReportedQuestionEditor
+                    key={reportId}
+                    reportId={reportId}
+                    busy={busy}
+                    run={run}
+                    refreshHome={refreshHome}
+                />
+            ) : auditId ? (
+                <BankProofreadingEditor
+                    key={auditId}
+                    auditId={auditId}
+                    busy={busy}
+                    run={run}
+                    refreshHome={refreshHome}
+                />
+            ) : (
+                <BankEditorPanel
+                    key={initialEditId || "ordinary-bank"}
+                    busy={busy}
+                    run={run}
+                    refreshHome={refreshHome}
+                    readOnly={readOnly}
+                    initialId={initialEditId}
+                />
+            )}
+
             <details className="kt-card kt-prompt-panel">
                 <summary>
                     AI question authoring — click to expand or collapse
@@ -1393,6 +1452,7 @@ function Bank({ busy, run, refreshHome }) {
 
                                 const found = await validate(parsed.questions);
                                 setErrors(found);
+                                importAuditId.current = crypto.randomUUID();
                                 setUpload(found.length ? null : parsed.questions);
                                 setMessage(found.length
                                     ? "Please fix the workbook errors."
@@ -1495,6 +1555,14 @@ function Bank({ busy, run, refreshHome }) {
 }
 
 export default function KnowledgeTest() {
+    const location = useLocation();
+
+    const parameters = new URLSearchParams(location.search);
+    const incomingReportId = parameters.get("ktReport") || "";
+    const incomingEditId = parameters.get("ktEdit") || "";
+    const incomingAuditId = parameters.get("ktAudit") || "";
+    const resolvedReportId = parameters.get("ktResolved") || "";
+
     const { user, realUser, authLoading, loginWithGoogle } = useAuth();
     const { language } = useLanguage();
 
@@ -1622,6 +1690,25 @@ const start = result => {
         setAttempt(null);
         await refreshHome();
     };
+
+    useEffect(() => {
+        if (
+            (incomingReportId || incomingEditId || incomingAuditId) &&
+            home?.actor?.superadmin &&
+            !home.actor.readOnly
+        ) {
+            setAttempt(null);
+            setReport(null);
+            setProfileEmail(null);
+            setTab("bank");
+        }
+    }, [
+        incomingReportId,
+        incomingEditId,
+        incomingAuditId,
+        home?.actor?.superadmin,
+        home?.actor?.readOnly
+    ]);
 
     const body = () => {
         if (authLoading) {
@@ -1801,6 +1888,15 @@ onBack={() => run(async () => {
                     )}
                 </div>
 
+                {resolvedReportId && (
+                    <ResolvedKnowledgeQuestion
+                        key={resolvedReportId}
+                        id={resolvedReportId}
+                        busy={busy}
+                        run={run}
+                    />
+                )}
+
                 {tab === "practice" && (
                     <StudentPracticeHome
                         home={home}
@@ -1848,6 +1944,22 @@ onBack={() => run(async () => {
                         busy={busy}
                         run={run}
                         refreshHome={refreshHome}
+                        readOnly={home.actor.readOnly === true}
+                        reportId={
+                            home.actor.superadmin
+                                ? incomingReportId
+                                : ""
+                        }
+                        initialEditId={
+                            home.actor.superadmin
+                                ? incomingEditId
+                                : ""
+                        }
+                        auditId={
+                            home.actor.superadmin
+                                ? incomingAuditId
+                                : ""
+                        }
                     />
                 )}
             </>

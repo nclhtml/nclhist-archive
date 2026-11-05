@@ -191,10 +191,17 @@ const describePresetFormula = preset => {
   return parts.length ? `Score = ${parts.join(' + ')}` : 'No weights configured.';
 };
 
-const LA_HOMEWORK_FORMULA =
-  'Learning Attitude (Homework) = round( total Assignments ÷ total full marks × 5 )';
-const LA_LESSON_FORMULA =
-  'Learning Attitude (Lesson) = 4 + 1 (if Assignments > 90%) − floor(records ÷ 2); max 3 if Assignments < 60%; range 0–5';
+const LA_INCLUDED_CATEGORIES = ['Assignments', 'RAC', 'Others'];
+
+const getLaHomeworkFormula = rounding =>
+  `Learning Attitude (Homework) = ${
+    rounding === 'floor' ? 'floor' : 'round'
+  }( total earned marks from Assignments + RAC + Others ÷ their total full marks × 5 ); range 0–5${
+    rounding === 'floor' ? '; 5 requires 100% or higher' : ''
+  }`;
+
+const getLaLessonFormula = maximum =>
+  `Learning Attitude (Lesson) = 4 + 1 (if combined Assignments + RAC + Others ≥ 95%) − floor(records ÷ 2); max 3 if combined percentage < 60%; max 4 if records > 0; range 0–${maximum}`;
 
 // Quick section presets for multi-section items.
 const buildDbq = (number, weight) => ({
@@ -830,6 +837,8 @@ export default function Marks() {
   const [termScoresData, setTermScoresData] = useState([]);
   const [termResultMode, setTermResultMode] = useState('');
   const [calculatingMode, setCalculatingMode] = useState('');
+  const [laHomeworkRounding, setLaHomeworkRounding] = useState('round');
+  const [laLessonMaximum, setLaLessonMaximum] = useState(5);
   const [classPickerOpen, setClassPickerOpen] = useState(false);
   const [newPresetName, setNewPresetName] = useState('');
   const [newPresetWeights, setNewPresetWeights] = useState({});
@@ -2962,16 +2971,55 @@ export default function Marks() {
       const examAssessments = byCategory('Exam');
       const assignAssessments = byCategory('Assignments');
 
+      // Combine all three categories by earned marks and full marks.
+      // Do not average the category percentages.
+      const learningAttitudeAssessments = allTermAssessments.filter(
+        assessment => LA_INCLUDED_CATEGORIES.includes(assessment.category)
+      );
+
       let scoresData = [];
 
       if (mode === 'la-hw') {
         scoresData = modalStudents.map(student => {
-          const aStats = sumAssessments(assignAssessments, student);
-          const score = aStats.full > 0 ? Math.round((aStats.raw / aStats.full) * 5) : 0;
+          const homeworkStats = sumAssessments(
+            learningAttitudeAssessments,
+            student
+          );
+
+          let score = 0;
+
+          if (homeworkStats.full > 0) {
+            const ratio = Math.max(
+              0,
+              Math.min(1, homeworkStats.raw / homeworkStats.full)
+            );
+
+            const unroundedScore = ratio * 5;
+
+            score = laHomeworkRounding === 'floor'
+              ? Math.floor(unroundedScore)
+              : Math.round(unroundedScore);
+
+            // In round-down mode, never award 5 below full marks.
+            if (
+              laHomeworkRounding === 'floor' &&
+              homeworkStats.raw < homeworkStats.full
+            ) {
+              score = Math.min(score, 4);
+            }
+          }
+
+          score = Math.max(0, Math.min(5, score));
+
           return {
             student,
             categoryScores: {
-              'Homework': { score, raw: aStats.raw, full: aStats.full, weight: 100 }
+              'Assignments + RAC + Others': {
+                score,
+                raw: homeworkStats.raw,
+                full: homeworkStats.full,
+                weight: 100
+              }
             },
             overallScore: score.toString(),
             rawUT: sumAssessments(utAssessments, student).raw,
@@ -2980,20 +3028,59 @@ export default function Marks() {
         });
       } else if (mode === 'la-lesson') {
         scoresData = modalStudents.map(student => {
-          const aStats = sumAssessments(assignAssessments, student);
-          const assignPercent = aStats.full > 0 ? (aStats.raw / aStats.full) : 0;
-          const recordCount = student.recordCount || 0;
+          const homeworkStats = sumAssessments(
+            learningAttitudeAssessments,
+            student
+          );
 
-          const bonus = assignPercent > 0.9 ? 1 : 0;
+          const combinedPercent = homeworkStats.full > 0
+            ? homeworkStats.raw / homeworkStats.full
+            : 0;
+
+          const savedRecordCount = Number(student.recordCount);
+          const recordCount = Number.isFinite(savedRecordCount)
+            ? Math.max(0, Math.floor(savedRecordCount))
+            : 0;
+
+          // Compare earned marks directly against 95% of full marks.
+          const bonus = (
+            homeworkStats.full > 0 &&
+            homeworkStats.raw >= homeworkStats.full * 0.95
+          ) ? 1 : 0;
+
           let score = 4 + bonus - Math.floor(recordCount / 2);
-          if (assignPercent < 0.6) score = Math.min(score, 3);
-          score = Math.max(0, Math.min(5, score));
+
+          // Below 60%: maximum attitude is 3.
+          if (
+            homeworkStats.full <= 0 ||
+            homeworkStats.raw < homeworkStats.full * 0.6
+          ) {
+            score = Math.min(score, 3);
+          }
+
+          // Any records: maximum attitude is 4.
+          if (recordCount > 0) {
+            score = Math.min(score, 4);
+          }
+
+          // Apply the user's chosen maximum after the calculation.
+          score = Math.max(0, Math.min(laLessonMaximum, score));
 
           return {
             student,
             categoryScores: {
-              'Assignments %': { score: assignPercent * 100, raw: aStats.raw, full: aStats.full, weight: 0 },
-              'Records': { score: recordCount, raw: recordCount, full: 0, weight: 0 }
+              'Assignments + RAC + Others %': {
+                score: combinedPercent * 100,
+                raw: homeworkStats.raw,
+                full: homeworkStats.full,
+                weight: 0
+              },
+              'Records': {
+                score: recordCount,
+                raw: recordCount,
+                full: 0,
+                weight: 0
+              }
             },
             overallScore: score.toString(),
             rawUT: sumAssessments(utAssessments, student).raw,
@@ -3669,10 +3756,13 @@ export default function Marks() {
 
   const selectedPreset = presets.find(p => p.id === selectedPresetId);
 
+  const laHomeworkFormulaText = getLaHomeworkFormula(laHomeworkRounding);
+  const laLessonFormulaText = getLaLessonFormula(laLessonMaximum);
+
   const termFormulaText = termResultMode === 'la-hw'
-    ? LA_HOMEWORK_FORMULA
+    ? laHomeworkFormulaText
     : termResultMode === 'la-lesson'
-      ? LA_LESSON_FORMULA
+      ? laLessonFormulaText
       : describePresetFormula(selectedPreset);
 
   const sectionWeightTotal = sectionsConfig.reduce(
@@ -5649,7 +5739,7 @@ export default function Marks() {
                   onClick={() => calculateTermScores('la-hw')}
                   disabled={Boolean(calculatingMode) || modalClasses.length === 0}
                   className={`mk-btn ${termResultMode === 'la-hw' ? 'mk-btn-soft-purple' : ''}`}
-                  title={LA_HOMEWORK_FORMULA}
+                  title={laHomeworkFormulaText}
                 >
                   {calculatingMode === 'la-hw' ? <Loader2 className="animate-spin" /> : <BookOpen />}
                   Learning Attitude (Homework)
@@ -5659,12 +5749,68 @@ export default function Marks() {
                   onClick={() => calculateTermScores('la-lesson')}
                   disabled={Boolean(calculatingMode) || modalClasses.length === 0}
                   className={`mk-btn ${termResultMode === 'la-lesson' ? 'mk-btn-soft-purple' : ''}`}
-                  title={LA_LESSON_FORMULA}
+                  title={laLessonFormulaText}
                 >
                   {calculatingMode === 'la-lesson' ? <Loader2 className="animate-spin" /> : <Users />}
                   Learning Attitude (Lesson)
                 </button>
               </div>
+            </div>
+
+            {/* Learning attitude options */}
+            <div className="shrink-0 border-b border-slate-200 bg-slate-50 px-5 py-3">
+              <div className="flex flex-wrap items-end gap-4">
+                <label className="mk-field">
+                  <span className="mk-label">Homework rounding</span>
+                  <select
+                    value={laHomeworkRounding}
+                    disabled={Boolean(calculatingMode)}
+                    onChange={event => {
+                      setLaHomeworkRounding(event.target.value);
+
+                      if (termResultMode === 'la-hw') {
+                        setTermScoresData([]);
+                        setTermResultMode('');
+                        setTermCopySuccess(false);
+                      }
+                    }}
+                    className="mk-input min-w-[220px]"
+                  >
+                    <option value="round">Normal rounding</option>
+                    <option value="floor">
+                      Round down — 5 requires full marks
+                    </option>
+                  </select>
+                </label>
+
+                <label className="mk-field">
+                  <span className="mk-label">Lesson maximum attitude</span>
+                  <select
+                    value={laLessonMaximum}
+                    disabled={Boolean(calculatingMode)}
+                    onChange={event => {
+                      setLaLessonMaximum(Number(event.target.value));
+
+                      if (termResultMode === 'la-lesson') {
+                        setTermScoresData([]);
+                        setTermResultMode('');
+                        setTermCopySuccess(false);
+                      }
+                    }}
+                    className="mk-input min-w-[170px]"
+                  >
+                    <option value={5}>5 — allow attitude 5</option>
+                    <option value={4}>4 — no attitude 5</option>
+                  </select>
+                </label>
+              </div>
+
+              <p className="mk-help mt-2">
+                Both calculations use total earned marks from Assignments,
+                RAC and Others divided by their combined full marks.
+                Change an option, then click the corresponding Learning
+                Attitude button to calculate again.
+              </p>
             </div>
 
             {/* Formula + copy bar */}

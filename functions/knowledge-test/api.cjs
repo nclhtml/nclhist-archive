@@ -338,7 +338,10 @@ function requireInspectionReadAction(actor, action) {
         "assignmentPerformance",
         "studentGroupList",
         "scheduleList",
-        "bank"
+        "bank",
+        "bankSearch",
+        "bankRecord",
+        "resolvedQuestion"
     ]);
 
     requireValue(
@@ -1828,6 +1831,17 @@ const foundation = require("./foundation.cjs")({
     emptySummary
 });
 
+const bankTools = require("./bank-tools.cjs")({
+    db,
+    root,
+    requireValue,
+    requireAdmin,
+    idOf,
+    text,
+    integer,
+    foundation
+});
+
 const scheduling = require("./scheduling.cjs")({
     db,
     root,
@@ -2063,6 +2077,39 @@ requireValue(
 
                 case "bank":
                     return await listBank(actor, data);
+
+                case "bankSearch":
+                    return await bankTools.search(actor, data);
+
+                case "bankRecord":
+                    return await bankTools.read(actor, data);
+
+                case "bankSave":
+                    return await bankTools.save(actor, data);
+
+                case "questionReportSubmit":
+                    return await bankTools.submitReport(actor, data);
+
+                case "bankAuditRead":
+                    return await bankTools.readAudit(actor, data);
+
+                case "questionReportRead":
+                    return await bankTools.readReport(actor, data);
+
+                case "questionReportList":
+                    return await bankTools.listReports(actor, data);
+
+                case "questionReportResolve":
+                    return await bankTools.resolveReport(actor, data);
+
+                case "questionNotificationList":
+                    return await bankTools.notificationList(actor);
+
+                case "questionNotificationAck":
+                    return await bankTools.notificationAck(actor, data);
+
+                case "resolvedQuestion":
+                    return await bankTools.resolvedQuestion(actor, data);
 
                 case "deleteDemos":
                     return await deleteDemoQuestions(actor, data);

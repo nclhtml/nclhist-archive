@@ -22,11 +22,17 @@ module.exports = function makeFoundation({
     const users = root.collection("users");
     const presets = root.collection("presets");
     const assignments = root.collection("assignments");
-    const catalogRef = root.collection("state").doc("catalog");
+const catalogRef = root.collection("state").doc("catalog");
+    const holdRef = root.collection("state").doc("bankHolds");
 
     const assignmentLifecycle = require("./assignment-lifecycle.cjs")({
         db,
         root,
+        requireValue
+    });
+
+    const bankAudit = require("./bank-audit.cjs")({
+        db,
         requireValue
     });
 
@@ -268,8 +274,9 @@ module.exports = function makeFoundation({
             id: q.id,
             topic: q.topic,
             type: q.type,
-            active: q.active === true,
+active: q.active === true,
             demo: q.demo === true,
+            reportHold: q.reportHold === true,
             prompt: String(q.prompt || "").slice(
                 0,
                 q.type === "event" ? 400 : 80
@@ -309,8 +316,9 @@ module.exports = function makeFoundation({
 
         return items.filter(q => {
             if (
-                !q.active ||
+!q.active ||
                 q.demo ||
+                q.reportHold === true ||
                 q.type !== "event" ||
                 !topics.includes(q.topic) ||
                 !Number.isInteger(q.year) ||
@@ -332,7 +340,9 @@ module.exports = function makeFoundation({
         });
     }
 
-    function readiness(items, topics) {
+function readiness(items, topics) {
+        items = items.filter(item => item.reportHold !== true);
+
         if (topics.includes(essayRecognition.TOPIC)) {
             const validSelection =
                 topics.length === 1 &&
@@ -411,24 +421,33 @@ module.exports = function makeFoundation({
         requireAdmin(actor);
 
         return db.runTransaction(async tx => {
-            // Reading the catalogue also coordinates this operation with imports.
-            await tx.get(catalogRef);
-            const snap = await tx.get(questions.limit(MAX_BANK + 1));
+            const [, holds, snap] = await Promise.all([
+                tx.get(catalogRef),
+                tx.get(holdRef),
+                tx.get(questions.limit(MAX_BANK + 1))
+            ]);
 
             requireValue(
                 snap.size <= MAX_BANK,
                 `The bank contains more than ${MAX_BANK} records.`
             );
 
-            const items = snap.docs.map(doc =>
-                catalogItem({ ...doc.data(), id: doc.id })
+            const counts = holds.data()?.counts || {};
+
+            const items = snap.docs.map(document =>
+                catalogItem({
+                    ...document.data(),
+                    id: document.id,
+                    reportHold: Number(counts[document.id] || 0) > 0
+                })
             );
 
             tx.set(catalogRef, catalogData(items));
 
             return {
                 indexed: items.length,
-                legacySequences: items.filter(q => q.type === "sequence").length
+                legacySequences:
+                    items.filter(item => item.type === "sequence").length
             };
         });
     }
@@ -464,17 +483,28 @@ module.exports = function makeFoundation({
 
         requireValue(errors.length === 0, errors.slice(0, 8).join("\n"));
 
+        // Excel batches share a browser-generated operation ID.
+        // Other existing import callers receive one ID per API call.
+        const auditOperationId = data.auditBatchId
+            ? idOf(data.auditBatchId)
+            : questions.doc().id;
+
         await db.runTransaction(async tx => {
-            const [catalogSnap, ...existing] = await Promise.all([
-                tx.get(catalogRef),
-                ...cleaned.map(q => tx.get(questions.doc(q.id)))
-            ]);
+            const [catalogSnap, holdSnapshot, ...existing] =
+                await Promise.all([
+                    tx.get(catalogRef),
+                    tx.get(holdRef),
+                    ...cleaned.map(q => tx.get(questions.doc(q.id)))
+                ]);
+
+            const counts = holdSnapshot.data()?.counts || {};
 
             const map = new Map(
-                (catalogSnap.data()?.items || []).map(item => [item.id, item])
+                (catalogSnap.data()?.items || [])
+                    .map(item => [item.id, item])
             );
 
-            cleaned.forEach((q, index) => {
+            const savedRecords = cleaned.map((q, index) => {
                 if (existing[index].exists) {
                     const old = existing[index].data();
 
@@ -484,13 +514,32 @@ module.exports = function makeFoundation({
                     );
                 }
 
-                map.set(q.id, catalogItem(q));
+                const saved = {
+                    ...q,
+                    reportHold: Number(counts[q.id] || 0) > 0,
+                    updatedAt: Date.now(),
+                    updatedBy: actor.email
+                };
+
+                map.set(saved.id, catalogItem(saved));
+                return saved;
             });
 
-            const nextCatalog = catalogData([...map.values()]);
+const nextCatalog = catalogData([...map.values()]);
 
-            cleaned.forEach(q => tx.set(questions.doc(q.id), q));
+            const audit = await bankAudit.prepare(tx, actor, {
+                operationId: auditOperationId,
+                kind: "excel-import",
+                ids: savedRecords.map(record => record.id)
+            });
+
+            // All transaction reads are complete.
+            savedRecords.forEach(record =>
+                tx.set(questions.doc(record.id), record)
+            );
+
             tx.set(catalogRef, nextCatalog);
+            bankAudit.apply(tx, audit);
         });
 
         return { imported: cleaned.length };
@@ -810,11 +859,13 @@ module.exports = function makeFoundation({
         const ref = attemptsRef(actor.email).doc();
 
         return db.runTransaction(async tx => {
-            const [userSnap, stateSnap, catalogSnap] = await Promise.all([
-                tx.get(userRef(actor.email)),
-                tx.get(stateRef(actor.email)),
-                tx.get(catalogRef)
-            ]);
+            const [userSnap, stateSnap, catalogSnap, holdSnapshot] =
+                await Promise.all([
+                    tx.get(userRef(actor.email)),
+                    tx.get(stateRef(actor.email)),
+                    tx.get(catalogRef),
+                    tx.get(holdRef)
+                ]);
 
             const summary = userSnap.exists
                 ? userSnap.data()
@@ -925,7 +976,16 @@ module.exports = function makeFoundation({
                 title = assignment.title;
             }
 
-            const items = catalogSnap.data()?.items || [];
+            const holdCounts = holdSnapshot.data()?.counts || {};
+
+            // The hold ledger is authoritative, including after deletion
+            // and reimport of the same bank ID.
+            const items = (catalogSnap.data()?.items || [])
+                .filter(item =>
+                    item.reportHold !== true &&
+                    Number(holdCounts[item.id] || 0) === 0
+                );
+
             const availability = readiness(items, topics);
 
             requireValue(
@@ -1432,15 +1492,21 @@ module.exports = function makeFoundation({
             .seedRows()
             .map(cleanRecord);
 
+        const auditOperationId = questions.doc().id;
+
         return db.runTransaction(async tx => {
-            const [catalogSnapshot, existing] = await Promise.all([
-                tx.get(catalogRef),
-                tx.getAll(
-                    ...records.map(record =>
-                        questions.doc(record.id)
-                    )
-                )
-            ]);
+            const [catalogSnapshot, existing, holdSnapshot] =
+                await Promise.all([
+                    tx.get(catalogRef),
+                    tx.getAll(
+                        ...records.map(record =>
+                            questions.doc(record.id)
+                        )
+                    ),
+                    tx.get(holdRef)
+                ]);
+
+            const counts = holdSnapshot.data()?.counts || {};
 
             const map = new Map(
                 (catalogSnapshot.data()?.items || [])
@@ -1456,19 +1522,32 @@ module.exports = function makeFoundation({
                     // Installing again must not restore original content.
                     const saved = {
                         ...existing[index].data(),
-                        id: existing[index].id
+                        id: existing[index].id,
+                        reportHold:
+                            Number(counts[existing[index].id] || 0) > 0
                     };
 
                     map.set(saved.id, catalogItem(saved));
                     return;
                 }
 
-                newRecords.push(record);
-                map.set(record.id, catalogItem(record));
+                const saved = {
+                    ...record,
+                    reportHold: Number(counts[record.id] || 0) > 0
+                };
+
+                newRecords.push(saved);
+                map.set(saved.id, catalogItem(saved));
                 imported++;
             });
 
             const nextCatalog = catalogData([...map.values()]);
+
+            const audit = await bankAudit.prepare(tx, actor, {
+                operationId: auditOperationId,
+                kind: "essay-install",
+                ids: newRecords.map(record => record.id)
+            });
 
             // All transaction reads are complete.
             newRecords.forEach(record => {
@@ -1476,6 +1555,7 @@ module.exports = function makeFoundation({
             });
 
             tx.set(catalogRef, nextCatalog);
+            bankAudit.apply(tx, audit);
 
             return {
                 ok: true,
@@ -1486,6 +1566,9 @@ module.exports = function makeFoundation({
     }
 
     return {
+        cleanRecord,
+        catalogItem,
+        catalogData,
         readiness,
         topicCounts,
         reindex,

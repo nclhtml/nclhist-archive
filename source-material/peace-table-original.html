@@ -1,0 +1,2568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#151513">
+<title>Wellington Koo — China at the Peace Table</title>
+<style>
+:root {
+  --paper:#eee3ca;
+  --gold:#c9aa70;
+  --muted:#b5ad9b;
+  --line:rgba(201,170,112,.35);
+  --dialog-size:22px;
+  color-scheme:dark;
+  font-family:Georgia,"Times New Roman",serif;
+}
+* { box-sizing:border-box; }
+html,body { margin:0; width:100%; height:100%; background:#090b09; }
+body { color:var(--paper); overflow:hidden; display:grid; place-items:center; }
+button,input { font:inherit; }
+button { cursor:pointer; color:inherit; background:transparent; border:0; }
+button:disabled { cursor:default; }
+button,a,input { -webkit-tap-highlight-color:transparent; }
+button:focus-visible,a:focus-visible,input:focus-visible,[tabindex]:focus-visible {
+  outline:2px solid #f6d493; outline-offset:4px;
+}
+[hidden] { display:none !important; }
+a { color:#e3c790; text-underline-offset:4px; }
+h1,h2,h3,p { overflow-wrap:break-word; }
+.eyebrow {
+  font:11px/1.5 "Trebuchet MS",Arial,sans-serif;
+  letter-spacing:.19em; text-transform:uppercase; color:var(--gold);
+}
+.primary,.secondary {
+  min-height:44px; padding:12px 20px;
+  font:11px/1.5 "Trebuchet MS",Arial,sans-serif;
+  text-transform:uppercase; letter-spacing:.12em;
+  transition:background .2s,transform .2s,border-color .2s;
+}
+.primary { background:#cfb079; color:#172019; border:1px solid #e1c99c; }
+.primary:not(:disabled):hover { background:#e6c995; transform:translateY(-2px); }
+.secondary { border:1px solid var(--line); background:#151b17b0; }
+.secondary:not(:disabled):hover { background:#394034; border-color:var(--gold); }
+.button-row { display:flex; flex-wrap:wrap; gap:10px; }
+.smallprint { font:12px/1.7 "Trebuchet MS",Arial,sans-serif; color:#a7b09e; }
+#game {
+  position:relative; isolation:isolate; width:100%; height:100%;
+  height:100svh; min-height:360px; overflow:hidden; background:#1b211c;
+}
+#backdrops,.backdrop,.backdrop svg,#vignette,#grain,#dust {
+  position:absolute; inset:0; width:100%; height:100%;
+}
+#backdrops { z-index:-5; }
+.backdrop { opacity:0; transition:opacity 1s; background:#24291f; }
+.backdrop.current { opacity:1; }
+.backdrop svg { object-fit:cover; }
+#vignette {
+  z-index:-2; pointer-events:none;
+  background:linear-gradient(0deg,#080d0b 0%,transparent 55%,#0a100d70),
+    radial-gradient(ellipse at 50% 38%,transparent 20%,#070b08b5 100%);
+}
+#grain {
+  opacity:.065; z-index:20; pointer-events:none;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' opacity='.75' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+#dust { pointer-events:none; overflow:hidden; z-index:-1; }
+#dust i {
+  position:absolute; width:3px; height:3px; background:#ead3a0;
+  border-radius:50%; animation:drift 17s linear infinite; opacity:0;
+}
+@keyframes drift {
+  0% { transform:translate(0,70px); opacity:0; }
+  15%,70% { opacity:.25; }
+  100% { transform:translate(75px,-180px); opacity:0; }
+}
+#frame { position:absolute; inset:17px; border:1px solid #c8aa6433; pointer-events:none; z-index:15; }
+#frame::before,#frame::after {
+  content:"◆"; position:absolute; color:#bca06a; font-size:10px;
+  top:-7px; background:#1b211c; padding:0 9px;
+}
+#frame::before { left:24px; }
+#frame::after { right:24px; }
+header {
+  position:absolute; top:32px; left:48px; right:48px;
+  display:flex; align-items:center; justify-content:space-between; gap:16px; z-index:12;
+}
+.brand { display:flex; align-items:center; gap:12px; text-align:left; padding:0; }
+.brand-symbol {
+  width:32px; height:32px; border:1px solid var(--gold);
+  display:grid; place-items:center; transform:rotate(45deg); flex-shrink:0;
+}
+.brand-symbol span { transform:rotate(-45deg); font-size:20px; color:var(--gold); }
+.brand-title {
+  font:11px/1.5 "Trebuchet MS",Arial,sans-serif;
+  text-transform:uppercase; letter-spacing:.17em;
+}
+.brand-title small { display:block; color:var(--muted); font-size:9px; letter-spacing:.12em; }
+.top-actions { display:flex; gap:5px; }
+.icon-button {
+  font:11px "Trebuchet MS",Arial,sans-serif; letter-spacing:.05em;
+  padding:10px; border:1px solid transparent;
+}
+.icon-button:hover { border-color:var(--line); background:#10181180; }
+#title {
+  position:absolute; inset:0; z-index:5;
+  display:grid; grid-template-columns:1.05fr .95fr;
+  align-items:center; padding:105px 10% 82px;
+  background:linear-gradient(90deg,#101912ef,#10191295 53%,#11191025);
+  overflow:auto;
+}
+.title-copy { position:relative; z-index:2; max-width:650px; }
+.title-copy .eyebrow { margin-bottom:22px; }
+h1 {
+  font-weight:normal; font-size:clamp(54px,6.7vw,105px);
+  line-height:.98; letter-spacing:-.045em; margin:0 0 25px;
+}
+h1 em { font-weight:normal; color:#dbc18f; }
+.title-description { font-size:18px; line-height:1.7; color:#c7c6b5; max-width:430px; margin-bottom:28px; }
+.title-foot { font:10px/1.8 "Trebuchet MS",Arial,sans-serif; color:#9aab99; letter-spacing:.05em; margin-top:20px; }
+.title-portrait {
+  position:relative; width:min(100%,390px); height:min(61vh,575px);
+  justify-self:end; margin:0; padding:10px; border:1px solid #c7ab6e65;
+  background:#d1c09811; transform:rotate(2deg); box-shadow:15px 30px 70px #0008;
+}
+.title-portrait::before { position:absolute; content:""; inset:-9px; border:1px solid #b3995c22; pointer-events:none; }
+.title-portrait img { width:100%; height:100%; object-fit:cover; object-position:50% 20%; filter:sepia(.48) contrast(1.04) brightness(.8); }
+.title-portrait figcaption {
+  position:absolute; left:0; right:0; bottom:0; padding:55px 24px 25px;
+  background:linear-gradient(transparent,#111b13 65%); transform:rotate(-2deg);
+}
+.title-portrait strong { font-size:25px; font-weight:normal; display:block; margin:7px 0; }
+.title-number { position:absolute; top:-25px; right:12px; font:italic 30px Georgia; color:#d3b784; }
+.title-bottom {
+  position:absolute; left:10%; right:10%; bottom:32px; display:flex;
+  justify-content:space-between; gap:20px; color:#9fac98;
+  font:10px "Trebuchet MS",Arial,sans-serif; text-transform:uppercase; letter-spacing:.15em;
+}
+#hud {
+  position:absolute; top:102px; left:50px; right:50px;
+  display:flex; align-items:start; justify-content:space-between; gap:16px;
+  z-index:4; pointer-events:none;
+}
+#location { font-size:20px; margin-top:6px; text-shadow:0 2px 8px #000; }
+.decision-pill {
+  border:1px solid var(--line); padding:10px 14px; background:#111a13d9;
+  font:10px/1.5 "Trebuchet MS",Arial,sans-serif; text-transform:uppercase; letter-spacing:.1em;
+  white-space:nowrap;
+}
+#decision-count { font:21px Georgia; color:#edcc8e; margin-left:10px; }
+#actors { position:absolute; inset:0; z-index:0; pointer-events:none; }
+.actor {
+  position:absolute; bottom:105px; width:min(30vw,390px);
+  height:min(69vh,650px); margin:0; opacity:0; transform:translateY(35px);
+  transition:opacity .6s,transform .6s,filter .6s; filter:brightness(.55);
+}
+.actor.shown { opacity:.75; transform:translateY(0); }
+.actor.speaking { opacity:1; filter:brightness(1); transform:translateY(-5px); }
+.actor.left { left:12%; }
+.actor.right { right:12%; }
+.actor.solo { left:auto; right:13%; width:min(34vw,440px); }
+.photo-shell {
+  position:absolute; inset:0; overflow:hidden; border:1px solid #d2b77b65;
+  border-radius:46% 46% 2px 2px; background:#232a20; box-shadow:0 12px 70px #0007;
+  mask-image:linear-gradient(#000 76%,transparent);
+  -webkit-mask-image:linear-gradient(#000 76%,transparent);
+  transform-origin:50% 65%; backface-visibility:hidden;
+}
+.photo-shell::after {
+  content:""; position:absolute; inset:0;
+  background:linear-gradient(0deg,#192419 5%,transparent 50%);
+  box-shadow:inset 0 0 50px #1c251b80;
+}
+.actor img { width:100%; height:100%; object-fit:cover; object-position:center 15%; filter:grayscale(1) sepia(.45) contrast(1.05); }
+.actor figcaption {
+  position:absolute; top:68%; width:100%; text-align:center; color:#eadbbd;
+  text-shadow:0 2px 9px black; font:10px "Trebuchet MS",Arial,sans-serif;
+  letter-spacing:.16em; text-transform:uppercase;
+}
+.photo-fallback {
+  display:none; position:absolute; inset:0; align-items:center; justify-content:center;
+  flex-direction:column; padding:25px; text-align:center;
+  background:radial-gradient(ellipse at top,#69705b,#182219);
+}
+.photo-fallback span { font-size:66px; opacity:.45; }
+.photo-fallback small { font:12px/1.7 Arial; max-width:190px; color:#cfccb9; }
+.failed .photo-fallback { display:flex; }
+.failed img { visibility:hidden; }
+#scene-quote {
+  position:absolute; top:32%; left:10%; width:40%; color:#e6d7b8;
+  font-size:clamp(24px,3.2vw,43px); line-height:1.35; font-style:italic;
+  pointer-events:none; text-shadow:0 3px 12px #000;
+}
+#memory-title { position:absolute; top:26%; width:100%; text-align:center; pointer-events:none; text-shadow:0 5px 20px black; }
+#memory-title strong { display:block; font-size:clamp(68px,11vw,160px); font-weight:normal; color:#dfd8c9; letter-spacing:-.05em; }
+#memory-title span { color:#bfc1b8; }
+#dialogue {
+  position:absolute; bottom:83px; left:11%; right:11%; z-index:6;
+  padding:22px 32px 15px; border:1px solid #ccb37d6b;
+  background:linear-gradient(115deg,#111b16f7,#15211bf5);
+  box-shadow:0 15px 60px #0008; cursor:pointer;
+}
+#dialogue::before { position:absolute; content:""; top:-5px; left:25px; width:42px; height:3px; background:#d4b578; }
+#speaker { color:#dfc48c; font-size:20px; font-weight:normal; margin:0; line-height:1.4; }
+#dialogue-text {
+  margin:13px 0 10px; min-height:88px; max-height:27vh; overflow-y:auto;
+  scrollbar-width:thin; font-size:var(--dialog-size); line-height:1.6; color:#f0eadb;
+}
+#dialogue.narration #dialogue-text { font-style:italic; color:#dddacb; }
+.dialogue-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+#counter { font:10px/1.5 "Trebuchet MS",Arial,sans-serif; color:#9cac9b; }
+#advance { padding:7px 0 5px 15px; color:#d9bf8b; font:10px "Trebuchet MS",Arial,sans-serif; letter-spacing:.15em; text-transform:uppercase; }
+#advance span { display:inline-block; margin-left:8px; animation:nudge 2s ease-in-out infinite; }
+@keyframes nudge { 50% { transform:translateX(5px); } }
+#toolbar {
+  position:absolute; bottom:29px; left:8%; right:8%; display:flex;
+  align-items:center; justify-content:space-between; z-index:9; gap:10px;
+}
+.toolbar-group { display:flex; flex-wrap:wrap; align-items:center; gap:13px; }
+#toolbar button { font:10px "Trebuchet MS",Arial,sans-serif; text-transform:uppercase; letter-spacing:.07em; color:#b2bfad; padding:7px 0; }
+#toolbar button:hover,#toolbar button.on { color:#f0ce8e; }
+#toolbar .dialogue-step { color:#dfc38d; border:1px solid #b49a6259; padding:7px 9px; background:#142017b8; }
+#toolbar #words-button { color:#ead09b; border-bottom:1px dotted #c9aa70; }
+#toolbar .key-hint { font:9px "Trebuchet MS",Arial,sans-serif; color:#7e907e; }
+#progress { position:absolute; bottom:17px; left:18px; right:18px; height:1px; background:#a58d6220; z-index:16; }
+#progress span { display:block; height:1px; width:0; background:#d3b47c; transition:width .5s; }
+
+.overlay-panel { position:absolute; inset:151px 30px 83px; z-index:8; display:flex; justify-content:center; align-items:center; }
+#note-overlay { inset:90px 30px 83px; background:#0c130c65; backdrop-filter:blur(3px); }
+.paper-note {
+  position:relative; max-width:550px; width:100%; max-height:100%; overflow:auto;
+  padding:34px 40px 27px; color:#36362b;
+  background:repeating-linear-gradient(0deg,transparent,transparent 30px,#7b59260a 31px),
+    radial-gradient(ellipse at 30% 10%,#f5edcf,#d8c79e);
+  transform:rotate(-1deg); box-shadow:10px 20px 75px #0009; border:1px solid #f1dfb4;
+}
+.paper-note::before { content:""; position:absolute; top:12px; left:50%; width:11px; height:11px; background:#924834; border-radius:50%; box-shadow:1px 3px 3px #0008; }
+.paper-note .eyebrow { color:#786139; }
+.paper-note h2 { font-weight:normal; font-size:32px; margin:14px 0; }
+.paper-note p { line-height:1.6; font-size:17px; }
+.paper-rule { border:0; border-top:1px solid #8a704b66; margin:19px 0; }
+.seal { display:inline-flex; border:3px double #914537; border-radius:50%; width:70px; height:70px; align-items:center; justify-content:center; text-align:center; color:#914537; transform:rotate(-14deg); font:bold 9px/1.5 Arial; letter-spacing:.08em; }
+.note-bottom { display:flex; justify-content:space-between; align-items:center; gap:15px; }
+#choices-overlay { background:#0a100ce8; backdrop-filter:blur(6px); border:1px solid #c9aa7022; }
+.choices-content { width:min(890px,100%); max-height:100%; overflow:auto; padding:23px; scrollbar-width:thin; }
+.choices-content h2 { font-size:clamp(26px,3vw,37px); font-weight:normal; margin:10px 0; }
+.choices-content>p { color:#bcc6b6; font-size:16px; line-height:1.6; margin:10px 0 17px; }
+.choice {
+  width:100%; display:grid; grid-template-columns:33px 1fr auto;
+  align-items:center; gap:15px; padding:15px 18px; text-align:left; margin:11px 0;
+  border:1px solid #b99d6859; background:#1b291ee8;
+  transition:background .2s,border-color .2s;
+}
+.choice:not(.locked):hover { border-color:#dfbf84; background:#263827; }
+.choice-number { width:30px; height:30px; border:1px solid #b9a16d70; display:grid; place-items:center; color:#d8bd87; font-size:17px; }
+.choice h3 { color:#ddc38e; margin:0 0 7px; font:11px "Trebuchet MS",Arial,sans-serif; text-transform:uppercase; letter-spacing:.1em; }
+.choice .option-text { margin:0; line-height:1.55; font-size:16px; }
+.choice.locked { background:#18201b; border-color:#7c856c66; }
+.choice.locked .choice-copy { color:#aeb6a8; }
+.choice.selected { border-color:#dfc38c; box-shadow:inset 3px 0 #dfc38c; }
+.choose-button { padding:10px 13px; min-height:42px; font:10px Arial,sans-serif; letter-spacing:.08em; }
+.choose-button:disabled { opacity:.65; }
+.lock-reason { margin:8px 0 0; font:11px/1.5 Arial; color:#d3b99a; }
+.choice-note { font:11px/1.6 Arial !important; color:#a1ad99 !important; }
+#ending { inset:88px 30px 83px; background:#0d1712f2; backdrop-filter:blur(8px); text-align:center; }
+.ending-content { width:min(790px,100%); max-height:100%; overflow:auto; padding:24px; }
+.end-symbol { font-size:30px; color:#c9aa70; margin-bottom:12px; }
+.ending-content h2 { font-size:clamp(32px,4.1vw,56px); font-weight:normal; margin:12px 0 18px; line-height:1.1; }
+.ending-content>p { color:#c1c9b8; font-size:17px; line-height:1.65; }
+.ending-content .button-row { justify-content:center; }
+.closing-report { text-align:left; border:1px solid var(--line); padding:18px 22px; margin:22px 0; background:#17251b; }
+.closing-report h3 { font-size:20px; color:#dfc38d; font-weight:normal; margin:0 0 10px; }
+.closing-report ul { padding-left:21px; margin:0; font-size:16px; line-height:1.65; color:#cad2c3; }
+.closing-report li+li { margin-top:7px; }
+#toast { position:absolute; top:83px; left:50%; transform:translate(-50%,-12px); max-width:min(90%,620px); padding:12px 20px; z-index:30; background:#19291ff5; border:1px solid #ceb278; box-shadow:0 10px 35px #0007; opacity:0; pointer-events:none; transition:opacity .25s,transform .25s; font:12px/1.6 Arial; color:#e6d3aa; text-align:center; }
+#toast.show { opacity:1; transform:translate(-50%,0); }
+dialog { color:var(--paper); border:1px solid #b59b67; padding:0; background:#152018; width:min(800px,calc(100% - 32px)); max-height:88svh; box-shadow:0 35px 130px #000; }
+dialog::backdrop { background:#050a07cf; backdrop-filter:blur(6px); }
+.modal-header { display:flex; align-items:center; justify-content:space-between; gap:20px; padding:20px 27px; border-bottom:1px solid var(--line); }
+.modal-header h2 { margin:0; font-size:26px; font-weight:normal; }
+#close-modal { font:23px Arial; padding:5px 9px; color:#d9c294; }
+#modal-body { padding:24px 27px 28px; overflow:auto; max-height:70svh; line-height:1.7; }
+#modal-body h3 { color:#dcc38c; font-weight:normal; font-size:22px; margin:15px 0 9px; }
+#modal-body p { color:#c4cbbd; }
+.settings-row { padding:15px 0; border-bottom:1px solid #b69b6433; }
+.settings-row label { display:flex; justify-content:space-between; gap:15px; font:13px Arial; color:#e7d6b2; }
+.settings-row input[type=range] { width:100%; margin-top:18px; accent-color:#cdb078; }
+.log-entry { border-left:1px solid #bb9e6466; padding:0 0 0 18px; margin:0 0 23px; }
+.log-entry h3 { font:11px Arial !important; text-transform:uppercase; letter-spacing:.1em; }
+.log-entry p { font-size:16px; margin:7px 0; }
+.dossier-card,.glossary-entry { border:1px solid var(--line); padding:15px 18px; margin:12px 0; background:#1b291e; }
+.dossier-card h3,.glossary-entry h3 { margin-top:0 !important; }
+.dossier-card p,.glossary-entry p { margin:6px 0; }
+.glossary-zh { font:14px "Trebuchet MS",Arial,sans-serif; color:#b8c7ad; margin-left:10px; }
+.glossary-tabs { display:flex; gap:10px; flex-wrap:wrap; }
+.glossary-tabs button[aria-pressed=true] { border-color:#f0ce8e; background:#344432; }
+.glossary-search { width:100%; background:#0e1711; border:1px solid var(--line); padding:12px; margin:15px 0 8px; color:var(--paper); font:15px Arial; }
+.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+#game,#game *,dialog,dialog * { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
+input,textarea { -webkit-user-select:text !important; user-select:text !important; }
+img,svg { -webkit-user-drag:none; }
+
+/* Vocabulary buttons do not advance dialogue or select an answer. */
+.term {
+  display:inline; padding:0; margin:0; border:0; border-radius:0;
+  color:inherit; background:none; font:inherit; line-height:inherit;
+  letter-spacing:inherit; text-transform:inherit; text-align:inherit;
+  text-decoration:underline dotted #d6ba7b; text-underline-offset:4px;
+  cursor:help;
+}
+.term:hover,.term:focus-visible { color:#ffe0a0; }
+.paper-note .term { text-decoration-color:#705322; }
+.paper-note .term:hover { color:#70421f; }
+#word-tooltip {
+  position:fixed; z-index:100; width:min(340px,calc(100vw - 24px));
+  padding:15px 18px; border:1px solid #d4b676; background:#15251c;
+  box-shadow:0 12px 45px #000b; color:#eee6d2;
+  font:14px/1.6 "Trebuchet MS",Arial,sans-serif;
+  max-height:45vh; overflow:auto;
+}
+#word-tooltip strong { display:block; font:20px Georgia,serif; color:#efd196; margin-bottom:4px; }
+#word-tooltip .tip-zh { display:block; color:#b9cbae; font-size:13px; margin-bottom:8px; }
+#word-tooltip p { margin:0; }
+#word-tooltip small { display:block; color:#9eaf98; font-size:10px; margin-top:9px; }
+
+#worksheet { display:none; }
+#worksheet-preview { color:#111; background:white; padding:20px; }
+.worksheet-page {
+  color:#000; background:#fff; font:11pt/1.38 "Times New Roman",serif;
+  text-align:left; width:100%;
+}
+.worksheet-heading { text-align:center; font-weight:bold; line-height:1.55; margin-bottom:24px; }
+.worksheet-heading div { margin:4px 0; }
+.student-fields { display:flex; justify-content:space-between; gap:12px; margin:24px 0; white-space:nowrap; font-size:10.5pt; }
+.ws-section { margin:17px 0 9px; font-weight:bold; }
+.ws-table { width:100%; border-collapse:collapse; table-layout:fixed; margin:10px 0 17px; font-size:10pt; }
+.ws-table th,.ws-table td { border:1px solid #000; padding:8px; vertical-align:top; text-align:left; }
+.ws-table th { font-weight:normal; }
+.ws-table tr { break-inside:avoid; }
+.ws-ending { border:1px solid #000; padding:9px 11px; margin:13px 0; font-size:10pt; }
+.ws-ending ul { margin:6px 0 0; padding-left:17px; }
+.ws-ending li { margin:3px 0; }
+.ws-history { font-size:9.5pt; line-height:1.4; margin-top:14px; }
+.ws-question { margin:19px 0 8px; }
+.ws-prompt { font-size:10pt; margin:5px 0 8px; }
+.write-line { height:8mm; border-bottom:1px solid #888; }
+.ws-evaluation td { height:33mm; }
+.ws-footer { text-align:right; margin-top:14px; font-size:9pt; }
+#worksheet-preview .worksheet-page + .worksheet-page { margin-top:35px; border-top:1px dashed #aaa; padding-top:25px; }
+#worksheet-preview * { color:#000 !important; -webkit-user-select:text; user-select:text; }
+
+@media(min-width:1700px) {
+  #game { max-width:1800px; max-height:1100px; }
+}
+@media(max-width:950px) {
+  header { left:31px; right:31px; top:28px; }
+  #title { padding:108px 7% 80px; grid-template-columns:1.2fr .8fr; }
+  h1 { font-size:clamp(46px,8vw,72px); }
+  .title-description { font-size:16px; }
+  .title-portrait { height:46vh; }
+  .title-portrait figcaption { padding:40px 12px 20px; }
+  .title-portrait strong { font-size:19px; }
+  #hud { left:32px; right:32px; top:93px; }
+  #location { font-size:17px; }
+  .actor { width:39vw; height:60vh; bottom:145px; }
+  .actor.left { left:6%; }
+  .actor.right { right:6%; }
+  .actor.solo { width:43vw; right:8%; }
+  #dialogue { left:6%; right:6%; padding:21px 25px 14px; }
+  #toolbar { left:6%; right:6%; }
+  #dialogue-text { font-size:calc(var(--dialog-size) - 2px); }
+  .overlay-panel { inset:140px 22px 83px; }
+  .toolbar-group { gap:11px; }
+  #toolbar .key-hint { display:none; }
+}
+@media(max-width:560px) {
+  #frame { inset:10px; }
+  header { left:23px; right:23px; top:23px; gap:8px; }
+  .brand-title { font-size:9px; letter-spacing:.06em; max-width:165px; }
+  .brand-title small { font-size:7px; letter-spacing:.02em; }
+  .brand-symbol { width:24px; height:24px; }
+  .brand-symbol span { font-size:15px; }
+  .top-actions { gap:0; }
+  .icon-button { font-size:10px; padding:10px 6px; }
+  #fullscreen-button { display:none; }
+  #title { display:flex; padding:110px 9% 85px; align-items:center; }
+  .title-copy { max-width:100%; }
+  .title-copy .eyebrow { font-size:9px; margin-bottom:20px; }
+  h1 { font-size:clamp(49px,12vw,72px); }
+  .title-description { font-size:16px; max-width:95%; }
+  .title-portrait { position:absolute; right:-30px; top:15%; width:72%; height:64%; opacity:.16; z-index:0; }
+  .title-portrait figcaption { display:none; }
+  .title-bottom { left:9%; right:9%; font-size:8px; line-height:1.5; }
+  #hud { top:81px; left:24px; right:24px; }
+  #hud .eyebrow { font-size:8px; }
+  #location { font-size:13px; max-width:210px; }
+  .decision-pill { padding:7px; font-size:8px; }
+  #decision-count { font-size:17px; margin-left:5px; }
+  .actor { width:51vw; height:49vh; bottom:210px; }
+  .actor.left { left:-3%; }
+  .actor.right { right:-3%; }
+  .actor.solo { width:61vw; right:-5%; height:55vh; }
+  .actor figcaption { font-size:8px; top:61%; }
+  #scene-quote { top:24%; left:8%; width:46%; font-size:24px; }
+  #dialogue { left:21px; right:21px; bottom:110px; padding:18px 19px 12px; }
+  #speaker { font-size:17px; }
+  #dialogue-text { line-height:1.5; min-height:95px; max-height:27vh; font-size:calc(var(--dialog-size) - 3px); }
+  #counter { font-size:9px; }
+  #toolbar { bottom:23px; left:24px; right:24px; }
+  .toolbar-group { gap:8px 12px; }
+  #toolbar button { font-size:9px; padding:7px 0; }
+  #toolbar .dialogue-step { padding:6px 7px; }
+  #progress { bottom:10px; left:11px; right:11px; }
+  .overlay-panel { inset:132px 14px 110px; }
+  #note-overlay,#ending { inset:80px 14px 110px; }
+  .paper-note { padding:29px 24px 23px; }
+  .paper-note h2 { font-size:27px; }
+  .paper-note p { font-size:15px; }
+  .choice { padding:12px; gap:10px; grid-template-columns:27px 1fr; }
+  .choice-number { width:26px; height:26px; font-size:14px; align-self:start; }
+  .choice .option-text { font-size:15px; }
+  .choose-button { grid-column:2; justify-self:end; }
+  .choices-content { padding:13px; }
+  .choices-content h2 { font-size:25px; }
+  .choices-content>p { font-size:14px; margin-bottom:13px; }
+  .choice h3 { font-size:10px; line-height:1.5; }
+  #toast { top:126px; }
+  .ending-content { padding:17px; }
+  .ending-content>p,.closing-report ul { font-size:15px; }
+  .closing-report { padding:14px 17px; }
+  .modal-header,#modal-body { padding:18px 20px; }
+  #worksheet-preview { padding:12px; min-width:570px; }
+}
+@media(max-height:650px) and (min-width:561px) {
+  header { top:24px; }
+  #hud { top:77px; }
+  #title { padding-top:87px; padding-bottom:62px; }
+  h1 { font-size:clamp(40px,6vw,65px); margin-bottom:16px; }
+  .title-copy .eyebrow { margin-bottom:12px; }
+  .title-description { margin-bottom:16px; font-size:15px; line-height:1.5; }
+  .title-foot { margin-top:10px; }
+  #dialogue { bottom:73px; padding-top:15px; }
+  #dialogue-text { min-height:54px; font-size:18px; margin:8px 0; }
+  .actor { height:64vh; bottom:83px; }
+  #toolbar { bottom:24px; }
+  .overlay-panel { inset:121px 28px 73px; }
+  #note-overlay,#ending { inset:76px 28px 73px; }
+  .choices-content h2 { font-size:25px; }
+  .choices-content>p { margin:7px 0 12px; }
+  .choice { padding:11px 16px; margin:8px 0; }
+  .choice .option-text { font-size:15px; }
+}
+@media(prefers-reduced-motion:reduce) {
+  *,*::before,*::after { animation:none !important; transition:none !important; }
+}
+@page { size:A4 portrait; margin:17mm 19mm; }
+@media print {
+  :root { color-scheme:light; }
+  html,body { display:block !important; height:auto !important; width:auto !important; overflow:visible !important; background:white !important; color:black !important; }
+  #game,dialog,#word-tooltip { display:none !important; }
+  #worksheet { display:block !important; }
+  .worksheet-page {
+    display:block; width:auto; margin:0; padding:0;
+    break-after:page; page-break-after:always;
+    font-size:10.5pt; line-height:1.34;
+  }
+  .worksheet-page:last-child { break-after:auto; page-break-after:auto; }
+  .worksheet-heading { margin:0 0 7mm; }
+  .student-fields { margin:6mm 0 7mm; }
+  .ws-table { font-size:9.5pt; }
+  .ws-table th,.ws-table td { padding:2mm; }
+  .ws-section { margin:4mm 0 2mm; }
+  .ws-ending { font-size:9.5pt; }
+  .ws-history { font-size:9pt; }
+  .ws-question { margin:5mm 0 2mm; }
+  .worksheet-page * { color:#000 !important; box-shadow:none !important; text-shadow:none !important; }
+}
+</style>
+</head>
+<body>
+<main id="game" aria-label="China at the Peace Table">
+  <div id="backdrops" aria-hidden="true">
+    <div class="backdrop current" id="bg-study">
+      <svg viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice">
+        <defs>
+          <linearGradient id="studyWall" x2="0" y2="1"><stop stop-color="#4b4832"/><stop offset="1" stop-color="#252b22"/></linearGradient>
+          <linearGradient id="nightWindow" x2="0" y2="1"><stop stop-color="#637f80"/><stop offset="1" stop-color="#b1b3a0"/></linearGradient>
+          <linearGradient id="deskWood" x2=".2" y2="1"><stop stop-color="#685034"/><stop offset="1" stop-color="#241e15"/></linearGradient>
+          <radialGradient id="lampLight"><stop stop-color="#d3ad55" stop-opacity=".35"/><stop offset="1" stop-color="#d3ad55" stop-opacity="0"/></radialGradient>
+          <pattern id="wallPanels" width="205" height="560" patternUnits="userSpaceOnUse">
+            <rect width="205" height="560" fill="none" stroke="#aa9053" stroke-opacity=".18" stroke-width="5"/>
+            <rect x="18" y="35" width="170" height="490" fill="none" stroke="#aa9053" stroke-opacity=".13" stroke-width="2"/>
+          </pattern>
+          <pattern id="books" width="110" height="150" patternUnits="userSpaceOnUse">
+            <rect x="3" y="15" width="20" height="123" rx="2" fill="#413d2b"/>
+            <rect x="26" y="23" width="15" height="115" rx="2" fill="#5a4430"/>
+            <rect x="44" y="5" width="28" height="133" rx="2" fill="#2d3a30"/>
+            <rect x="76" y="28" width="12" height="110" fill="#765b39"/>
+            <rect x="91" y="11" width="16" height="127" fill="#3c3328"/>
+            <path d="M3 36H23M26 45H41M44 29H72M91 31H107M3 119H23M44 110H72" stroke="#c0a46d" stroke-opacity=".5" stroke-width="3"/>
+            <rect y="139" width="110" height="11" fill="#201d16"/>
+          </pattern>
+        </defs>
+        <rect width="1600" height="1000" fill="url(#studyWall)"/>
+        <rect width="1600" height="650" fill="url(#wallPanels)"/>
+        <path d="M0 90H1600M0 110H1600M0 625H1600" stroke="#897746" stroke-opacity=".35" stroke-width="7"/>
+        <rect x="100" y="160" width="380" height="485" fill="#181e18" stroke="#6f6040" stroke-width="18"/>
+        <rect x="120" y="175" width="340" height="451" fill="url(#books)"/>
+        <rect x="1120" y="157" width="320" height="470" fill="#1b221e" stroke="#706749" stroke-width="20"/>
+        <rect x="1137" y="174" width="286" height="429" fill="url(#nightWindow)"/>
+        <g>
+          <path d="M1137 538L1154 522H1200L1217 540H1241L1256 524H1299L1316 541H1342L1356 526H1406L1423 540V604H1137Z" fill="#78857c"/>
+          <path d="M1137 559H1219V604H1137ZM1221 555H1322V604H1221ZM1324 562H1423V604H1324Z" fill="#746e58"/>
+          <path d="M1137 559L1153 528H1204L1219 559ZM1221 555L1239 523H1305L1322 555ZM1324 562L1341 531H1408L1423 562Z" fill="#435451"/>
+          <g fill="#6b6656">
+            <rect x="1161" y="516" width="9" height="21"/><rect x="1190" y="520" width="8" height="16"/>
+            <rect x="1248" y="511" width="10" height="23"/><rect x="1290" y="515" width="8" height="20"/><rect x="1386" y="518" width="10" height="23"/>
+          </g>
+          <g fill="#494e45">
+            <rect x="1159" y="514" width="13" height="4"/><rect x="1188" y="518" width="12" height="4"/>
+            <rect x="1246" y="509" width="14" height="4"/><rect x="1288" y="513" width="12" height="4"/><rect x="1384" y="516" width="14" height="4"/>
+          </g>
+          <g fill="#a49d7e" stroke="#3e504c" stroke-width="2">
+            <path d="M1176 550V538L1182 532L1188 538V550Z"/><path d="M1261 548V535L1268 529L1275 535V548Z"/><path d="M1354 554V542L1361 536L1368 542V554Z"/>
+          </g>
+          <g fill="#b1a881" opacity=".65">
+            <rect x="1150" y="572" width="9" height="17"/><rect x="1177" y="572" width="9" height="17"/><rect x="1201" y="572" width="9" height="17"/>
+            <rect x="1241" y="568" width="10" height="18"/><rect x="1270" y="568" width="10" height="18"/><rect x="1298" y="568" width="10" height="18"/>
+            <rect x="1345" y="575" width="10" height="16"/><rect x="1374" y="575" width="10" height="16"/><rect x="1402" y="575" width="10" height="16"/>
+          </g>
+          <path d="M1137 561H1219M1221 557H1322M1324 564H1423" stroke="#b0a280" stroke-width="3" opacity=".55"/>
+        </g>
+        <path d="M1280 174V603M1137 380H1423" stroke="#3d4437" stroke-width="13"/>
+        <path d="M1095 124Q1125 311 1097 655H1152Q1190 343 1147 128Z" fill="#32392c"/>
+        <path d="M1402 128Q1370 343 1412 655H1472Q1439 331 1469 124Z" fill="#32392c"/>
+        <rect y="650" width="1600" height="350" fill="#26291f"/>
+        <path d="M0 1000L670 650M320 1000L730 650M1580 1000L920 650M1260 1000L860 650" stroke="#806643" stroke-opacity=".2" stroke-width="3"/>
+        <ellipse cx="812" cy="660" rx="510" ry="380" fill="url(#lampLight)"/>
+        <path d="M267 723L1280 691 1550 1000H20Z" fill="url(#deskWood)" stroke="#765b37" stroke-width="6"/>
+        <g transform="translate(590 730) rotate(-8)">
+          <rect x="-190" y="-20" width="570" height="280" fill="#d2bd8e"/>
+          <rect x="-175" y="-5" width="540" height="250" fill="none" stroke="#7f784f" stroke-width="2"/>
+          <path d="M-110 117L-85 90 -49 86 -24 51 21 65 45 46 92 73 137 70 166 91 195 81 216 105 254 119 266 139 230 143 206 132 181 154 190 179 165 201 121 194 101 222 66 204 34 213 10 178 -39 171 -49 144 -89 150Z" fill="#9d9b72" stroke="#727450" stroke-width="2"/>
+          <path d="M180 123L207 105 225 113 242 108 266 123 240 134 217 130 204 144" fill="#9f4232" stroke="#9f4232" stroke-width="3"/>
+          <ellipse cx="235" cy="124" rx="58" ry="36" fill="none" stroke="#ab342b" stroke-width="4"/>
+          <path d="M277 109L333 53" stroke="#ab342b" stroke-width="2"/>
+          <text x="222" y="33" font-family="Georgia" font-size="19" fill="#853a2b">SHANDONG</text>
+          <text x="-149" y="27" font-family="Georgia" font-size="18" fill="#5d6346">CHINA</text>
+          <text x="-149" y="225" font-family="Arial" font-size="8" fill="#766b4a" letter-spacing="2">DELEGATION PAPERS · SCHEMATIC</text>
+        </g>
+        <g transform="translate(377 707) rotate(8)">
+          <rect width="165" height="217" fill="#bbaa81"/>
+          <path d="M20 28H143M20 44H138M20 60H146M20 76H132M20 92H142M20 124H116M20 140H145" stroke="#6b6b51" opacity=".5" stroke-width="3"/>
+        </g>
+        <ellipse cx="988" cy="770" rx="74" ry="21" fill="#191d15"/>
+        <path d="M988 752V486" stroke="#b2924a" stroke-width="13"/>
+        <path d="M901 514Q905 423 988 423Q1070 423 1076 514Z" fill="#8c8550" stroke="#bfa45b" stroke-width="4"/>
+        <ellipse cx="988" cy="514" rx="87" ry="15" fill="#d8be78"/>
+        <ellipse cx="988" cy="740" rx="260" ry="220" fill="url(#lampLight)"/>
+        <rect x="1100" y="780" width="42" height="56" rx="5" fill="#172224" stroke="#727b67" stroke-width="2"/>
+        <path d="M1120 794L1224 584" stroke="#b6a77f" stroke-width="5"/>
+        <path d="M1224 584Q1248 613 1170 706Q1211 627 1224 584Z" fill="#b4b29c"/>
+      </svg>
+    </div>
+
+    <div class="backdrop" id="bg-hall">
+      <svg viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice">
+        <defs>
+          <linearGradient id="hallWall" x2="0" y2="1"><stop stop-color="#8d8161"/><stop offset="1" stop-color="#4b5546"/></linearGradient>
+          <linearGradient id="hallFloor" x2="0" y2="1"><stop stop-color="#7a775b"/><stop offset="1" stop-color="#293a31"/></linearGradient>
+          <linearGradient id="hallDoor" x2="1" y2="0"><stop stop-color="#192b25"/><stop offset=".5" stop-color="#425443"/><stop offset="1" stop-color="#1b2d25"/></linearGradient>
+          <radialGradient id="hallGlow"><stop stop-color="#f4db9a" stop-opacity=".36"/><stop offset="1" stop-color="#d7c392" stop-opacity="0"/></radialGradient>
+          <g id="pilaster">
+            <rect width="75" height="650" fill="#b7a678"/><rect x="10" y="12" width="55" height="620" fill="#7c7c5b"/>
+            <path d="M22 30V620M36 30V620M50 30V620" stroke="#c3b286" stroke-opacity=".6" stroke-width="4"/>
+            <rect x="-14" y="-15" width="103" height="28" fill="#c9b17f"/><rect x="-10" y="633" width="95" height="24" fill="#aa956b"/>
+          </g>
+          <g id="sconce">
+            <path d="M0 68V14M-28 42Q0 76 28 42M-28 42V11M28 42V11" fill="none" stroke="#c7aa67" stroke-width="6"/>
+            <path d="M-32 11V-10M-4 14V-17M24 11V-10" stroke="#e7d09d" stroke-width="9"/>
+            <ellipse cx="0" cy="0" rx="90" ry="115" fill="url(#hallGlow)"/>
+          </g>
+        </defs>
+        <rect width="1600" height="1000" fill="url(#hallWall)"/>
+        <path d="M0 0L507 203H1093L1600 0" fill="#64664e"/>
+        <path d="M0 43L517 224H1083L1600 43M0 73L526 244H1074L1600 73" stroke="#d0b682" stroke-opacity=".6" stroke-width="7" fill="none"/>
+        <path d="M0 798L510 697H1090L1600 798V1000H0Z" fill="url(#hallFloor)"/>
+        <path d="M640 1000L725 693H875L960 1000Z" fill="#624536"/>
+        <path d="M648 1000L731 693M952 1000L869 693" stroke="#b79d69" stroke-width="4"/>
+        <g stroke="#b8a078" stroke-opacity=".2" stroke-width="2">
+          <path d="M0 990L640 697M1600 990L960 697M0 885L580 697M1600 885L1020 697M220 1000L680 697M1380 1000L920 697M0 850H1600M0 911H1600"/>
+        </g>
+        <rect x="517" y="229" width="566" height="470" fill="#8a8261" stroke="#b39c6c" stroke-width="7"/>
+        <path d="M649 698V351Q800 205 951 351V698" fill="url(#hallDoor)" stroke="#c1a675" stroke-width="13"/>
+        <path d="M671 689V365Q800 244 929 365V689M800 294V699" fill="none" stroke="#b49b6b" stroke-width="3"/>
+        <g fill="none" stroke="#b59d6c" stroke-width="2">
+          <rect x="692" y="394" width="87" height="211"/><rect x="820" y="394" width="87" height="211"/>
+          <rect x="692" y="626" width="87" height="57"/><rect x="820" y="626" width="87" height="57"/>
+        </g>
+        <g fill="#ceb67f"><circle cx="781" cy="545" r="5"/><circle cx="819" cy="545" r="5"/></g>
+        <use href="#pilaster" x="52" y="104"/><use href="#pilaster" x="1470" y="104"/>
+        <use href="#pilaster" transform="translate(318 190) scale(.78)"/><use href="#pilaster" transform="translate(1220 190) scale(.78)"/>
+        <use href="#pilaster" transform="translate(529 249) scale(.65)"/><use href="#pilaster" transform="translate(1021 249) scale(.65)"/>
+        <g fill="#33483d" stroke="#bea674" stroke-width="4">
+          <path d="M159 244L273 267V641L159 667Z"/><path d="M1327 267L1441 244V667L1327 641Z"/>
+        </g>
+        <use href="#sconce" x="209" y="356"/><use href="#sconce" x="1390" y="356"/>
+        <use href="#sconce" transform="translate(452 373) scale(.65)"/><use href="#sconce" transform="translate(1148 373) scale(.65)"/>
+        <path d="M800 0V126" stroke="#c2a76a" stroke-width="4"/>
+        <path d="M744 117Q800 180 856 117M764 140Q800 184 836 140M800 107V174" fill="none" stroke="#c3aa73" stroke-width="6"/>
+        <g fill="#ead29c">
+          <rect x="739" y="94" width="10" height="26"/><rect x="851" y="94" width="10" height="26"/>
+          <rect x="759" y="116" width="10" height="24"/><rect x="831" y="116" width="10" height="24"/><rect x="795" y="81" width="10" height="31"/>
+        </g>
+        <ellipse cx="800" cy="122" rx="310" ry="190" fill="url(#hallGlow)"/>
+        <circle cx="800" cy="219" r="43" fill="#b69d66"/><circle cx="800" cy="219" r="35" fill="#d5c79c"/>
+        <circle cx="800" cy="219" r="31" fill="none" stroke="#68664c" stroke-width="1"/>
+        <g fill="#4d5341" font-size="12" font-family="Georgia" text-anchor="middle">
+          <text x="800" y="197">XII</text><text x="800" y="250">VI</text><text x="775" y="223">IX</text><text x="825" y="223">III</text>
+        </g>
+        <path d="M800 219L785 204M800 219L809 196" stroke="#4d5341" stroke-width="3"/>
+        <text x="800" y="741" text-anchor="middle" font-size="13" fill="#c2ae80" font-family="Georgia" letter-spacing="5">SALON DE L’HORLOGE</text>
+      </svg>
+    </div>
+
+    <div class="backdrop" id="bg-memory">
+      <svg viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice">
+        <defs>
+          <linearGradient id="memorySky" x2="0" y2="1"><stop stop-color="#4d5755"/><stop offset=".65" stop-color="#92958a"/><stop offset="1" stop-color="#414943"/></linearGradient>
+          <g id="worker">
+            <circle cx="0" cy="-53" r="12"/><path d="M-15-39Q0-47 15-34L25 14H-14Z"/>
+            <path d="M-5 12L-17 64M15 11L35 57M9-29L48-3M-10-25L-29 9" fill="none" stroke="currentColor" stroke-width="12"/>
+          </g>
+        </defs>
+        <rect width="1600" height="1000" fill="url(#memorySky)"/>
+        <path d="M0 511Q185 430 389 490T760 480T1130 488T1600 450V1000H0Z" fill="#4c554d"/>
+        <path d="M0 648Q270 506 571 614T1130 589T1600 586V1000H0Z" fill="#303c34"/>
+        <path d="M0 806L256 639 471 701 692 670 875 761 1147 685 1350 795 1600 718V1000H0Z" fill="#1d2b24"/>
+        <g fill="#26332c" color="#26332c">
+          <use href="#worker" transform="translate(420 611) rotate(12)"/><use href="#worker" transform="translate(589 623) scale(.9) rotate(-10)"/><use href="#worker" transform="translate(1039 618) scale(.95) rotate(10)"/>
+        </g>
+        <g fill="none" stroke="#28372e" stroke-width="7">
+          <path d="M463 602L522 623 574 622M476 606L498 653M566 623L548 651"/><circle cx="535" cy="653" r="18"/>
+          <path d="M619 582L607 680M1082 608L1160 627 1190 604M1112 623L1132 656"/><circle cx="1145" cy="656" r="18"/>
+        </g>
+        <g stroke="#1c2922" stroke-width="9"><path d="M93 760L69 483M286 709L310 504M1360 738L1388 483M1535 790L1532 473"/></g>
+        <g fill="none" stroke="#233027" stroke-width="3">
+          <path d="M0 536Q152 619 321 560T651 571T985 533T1305 568T1600 511"/>
+          <path d="M0 597Q163 668 331 614T659 624T1008 589T1310 618T1600 569"/>
+          <path d="M38 547L61 582M59 547L36 579M156 581L181 608M178 578L153 608M300 558L323 586M322 556L298 586M1278 562L1297 590M1298 560L1276 590M1438 550L1464 580M1461 546L1438 582"/>
+        </g>
+        <g stroke="#d1d1be" stroke-width="1" opacity=".11"><path d="M100 0L-40 950M320 0L170 1000M500 0L350 1000M700 0L550 1000M890 0L740 1000M1080 0L930 1000M1300 0L1150 1000M1520 0L1370 1000"/></g>
+      </svg>
+    </div>
+
+    <div class="backdrop" id="bg-chamber">
+      <svg viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice">
+        <defs>
+          <linearGradient id="chamberWall" x2="0" y2="1"><stop stop-color="#777154"/><stop offset="1" stop-color="#28392d"/></linearGradient>
+          <linearGradient id="tableWood" x2="0" y2="1"><stop stop-color="#735b3c"/><stop offset="1" stop-color="#211d16"/></linearGradient>
+          <pattern id="chamberPanels" width="240" height="580" patternUnits="userSpaceOnUse">
+            <rect x="18" y="90" width="204" height="430" fill="#263c3240" stroke="#c7ac7555" stroke-width="3"/>
+            <rect x="31" y="105" width="178" height="400" fill="none" stroke="#c7ac7533"/>
+          </pattern>
+          <radialGradient id="chamberGlow"><stop stop-color="#e4c282" stop-opacity=".3"/><stop offset="1" stop-color="#e4c282" stop-opacity="0"/></radialGradient>
+        </defs>
+        <rect width="1600" height="1000" fill="url(#chamberWall)"/>
+        <rect width="1600" height="680" fill="url(#chamberPanels)"/>
+        <path d="M0 65H1600M0 82H1600M0 590H1600M0 610H1600" stroke="#c5aa7155" stroke-width="6"/>
+        <g fill="#82918a" stroke="#af9e73" stroke-width="12">
+          <path d="M80 485V220Q170 110 260 220V485Z"/><path d="M1340 485V220Q1430 110 1520 220V485Z"/>
+        </g>
+        <g stroke="#3a5148" stroke-width="9"><path d="M170 150V485M80 327H260M1430 150V485M1340 327H1520"/></g>
+        <g fill="#263b2e"><path d="M40 122Q120 318 44 553H107Q148 323 108 119Z"/><path d="M1492 119Q1450 320 1493 553H1558Q1480 320 1560 122Z"/></g>
+        <ellipse cx="800" cy="300" rx="530" ry="330" fill="url(#chamberGlow)"/>
+        <path d="M800 0V140M685 150Q800 240 915 150M730 181Q800 226 870 181" fill="none" stroke="#c4a467" stroke-width="8"/>
+        <g fill="#e8d3a3"><rect x="680" y="124" width="10" height="30"/><rect x="910" y="124" width="10" height="30"/><rect x="725" y="152" width="10" height="30"/><rect x="865" y="152" width="10" height="30"/></g>
+        <g fill="#29382b" stroke="#827046" stroke-width="5">
+          <path d="M355 640V460Q400 410 445 460V640Z"/><path d="M555 640V460Q600 410 645 460V640Z"/>
+          <path d="M755 640V460Q800 410 845 460V640Z"/><path d="M955 640V460Q1000 410 1045 460V640Z"/>
+          <path d="M1155 640V460Q1200 410 1245 460V640Z"/>
+        </g>
+        <path d="M320 600H1280L1580 980H20Z" fill="url(#tableWood)" stroke="#a18554" stroke-width="6"/>
+        <g fill="#d0be92" opacity=".85">
+          <path d="M435 644H564L583 720H421Z"/><path d="M714 630H832L841 710H706Z"/><path d="M992 646H1112L1140 729H1000Z"/>
+        </g>
+        <g fill="#182c29" stroke="#9e916b" stroke-width="2"><rect x="625" y="658" width="28" height="35" rx="3"/><rect x="914" y="659" width="28" height="35" rx="3"/></g>
+        <path d="M639 665L665 584M928 665L949 586" stroke="#bcac82" stroke-width="4"/>
+      </svg>
+    </div>
+  </div>
+
+  <div id="vignette" aria-hidden="true"></div>
+  <div id="dust" aria-hidden="true"></div>
+
+  <header>
+    <button class="brand" data-action="home" aria-label="Return to title">
+      <span class="brand-symbol"><span>✦</span></span>
+      <span class="brand-title">China at the Peace Table<small>Through the eyes of Wellington Koo</small></span>
+    </button>
+    <div class="top-actions">
+      <button class="icon-button" id="sound-button" data-action="sound" aria-pressed="false">Sound off</button>
+      <button class="icon-button" id="fullscreen-button" data-action="fullscreen" aria-label="Toggle fullscreen">⛶</button>
+      <button class="icon-button" data-action="settings">Settings</button>
+    </div>
+  </header>
+
+  <section id="title" aria-label="Title screen">
+    <div class="title-copy">
+      <div class="eyebrow">Paris · January–June 1919</div>
+      <h1>China at<br>the <em>Peace Table.</em></h1>
+      <p class="title-description">A claim to justice. A room full of interests.<br>Defend China’s rights—and decide what you cannot surrender.</p>
+      <div class="button-row">
+        <button class="primary" data-action="begin">Enter the conference →</button>
+        <button class="secondary" id="resume-button" data-action="resume" hidden>Continue</button>
+      </div>
+      <p class="title-foot">THREE ACTS · FOUR DECISIONS · ABOUT 5–10 MINUTES<br>Hover or tap underlined words for help.</p>
+    </div>
+    <figure class="title-portrait">
+      <span class="title-number">1919.</span>
+      <img data-photo="koo" alt="Historical photograph of Wellington Koo" draggable="false">
+      <div class="photo-fallback"><span>WK</span><small>Wellington Koo<br>Portrait unavailable</small></div>
+      <figcaption>
+        <span class="eyebrow">The Chinese delegation</span>
+        <strong>Wellington Koo</strong>
+        <span class="eyebrow">China must be heard.</span>
+      </figcaption>
+    </figure>
+    <div class="title-bottom"><span>The Shandong Question</span><span>Principle · Pressure · Choice</span></div>
+  </section>
+
+  <div id="hud" hidden>
+    <div><div class="eyebrow" id="chapter-label"></div><div id="location"></div></div>
+    <div class="decision-pill">Decisions <span id="decision-count">0 / 4</span></div>
+  </div>
+
+  <div id="actors" hidden></div>
+  <div id="scene-quote" hidden aria-hidden="true"></div>
+  <div id="memory-title" hidden aria-hidden="true">
+    <strong>140,000</strong><span class="eyebrow">Labourers. Lives. A claim to be heard.</span>
+  </div>
+
+  <section id="dialogue" hidden aria-label="Current dialogue">
+    <h2 id="speaker"></h2>
+    <p id="dialogue-text" aria-live="off"></p>
+    <p id="accessible-dialogue" class="sr-only" aria-live="polite" aria-atomic="true"></p>
+    <div class="dialogue-footer">
+      <span id="counter">Hover or tap underlined words · Words: G</span>
+      <button id="advance">Continue <span>▸</span></button>
+    </div>
+  </section>
+
+  <section class="overlay-panel" id="note-overlay" hidden aria-label="Your instructions">
+    <article class="paper-note">
+      <div class="eyebrow">Confidential · Chinese delegation</div>
+      <h2>This is not your time.</h2>
+      <p><strong>Paris · 18 January 1919</strong></p>
+      <div id="brief-text"></div>
+      <hr class="paper-rule">
+      <div class="note-bottom">
+        <span class="seal">CHINESE<br>DELEGATION<br>1919</span>
+        <button class="primary" data-action="advance">Take up the brief →</button>
+      </div>
+    </article>
+  </section>
+
+  <section class="overlay-panel" id="choices-overlay" hidden aria-labelledby="choice-title">
+    <div class="choices-content">
+      <div class="eyebrow" id="choice-eyebrow"></div>
+      <h2 id="choice-title" tabindex="-1"></h2>
+      <p id="choice-context"></p>
+      <div id="choice-list"></div>
+      <p class="choice-note" id="choice-note"></p>
+      <div class="button-row" id="choice-review" hidden>
+        <button class="primary" data-action="advance">Continue this route →</button>
+        <button class="secondary" data-action="revise">Revise this decision</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="overlay-panel" id="ending" hidden aria-labelledby="end-title">
+    <div class="ending-content">
+      <div class="end-symbol">— ✦ —</div>
+      <div class="eyebrow">Paris · 28 June 1919</div>
+      <h2 id="end-title" tabindex="-1"></h2>
+      <p id="end-narrative"></p>
+      <div class="closing-report">
+        <h3>Conference closing report</h3>
+        <ul id="end-facts"></ul>
+      </div>
+      <div class="button-row">
+        <button class="primary" data-action="worksheet">My reflection worksheet</button>
+        <button class="secondary" data-action="historical">What happened next?</button>
+        <button class="secondary" data-action="restart">Play again</button>
+      </div>
+      <p class="smallprint">How would you explain your decision to the people at home?</p>
+    </div>
+  </section>
+
+  <nav id="toolbar" aria-label="Game controls" hidden>
+    <div class="toolbar-group">
+      <button class="dialogue-step" data-action="back" aria-label="Previous scene">▲ Back</button>
+      <button class="dialogue-step" data-action="next" aria-label="Next scene">▼ Next</button>
+      <button id="words-button" data-action="words" title="Words in the current scene — G">Words</button>
+      <button data-action="dossier">Brief</button>
+      <button data-action="history">Log</button>
+      <button id="auto-button" data-action="auto" aria-pressed="false">Auto: off</button>
+      <button data-action="save">Save</button>
+      <button data-action="load">Load</button>
+      <button data-action="help">Help</button>
+    </div>
+    <span class="key-hint">SPACE: continue · 1 / 2 / 3: choose</span>
+  </nav>
+
+  <div id="progress" aria-hidden="true"><span></span></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <div id="frame" aria-hidden="true"></div>
+  <div id="grain" aria-hidden="true"></div>
+  <div id="word-tooltip" role="tooltip" hidden></div>
+</main>
+
+<dialog id="modal" aria-labelledby="modal-title">
+  <div class="modal-header">
+    <h2 id="modal-title"></h2>
+    <button id="close-modal" aria-label="Close dialog">×</button>
+  </div>
+  <div id="modal-body"></div>
+</dialog>
+
+<div id="worksheet" aria-label="Personal reflection worksheet"></div>
+<script type="application/json" id="embedded-assets">{}</script>
+
+<script>
+(() => {
+"use strict";
+
+const ORIGINAL_HTML = "<!DOCTYPE html>\n" + document.documentElement.outerHTML;
+const $ = id => document.getElementById(id);
+const $$ = selector => Array.from(document.querySelectorAll(selector));
+const escapeHTML = value => String(value).replace(/[&<>"']/g, char => ({
+  "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+}[char]));
+const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+const PEOPLE = {
+  koo:{
+    name:"Wellington Koo",caption:"Wellington Koo · China",initials:"WK",
+    file:"Wellington_Koo_cph.3a44362.jpg",
+    url:"https://upload.wikimedia.org/wikipedia/commons/4/40/Wellington_Koo_cph.3a44362.jpg",
+    credit:"1916 portrait; photographer unknown. Library of Congress, cph.3a44362."
+  },
+  lansing:{
+    name:"Robert Lansing",caption:"Robert Lansing · United States",initials:"RL",
+    file:"Robert_Lansing_cph.3b47713.jpg",
+    url:"https://upload.wikimedia.org/wikipedia/commons/0/09/Robert_Lansing_cph.3b47713.jpg",
+    credit:"1919 portrait by Harris & Ewing. Library of Congress, cph.3b47713."
+  },
+  wilson:{
+    name:"Woodrow Wilson",caption:"Woodrow Wilson · United States",initials:"WW",
+    file:"Thomas Woodrow Wilson, Harris & Ewing bw photo portrait, 1919.jpg",
+    credit:"1919 portrait by Harris & Ewing; Library of Congress."
+  },
+  makino:{
+    name:"Makino Nobuaki",caption:"Makino Nobuaki · Japan",initials:"MN",
+    file:"Nobuaki Makino.jpg",
+    credit:"Portrait listed on Wikimedia Commons; see the source page for details."
+  },
+  lou:{
+    name:"Lou Tseng-tsiang",caption:"Lou Tseng-tsiang · Chinese delegation",initials:"LT",
+    file:"Lou Tseng-Tsiang 01.jpg",
+    credit:"George Grantham Bain Collection, Library of Congress."
+  }
+};
+
+let embedded={};
+try { embedded=JSON.parse($("embedded-assets").textContent || "{}"); } catch (_) {}
+const ASSETS={};
+Object.entries(PEOPLE).forEach(([id,person]) => {
+  ASSETS[id]=embedded[id] || person.url ||
+    "https://commons.wikimedia.org/wiki/Special:FilePath/"+encodeURIComponent(person.file);
+});
+
+const KEYS={
+  auto:"koo-complete-v5-auto",
+  manual:"koo-complete-v5-manual",
+  preferences:"koo-complete-v5-preferences"
+};
+let preferences={speed:reducedMotion ? 0 : 18,size:22};
+try {
+  const p=JSON.parse(localStorage.getItem(KEYS.preferences));
+  if (p && Number.isFinite(p.speed) && Number.isFinite(p.size)) {
+    preferences.speed=Math.max(0,Math.min(50,p.speed));
+    preferences.size=Math.max(19,Math.min(29,p.size));
+  }
+} catch (_) {}
+document.documentElement.style.setProperty("--dialog-size",preferences.size+"px");
+
+let answers=[],story=[],index=0;
+let playing=false,automatic=false,typing=false;
+let textChars=[],visibleChars=0,typingStart=0;
+let frameRequest=0,automaticTimer=0,toastTimer=0;
+let previousFocus=null,exportBusy=false,lastNodeID="";
+let tipAnchor=null,tipPinned=false,tipTimer=0;
+let glossaryMode="current";
+let glossarySceneIDs=[];
+
+const ACTS={
+  1:"Act I · Sympathy and support",
+  2:"Act II · The price of agreement",
+  3:"Act III · The final decision"
+};
+const DEFAULT_LOCATIONS={
+  study:"Grand Hotel · Chinese delegation",
+  hall:"Paris · Outside the conference rooms",
+  chamber:"Paris · The negotiating table",
+  memory:"The Western Front · A memory"
+};
+const DECISION_NAMES=[
+  "The American approach","Japan’s demands",
+  "Preparing your last move","The final recommendation"
+];
+
+const BRIEF_PARAGRAPHS=[
+  "You are Wellington Koo, a member of China’s delegation.",
+  "Seek the return of the leased territory of Jiaozhou and Germany’s former railway, mining and other rights in Shandong.",
+  "Protect China’s sovereignty, the people’s interests and China’s freedom to make its own decisions.",
+  "You will advise the delegation. You cannot command the other powers."
+];
+
+/* Definitions are separate from the story. Aliases allow a term to be
+   recognised in the different forms used in dialogue and choices. */
+const GLOSSARY=[
+  {
+    id:"sovereignty",term:"Sovereignty",zh:"主權",
+    aliases:["sovereignty"],
+    meaning:"A country’s right to govern itself and its territory, rather than being ruled by another country."
+  },
+  {
+    id:"territorial",term:"Territorial integrity",zh:"領土完整",
+    aliases:["territorial integrity"],
+    meaning:"The principle that a country’s territory should remain whole and should not be taken or divided by another power."
+  },
+  {
+    id:"control",term:"Effective control",zh:"實際管治",
+    aliases:["effective control","real control"],
+    meaning:"Actually being able to govern a place and run its important services. A promise of Chinese sovereignty is not the same as Chinese officials actually being in control."
+  },
+  {
+    id:"delegation",term:"Delegation",zh:"代表團",
+    aliases:["delegation","delegations"],
+    meaning:"A group sent to speak and negotiate for a country. Koo is one member of China’s delegation, not its only decision-maker."
+  },
+  {
+    id:"leased",term:"Leased territory",zh:"租借地",
+    aliases:["leased territory"],
+    meaning:"Territory placed under another country’s administration for a period under an agreement. Jiaozhou was Chinese territory leased to Germany; Japan took it from Germany in 1914."
+  },
+  {
+    id:"jiaozhou",term:"Jiaozhou",zh:"膠州",
+    aliases:["Jiaozhou","Kiaochow"],
+    meaning:"The bay area in Shandong associated with Germany’s leased territory. It included Qingdao. Older English sources may call it Kiaochow."
+  },
+  {
+    id:"qingdao",term:"Qingdao",zh:"青島",
+    aliases:["Qingdao","Tsingtao"],
+    meaning:"An important port in Shandong. Japan captured the German-held port in 1914. Older English sources may call it Tsingtao."
+  },
+  {
+    id:"league",term:"League of Nations",zh:"國際聯盟",
+    aliases:["League of Nations","the League","League’s"],
+    meaning:"The international organisation planned after the First World War to help countries settle disputes and prevent war. Wilson made its creation a major goal."
+  },
+  {
+    id:"credibility",term:"Credibility",zh:"公信力",
+    aliases:["credibility"],
+    meaning:"Being trusted or believed. Here, it means whether countries would trust the League’s promise to protect them."
+  },
+  {
+    id:"allied",term:"Allied side",zh:"協約國陣營",
+    aliases:["Allied side","Allied participant","Allies"],
+    meaning:"The countries fighting Germany and its partners in the First World War. China declared war on Germany in 1917."
+  },
+  {
+    id:"labourers",term:"Labourers",zh:"勞工",
+    aliases:["labourers"],
+    meaning:"Workers doing physical jobs. Chinese labourers supported the war effort by moving supplies, repairing roads and doing other essential work."
+  },
+  {
+    id:"claims",term:"Claim",zh:"主張；要求",
+    aliases:["claims","claim"],
+    meaning:"A statement that a country is entitled to something. A country making a claim does not mean that the claim is accepted or justified."
+  },
+  {
+    id:"privileges",term:"Exclusive privileges",zh:"專有特權",
+    aliases:["exclusive privileges","special privileges","privileges"],
+    meaning:"Special rights or advantages. Exclusive privileges would give Japan advantages that other countries did not have, such as control over particular railways or mines."
+  },
+  {
+    id:"equal",term:"Equal access",zh:"平等准入",
+    aliases:["equal access","equal-access","equal trade","equal terms"],
+    meaning:"Allowing countries to trade under the same rules, rather than giving one country special rights. It does not mean allowing foreign countries to govern Chinese territory."
+  },
+  {
+    id:"commercial",term:"Commercial",zh:"商業的",
+    aliases:["commercial"],
+    meaning:"Connected with trade, business, buying or selling."
+  },
+  {
+    id:"assets",term:"Railway assets",zh:"鐵路資產",
+    aliases:["railway assets","assets","railway property"],
+    meaning:"Property connected with a railway, such as tracks, stations and equipment. Discussing payment for this property is different from paying for a country’s sovereignty."
+  },
+  {
+    id:"administration",term:"Administration",zh:"行政管理",
+    aliases:["administration"],
+    meaning:"The officials and system that govern a place or manage its services."
+  },
+  {
+    id:"withdrawal",term:"Troop withdrawal",zh:"撤軍",
+    aliases:["troop withdrawal","withdrawal","withdrawn","withdraw"],
+    meaning:"Removing soldiers from a place. A promise to withdraw still leaves questions about when it will happen and who will check it."
+  },
+  {
+    id:"deadline",term:"Deadline",zh:"限期",
+    aliases:["deadline","fixed date"],
+    meaning:"The latest agreed date for completing an action, such as removing troops."
+  },
+  {
+    id:"enforceable",term:"Enforceable timetable",zh:"可強制執行的時間表",
+    aliases:["enforceable timetable","enforceable"],
+    meaning:"A timetable backed by agreed ways to make the parties keep it or respond if they do not. A written date alone does not guarantee action."
+  },
+  {
+    id:"verification",term:"Independent verification",zh:"獨立核查",
+    aliases:["independent verification","verification"],
+    meaning:"Checks by inspectors accepted by both sides, rather than relying only on one country’s word."
+  },
+  {
+    id:"safeguards",term:"Safeguards",zh:"保障條件",
+    aliases:["safeguards","safeguard"],
+    meaning:"Conditions intended to protect against harm or broken promises. Here they include Chinese control, a withdrawal deadline and checks on what happens."
+  },
+  {
+    id:"reservation",term:"Formal reservation",zh:"正式保留",
+    aliases:["formal reservation","reservation"],
+    meaning:"Here, a request to sign the treaty without accepting its Shandong clauses. For this route at the conference, China needs the other powers to accept that arrangement."
+  },
+  {
+    id:"clauses",term:"Shandong clauses",zh:"山東條款",
+    aliases:["Shandong clauses","Shandong provisions","clauses","provisions"],
+    meaning:"The parts of the treaty dealing with Germany’s former rights in Shandong. They transfer those rights to Japan, not the whole province."
+  },
+  {
+    id:"protest",term:"Separate protest",zh:"另行提出抗議",
+    aliases:["separate protest"],
+    meaning:"A statement saying that China objects. Sending this statement does not by itself remove the Shandong clauses from a treaty China signs."
+  },
+  {
+    id:"exemption",term:"Exemption",zh:"豁免",
+    aliases:["exemption","exception"],
+    meaning:"An agreed arrangement that a rule or requirement does not apply in a particular case. China cannot obtain one just by asking for it."
+  },
+  {
+    id:"coercion",term:"Coercion",zh:"脅迫",
+    aliases:["coercion","coerced"],
+    meaning:"Making someone agree by using force or threats. China argued that Japan had used threats to obtain the 1915 agreements."
+  },
+  {
+    id:"concessions",term:"Concessions",zh:"讓步",
+    aliases:["concessions","concession"],
+    meaning:"Something a country agrees to give up or allow during negotiations. A proposal to discuss a concession is not yet an agreement to grant it."
+  },
+  {
+    id:"commitment",term:"Commitment",zh:"承諾",
+    aliases:["commitments","commitment"],
+    meaning:"A promise to take a particular action. Sympathy or willingness to listen is not the same as a firm commitment to help."
+  },
+  {
+    id:"binding",term:"Binding",zh:"有約束力的",
+    aliases:["binding"],
+    meaning:"Creating an obligation that a party is expected or legally required to follow. A suggestion alone is not binding."
+  },
+  {
+    id:"conditional",term:"Conditional",zh:"有條件的",
+    aliases:["conditional","conditions","condition"],
+    meaning:"Depending on stated requirements being met. If China’s proposal is conditional, its offer does not take effect unless those requirements are accepted."
+  },
+  {
+    id:"compromise",term:"Compromise",zh:"折衷協議",
+    aliases:["compromise"],
+    meaning:"An agreement in which the sides accept less than everything they wanted. There is no compromise until the sides actually agree."
+  },
+  {
+    id:"settlement",term:"Settlement",zh:"解決方案；協議",
+    aliases:["settlement","settling"],
+    meaning:"An arrangement intended to settle a dispute or end a conflict. At Paris, the wider peace settlement covered many issues besides Shandong."
+  },
+  {
+    id:"restoration",term:"Restoration",zh:"歸還；恢復",
+    aliases:["restoration","restore","restored"],
+    meaning:"Returning something to its previous holder or position. Here, it means returning the territory or disputed rights to Chinese control."
+  },
+  {
+    id:"revision",term:"Revision",zh:"修訂",
+    aliases:["revision"],
+    meaning:"Changing an existing document or agreement. Hoping for revision later does not mean anyone has agreed to make that change."
+  },
+  {
+    id:"diplomacy",term:"Diplomacy",zh:"外交",
+    aliases:["diplomacy","diplomatic"],
+    meaning:"Managing relations between countries through discussion, negotiation and other peaceful methods."
+  },
+  {
+    id:"treaty",term:"Treaty",zh:"條約",
+    aliases:["Treaty of Versailles","treaty"],
+    meaning:"A formal agreement between countries. The Treaty of Versailles set the peace terms with Germany after the First World War."
+  },
+  {
+    id:"powers",term:"The powers",zh:"列強",
+    aliases:["other powers","the powers","great powers"],
+    meaning:"Here, the powerful countries with the greatest influence over the peace settlement. China could present its case but could not order them to agree."
+  },
+  {
+    id:"telegram",term:"Telegram",zh:"電報",
+    aliases:["telegram"],
+    meaning:"A written message sent quickly over a telegraph network. Delegates used telegrams to receive news and instructions from home."
+  },
+  {
+    id:"livelihoods",term:"Livelihoods",zh:"生計",
+    aliases:["livelihoods"],
+    meaning:"The jobs and income that people depend on to live."
+  },
+  {
+    id:"sympathy",term:"Sympathy",zh:"同情",
+    aliases:["sympathy","sympathise"],
+    meaning:"Understanding or feeling concern for another person’s or country’s difficulties. It does not necessarily lead to practical help."
+  },
+  {
+    id:"security",term:"Security",zh:"安全",
+    aliases:["security"],
+    meaning:"Protection against danger or threats. A country may seek military, political or economic arrangements to protect itself."
+  }
+];
+
+const GLOSSARY_BY_ID=Object.fromEntries(GLOSSARY.map(entry => [entry.id,entry]));
+const aliasMap=new Map();
+GLOSSARY.forEach(entry => entry.aliases.forEach(alias => aliasMap.set(alias.toLowerCase(),entry.id)));
+const regexEscape=text => text.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+const termPattern="\\b(?:"+
+  [...aliasMap.keys()].sort((a,b) => b.length-a.length).map(regexEscape).join("|")+
+  ")\\b";
+
+function findTerms(text) {
+  const found=new Set();
+  const regex=new RegExp(termPattern,"gi");
+  for (const match of String(text).matchAll(regex)) {
+    found.add(aliasMap.get(match[0].toLowerCase()));
+  }
+  return [...found];
+}
+
+function glossaryHTML(text) {
+  const regex=new RegExp(termPattern,"gi");
+  let result="",last=0;
+  for (const match of String(text).matchAll(regex)) {
+    result+=escapeHTML(text.slice(last,match.index));
+    const id=aliasMap.get(match[0].toLowerCase());
+    result+='<button type="button" class="term" data-term="'+id+
+      '" aria-label="'+escapeHTML(match[0])+': show meaning">'+escapeHTML(match[0])+'</button>';
+    last=match.index+match[0].length;
+  }
+  return result+escapeHTML(text.slice(last));
+}
+
+function putText(element,text) {
+  element.innerHTML=glossaryHTML(text);
+}
+
+function currentSceneText() {
+  if (!playing || !story[index]) return "";
+  const node=story[index];
+  if (node.kind==="note") return BRIEF_PARAGRAPHS.join(" ");
+  if (node.kind==="choice") return [
+    node.title,node.context,
+    ...optionsFor(node.number,answers).flatMap(option => [option.label,option.text,option.reason || ""])
+  ].join(" ");
+  if (node.kind==="end") return [node.ending.title,node.ending.narrative,...node.ending.facts].join(" ");
+  return node.text;
+}
+
+function hideTooltip() {
+  clearTimeout(tipTimer);
+  if (tipAnchor) tipAnchor.removeAttribute("aria-describedby");
+  tipAnchor=null;
+  tipPinned=false;
+  $("word-tooltip").hidden=true;
+}
+
+function positionTooltip() {
+  if (!tipAnchor || !tipAnchor.isConnected) { hideTooltip(); return; }
+  const tooltip=$("word-tooltip");
+  const rect=tipAnchor.getBoundingClientRect();
+  const boundary=$("game").getBoundingClientRect();
+  const leftEdge=Math.max(12,boundary.left+12);
+  const rightEdge=Math.min(innerWidth-12,boundary.right-12);
+  tooltip.style.maxWidth=Math.max(180,rightEdge-leftEdge)+"px";
+  const width=tooltip.offsetWidth;
+  const height=tooltip.offsetHeight;
+  const x=Math.max(leftEdge,Math.min(rect.left,rightEdge-width));
+  let y=rect.top-height-12;
+  if (y<Math.max(12,boundary.top+12)) y=rect.bottom+12;
+  y=Math.max(boundary.top+12,Math.min(y,boundary.bottom-height-12));
+  tooltip.style.left=x+"px";
+  tooltip.style.top=y+"px";
+}
+
+function showTooltip(anchor,pin=false) {
+  clearTimeout(tipTimer);
+  if (tipPinned && tipAnchor!==anchor && !pin) return;
+  const entry=GLOSSARY_BY_ID[anchor.dataset.term];
+  if (!entry) return;
+  if (tipAnchor && tipAnchor!==anchor) tipAnchor.removeAttribute("aria-describedby");
+  tipAnchor=anchor;
+  tipPinned=pin || tipPinned;
+  setAuto(false);
+  const tooltip=$("word-tooltip");
+  tooltip.innerHTML="<strong>"+escapeHTML(entry.term)+"</strong>"+
+    '<span class="tip-zh" lang="zh-Hant">'+escapeHTML(entry.zh)+'</span>'+
+    "<p>"+escapeHTML(entry.meaning)+"</p>"+
+    "<small>Tap elsewhere or press Escape to close.</small>";
+  tooltip.hidden=false;
+  anchor.setAttribute("aria-describedby","word-tooltip");
+  positionTooltip();
+}
+
+function scheduleTooltipClose() {
+  if (tipPinned) return;
+  clearTimeout(tipTimer);
+  tipTimer=setTimeout(() => {
+    if (tipAnchor===document.activeElement || $("word-tooltip").matches(":hover")) return;
+    hideTooltip();
+  },240);
+}
+
+document.addEventListener("pointerover",event => {
+  if (event.pointerType==="touch") return;
+  const term=event.target.closest(".term");
+  if (term && !term.contains(event.relatedTarget)) showTooltip(term);
+  if (event.target.closest("#word-tooltip")) clearTimeout(tipTimer);
+});
+document.addEventListener("pointerout",event => {
+  if (event.target.closest(".term,#word-tooltip")) scheduleTooltipClose();
+});
+document.addEventListener("focusin",event => {
+  const term=event.target.closest(".term");
+  if (term) showTooltip(term);
+  else if (tipAnchor && !tipPinned) hideTooltip();
+});
+document.addEventListener("focusout",event => {
+  if (event.target.closest(".term")) scheduleTooltipClose();
+});
+document.addEventListener("click",event => {
+  const term=event.target.closest(".term");
+  if (term) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    showTooltip(term,true);
+    return;
+  }
+  if (event.target.closest("#word-tooltip")) {
+    event.stopImmediatePropagation();
+    return;
+  }
+  hideTooltip();
+},true);
+document.addEventListener("keydown",event => {
+  if (event.key==="Escape" && !$("word-tooltip").hidden) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    hideTooltip();
+  }
+},true);
+window.addEventListener("resize",hideTooltip);
+document.addEventListener("scroll",event => {
+  if (!event.target.closest?.("#word-tooltip")) hideTooltip();
+},true);
+
+function words() {
+  if (!playing) return;
+  setAuto(false);
+  glossarySceneIDs=findTerms(currentSceneText());
+  glossaryMode="current";
+  openModal("Words in this scene");
+  $("modal-body").innerHTML=`
+    <div class="glossary-tabs" aria-label="Choose vocabulary list">
+      <button class="secondary" id="words-current" aria-pressed="true">This scene</button>
+      <button class="secondary" id="words-all" aria-pressed="false">All words</button>
+    </div>
+    <label class="sr-only" for="glossary-search">Search words or meanings</label>
+    <input class="glossary-search" id="glossary-search" type="search"
+      placeholder="Search a word or meaning…" autocomplete="off">
+    <p class="smallprint" id="glossary-status"></p>
+    <div id="glossary-list"></div>`;
+  $("words-current").addEventListener("click",() => {
+    glossaryMode="current"; renderGlossaryList();
+  });
+  $("words-all").addEventListener("click",() => {
+    glossaryMode="all"; renderGlossaryList();
+  });
+  $("glossary-search").addEventListener("input",renderGlossaryList);
+  renderGlossaryList();
+}
+
+function renderGlossaryList() {
+  const search=$("glossary-search").value.trim().toLowerCase();
+  const entries=GLOSSARY.filter(entry =>
+    (glossaryMode==="all" || glossarySceneIDs.includes(entry.id)) &&
+    [entry.term,entry.zh,entry.meaning,...entry.aliases].join(" ").toLowerCase().includes(search)
+  ).sort((a,b) => a.term.localeCompare(b.term));
+  $("words-current").setAttribute("aria-pressed",String(glossaryMode==="current"));
+  $("words-all").setAttribute("aria-pressed",String(glossaryMode==="all"));
+  $("glossary-status").textContent=glossaryMode==="current"
+    ? "Words from the current dialogue, instructions or decision choices. Opening Words pauses automatic reading."
+    : "Vocabulary used throughout the conference. Definitions do not reveal later story events.";
+  $("glossary-list").innerHTML=entries.length
+    ? entries.map(entry => '<article class="glossary-entry"><h3>'+escapeHTML(entry.term)+
+      '<span class="glossary-zh" lang="zh-Hant">'+escapeHTML(entry.zh)+'</span></h3><p>'+
+      escapeHTML(entry.meaning)+'</p></article>').join("")
+    : '<p>No matching words in this list. Try “All words” or a different search.</p>';
+}
+
+/* Choices remain linked to the player's earlier decisions. */
+function commercialRoute(a) {
+  return a[1]==="commerce" || a[1]==="assets";
+}
+
+function optionsFor(number,a) {
+  if (number===1) return [
+    {
+      id:"principle",label:"Protect the League’s credibility",
+      text:"“Ask Wilson to defend China’s sovereignty. If the League accepts unfair treatment of China, why should other countries trust it to protect them?”"
+    },
+    {
+      id:"separate",label:"Settle Shandong separately",
+      text:"“Ask Wilson to keep the Shandong dispute separate from the wider peace settlement. China supports peace, but Japan’s claims should not decide whether the League is created.”"
+    },
+    {
+      id:"access",label:"Offer equal trade, not foreign control",
+      text:"“America wants equal access to trade. Ask Wilson to support Chinese control and trade open to all countries, instead of exclusive privileges for Japan.”"
+    }
+  ];
+  if (number===2) return [
+    {
+      id:"challenge",label:"Challenge Japan’s claim",
+      text:"“China challenges agreements obtained through coercion. Return our rights directly. We will not offer payment or new privileges for recognising China’s sovereignty.”"
+    },
+    {
+      id:"commerce",label:"Propose equal access to trade",
+      text:"“Japan could trade under the same Chinese laws as other countries. Chinese administration must return and foreign troops must withdraw. Japan would receive no exclusive privileges over railways or mines.”"
+    },
+    {
+      id:"assets",label:"Discuss railway property only",
+      text:"“China could discuss paying for railway assets after their value is checked. We would not pay for sovereignty. Japan must agree to return control and withdraw its troops by a fixed date.”"
+    }
+  ];
+  if (number===3) return [
+    {
+      id:"reservation",label:"Prepare a formal reservation",
+      text:"Prepare a request to sign the treaty without accepting its Shandong clauses. Ask the other powers to agree before China promises to sign.",
+      locked:false
+    },
+    {
+      id:"safeguards",label:"Test your earlier offer",
+      text:"Put your earlier offer into writing. Require Chinese administration, a troop withdrawal deadline and independent verification. No concessions take effect unless these safeguards are agreed.",
+      locked:!commercialRoute(a),
+      reason:"Not available: you did not make an economic offer in Decision 2. There is no earlier offer ready to develop."
+    },
+    {
+      id:"public",label:"Explain China’s case publicly",
+      text:"Prepare a joint statement from the Chinese delegation. Explain the coercion behind Japan’s claims and the risks to Chinese control. Seek public support without offering new concessions.",
+      locked:false
+    }
+  ];
+  const conditional=a[2]==="reservation" ? {
+    id:"conditional",label:"Submit your formal reservation",
+    text:"Recommend signing only if the other powers accept the formal reservation. If they refuse, China will not sign.",
+    locked:false
+  } : a[2]==="safeguards" ? {
+    id:"conditional",label:"Continue talks without signing",
+    text:"Recommend not signing this treaty. Keep your earlier offer open for further talks, but only with its written safeguards. No concessions take effect without agreement.",
+    locked:false
+  } : {
+    id:"conditional",label:"Accept an agreed compromise",
+    text:"Japan has not agreed to a different settlement. Publishing China’s objections did not produce a compromise to accept.",
+    locked:true,
+    reason:"Not available: no compromise has been agreed, and you did not prepare a conditional route."
+  };
+  return [
+    {
+      id:"refuse",label:"Refuse the unchanged treaty",
+      text:"Recommend that China refuse to sign. Explain China’s objection and continue seeking the return of the rights through diplomacy. Refusal alone will not force Japan to leave."
+    },
+    {
+      id:"sign",label:"Sign and send a separate protest",
+      text:"Recommend signing the treaty and sending a separate protest. Hope to change the Shandong clauses in later talks, although no country has promised to change them."
+    },
+    conditional
+  ];
+}
+function optionFor(number,id,a=answers) {
+  return optionsFor(number,a).find(option => option.id===id);
+}
+
+function responseFor(number,a) {
+  if (number===1) return {
+    principle:{
+      who:"lansing",emotion:"serious",
+      text:"“I will put that argument to Wilson. It challenges the League’s credibility. But he still fears that Japan will refuse to join. I cannot promise that he will oppose Japan’s demands.”",
+      record:"Lansing agrees to present China’s argument. He gives no promise that Wilson will oppose Japan."
+    },
+    separate:{
+      who:"lansing",emotion:"nod",
+      text:"“I will ask him to consider separate talks. That might protect the wider settlement. But Britain and France have promised support for Japan’s claims. They may refuse to separate the issues.”",
+      record:"Lansing agrees to raise separate talks. The other powers do not agree to remove Shandong from the wider settlement."
+    },
+    access:{
+      who:"lansing",emotion:"nod",
+      text:"“Equal access interests America. I will put your idea before our delegation. But Japan wants special privileges, not just permission to trade. America has not promised to force it to accept equal terms.”",
+      record:"The Americans consider equal access. They give no promise to make Japan accept it."
+    }
+  }[a[0]];
+
+  if (number===2) return {
+    challenge:{
+      who:"makino",emotion:"firm",
+      text:"“Japan will not give up what it gained through victory and agreements. China’s war against Germany does not cancel its agreements with Japan. We insist that Germany’s former rights pass to us.”",
+      record:"Japan refuses direct restoration. China offers no payment or new privileges."
+    },
+    commerce:{
+      who:"makino",emotion:"firm",
+      text:"“Ordinary trade is not enough. Japan expects Germany’s railway and mining privileges. We may discuss returning the leased territory later. First, the conference must recognise our claims.”",
+      record:"Japan rejects equal access and continues demanding special privileges. No agreement is reached."
+    },
+    assets:{
+      who:"makino",emotion:"firm",
+      text:"“This is not only about money. The railway gives Japan influence as well as income. We will not give up that position simply because China offers a checked price on its own conditions.”",
+      record:"Japan rejects payment on China’s conditions. No purchase or restoration is agreed."
+    }
+  }[a[1]];
+
+  if (number===3) {
+    if (a[2]==="reservation") return {
+      who:"lansing",emotion:"serious",
+      text:a[0]==="separate"
+        ? "“Your earlier request for separate talks has helped us prepare this formal reservation. It is ready. But the other powers have not accepted it. They fear that other delegations will also ask for exceptions.”"
+        : "“The formal reservation is ready. But this new request still needs the other powers’ agreement. They fear that other delegations will also ask to leave parts of the treaty out.”",
+      record:a[0]==="separate"
+        ? "China’s earlier request becomes a written formal reservation. The other powers have not accepted it."
+        : "A formal reservation is prepared. The other powers have not accepted it."
+    };
+    if (a[2]==="safeguards") return {
+      who:"makino",emotion:"serious",
+      text:"“We know that people abroad are watching. Japan can discuss restoration later. But we will not accept your withdrawal deadline or independent verification before our rights are recognised.”",
+      record:"Japan refuses the deadline and independent verification. China’s conditional offer does not take effect."
+    };
+    return {
+      who:"lou",emotion:"nod",
+      text:"“Our statement is ready for publication. People outside the conference will be able to read China’s case. But public attention is not a promise of help from another government.”",
+      record:"The delegation publishes its statement. No foreign government makes a new promise to change the settlement."
+    };
+  }
+
+  if (a[3]==="sign") return {
+    who:"lou",emotion:"serious",
+    text:"“The delegation accepts your recommendation. China signs and sends a separate protest. The Shandong clauses are still in the treaty. No change has been promised.”",
+    record:"China signs and sends a separate protest. No exemption or later revision is agreed."
+  };
+  if (a[3]==="refuse") return {
+    who:"lou",emotion:"nod",
+    text:"“Then China will not sign. We will state our objection clearly. The other powers have not changed the treaty, and Japan has not agreed to withdraw.”",
+    record:"China does not sign. The treaty is unchanged, and no Japanese withdrawal is agreed."
+  };
+  if (a[2]==="reservation") return {
+    who:"lansing",emotion:"serious",
+    text:"“The powers have refused the formal reservation. They will not let China sign on that basis.” His reply lies before you. Your condition has not been met. The delegation does not sign.",
+    record:"The powers reject the formal reservation. Following its stated condition, China does not sign."
+  };
+  return {
+    who:"lou",emotion:"serious",
+    text:"“We will not sign. Our conditional offer can remain open for further talks. Japan has not accepted its safeguards, so none of the proposed concessions takes effect.”",
+    record:"China does not sign. Its conditional offer remains open, but Japan accepts none of its safeguards."
+  };
+}
+
+function endingFor(a) {
+  const facts=[
+    a[3]==="sign"
+      ? "China signed the treaty and sent a separate protest."
+      : "China did not sign the treaty.",
+    "The other powers did not change the Shandong clauses.",
+    "No agreement requiring Japan to withdraw by a fixed date was reached."
+  ];
+  if (a[2]==="public") facts.push("The Chinese delegation published its joint statement.");
+  if (a[3]==="conditional" && a[2]==="reservation") {
+    facts.push("The powers rejected China’s formal reservation.");
+  }
+  if (a[3]==="conditional" && a[2]==="safeguards") {
+    facts.push("China kept its conditional offer open. No proposed concessions took effect.");
+  }
+
+  if (a[3]==="sign") return {
+    key:"signed",
+    title:"A signature on the page",
+    narrative:"The pen moves across the paper. Lou gathers the signed document and China’s protest. Outside, a messenger waits to carry the news home.",
+    facts,
+    question:"Did signing produce an agreed change, or only a chance to seek change later?"
+  };
+  if (a[3]==="conditional" && a[2]==="safeguards") return {
+    key:"talks",
+    title:"The talks are not over",
+    narrative:"The treaty remains unsigned. You place your written conditions in a separate folder. Lou closes it carefully: “We will need these if talks continue.”",
+    facts,
+    question:"How does keeping an offer open differ from obtaining an agreement?"
+  };
+  if (a[3]==="conditional") return {
+    key:"reservation",
+    title:"The condition was refused",
+    narrative:"You read the reply again. The requested exception has been refused. Lou places the unsigned treaty beside your formal reservation. Neither of you reaches for the pen.",
+    facts,
+    question:"What did testing a conditional signature achieve, if it did not change the treaty?"
+  };
+  return {
+    key:a[2]==="public" ? "public-refusal" : "refusal",
+    title:a[2]==="public" ? "An unsigned treaty. A public statement." : "The unsigned treaty",
+    narrative:"Lou places the unsigned document on the desk. “We have made our decision. Now we must explain it to the people at home.” You look once more at the red circle around Shandong.",
+    facts,
+    question:"What could refusing to sign protect, and what could it not recover?"
+  };
+}
+
+function scene(id,act,bg,who,text,extra={}) {
+  const person=Boolean(PEOPLE[who]);
+  return {
+    id,act,bg,who,
+    speaker:person ? PEOPLE[who].name : who,
+    cast:person ? (who==="koo" ? ["koo"] : [who,"koo"]) : [],
+    focus:person ? who : null,
+    text,...extra
+  };
+}
+
+function buildStory(a) {
+  const s=[];
+  const add=(...nodes) => s.push(...nodes);
+  add(
+    scene("awake",1,"study","You",
+      "You wake suddenly at an unfamiliar desk. Beneath your hand lies a map. Shandong is circled in red. A folded paper beside it carries your name: Wellington Koo."),
+    scene("brief",1,"study","Your instructions","",{kind:"note"}),
+    scene("workers",1,"memory","Wellington Koo (Your thoughts)",
+      "Around 140,000 Chinese labourers supported the British and French war effort. They moved supplies, repaired roads and worked behind the battle lines. Many never returned. China now comes to the peace conference on the Allied side."),
+    scene("charge",1,"study","lou",
+      "“Japan wants Germany’s former rights in Shandong. We must defend China’s sovereignty and the people who live there. A different foreign flag is not our goal. You will speak, but our delegation must decide together.”",
+      {emotion:"serious"}),
+    scene("april",1,"hall","Paris · April 1919",
+      "Weeks of talks pass. Britain and France have promised support for Japan’s claims. France also wants a peace settlement that protects its security in Europe. Lansing stops beside you in the corridor."),
+    scene("america",1,"hall","lansing",
+      "“I sympathise with China. But Wilson fears that Japan may refuse to join the League of Nations if its demands are rejected. What should I ask him to do?”",
+      {emotion:"serious"})
+  );
+  function decision(number,act,bg,who,title,context) {
+    add(scene("d"+number,act,bg,who,"",{kind:"choice",number,title,context}));
+    if (!a[number-1]) return false;
+    const selected=optionFor(number,a[number-1],a);
+    add(scene("answer"+number,act,bg,"koo",selected.text,{emotion:"firm"}));
+    const reply=responseFor(number,a);
+    add(scene("response"+number,act,bg,reply.who,reply.text,{emotion:reply.emotion}));
+    return true;
+  }
+
+  if (!decision(1,1,"hall","lansing",
+    "Sympathy is not yet support.",
+    "Lansing will carry one main request to Wilson. Which American concern will you address?")) return s;
+
+  add(
+    scene("japan",2,"chamber","makino",
+      "“Japan defeated Germany at Qingdao. China’s agreements with Japan in 1915 and 1918 support our claim. Germany’s former rights should pass to Japan. We can discuss restoration of the leased territory later, on conditions.”",
+      {emotion:"firm"}),
+    scene("distinction",2,"chamber","koo",
+      "“What conditions? Chinese territory is not a reward for another country. Ports, railways and mines affect our people’s livelihoods. Who will actually control them?”",
+      {emotion:"firm"})
+  );
+
+  if (!decision(2,2,"chamber","makino",
+    "What lies behind Japan’s promise?",
+    a[0]==="access"
+      ? "You raised equal access with America. Japan wants special privileges. Will you repeat the proposal, offer talks about railway assets, or reject any new offer?"
+      : "Japan wants control and special privileges. You can challenge its claim or test a limited economic offer. Japan has agreed to neither.")) return s;
+
+  add(
+    scene("closed",2,"hall","Wellington Koo (Your thoughts)",
+      a[1]==="challenge"
+        ? "I have offered nothing new. Yet Japan still holds the territory and rights it took from Germany. The other powers have not agreed to return them to China."
+        : "I offered talks, not consent. Japan wants the advantages but rejects my conditions. Nothing has been agreed. I must not let my proposal be treated as a promise.",
+      {cast:["koo"],focus:"koo",quote:"A proposal is not an agreement."}),
+    scene("may",2,"study","A telegram from China · May 1919",
+      "News of the Shandong decision has reached China. Protests began in Beijing on 4 May. Students and citizens demand that China’s rights be defended. The telegram shakes slightly in your hand."),
+    scene("lastmove",2,"study","lou",
+      "“The powers still plan to transfer Germany’s former rights to Japan. Time is running short. We can prepare one main final move before the treaty is signed.”",
+      {emotion:"serious"})
+  );
+
+  if (!decision(3,2,"study","lou",
+    "Prepare your last move.",
+    "No alternative settlement has been agreed. Choose what the delegation should prepare now. Your earlier decisions affect the available options.")) return s;
+
+  add(
+    scene("june",3,"chamber","wilson",
+      "“I believe Japan will return the leased territory later. But I cannot obtain the change you ask for in this treaty. I am trying to keep the wider settlement and the League together.”",
+      {date:"June 1919",emotion:"serious"}),
+    scene("cost",3,"chamber","koo",
+      "“A promise about the future does not return control today. China’s rights cannot be the price of Japan’s cooperation.”",
+      {emotion:"firm"}),
+    scene("finalbrief",3,"study","lou",
+      a[2]==="reservation"
+        ? "“The treaty is unchanged. Our formal reservation is ready, but the powers have not accepted it. We can submit it and refuse to sign if they reject it. Or we can choose refusal now, or signature with a separate protest.”"
+        : a[2]==="safeguards"
+          ? "“Japan has refused our deadline and independent verification. There is no compromise to accept. We can refuse, keep conditional talks open without signing, or sign and send a separate protest.”"
+          : "“Our public statement has been published. But we have no agreed compromise and no prepared conditional route. We must recommend refusal, or signature with a separate protest.”",
+      {date:"June 1919",emotion:"serious"})
+  );
+
+  if (!decision(4,3,"study","lou",
+    "What will you recommend?",
+    "The Shandong clauses still transfer Germany’s former rights to Japan. Choose from the terms actually available to your delegation.")) return s;
+
+  add(
+    scene("lastthought",3,"study","Wellington Koo (Your thoughts)",
+      a[3]==="sign"
+        ? "The sound of the pen is small. The responsibility is not. When I explain this decision at home, I must be honest about what has—and has not—been agreed."
+        : "The pen remains on the desk. Beyond this room, the people whose future we defend are waiting. Our decision must be explained to them.",
+      {cast:["koo"],focus:"koo",emotion:"serious",quote:"The people at home still wait."}),
+    scene("end",3,"hall","Your outcome","",{kind:"end",ending:endingFor(a)})
+  );
+  return s;
+}
+function rebuild() { story=buildStory(answers); }
+
+function notify(message) {
+  $("toast").textContent=message;
+  $("toast").classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(() => $("toast").classList.remove("show"),4200);
+}
+function storePreferences() {
+  try { localStorage.setItem(KEYS.preferences,JSON.stringify(preferences)); } catch (_) {}
+}
+function saveData() {
+  return {version:5,answers:[...answers],nodeID:story[index]?.id || "awake",savedAt:new Date().toISOString()};
+}
+function validatedSave(raw) {
+  if (!raw || raw.version!==5 || !Array.isArray(raw.answers) || raw.answers.length>4) return null;
+  const checked=[];
+  for (let i=0;i<raw.answers.length;i++) {
+    const option=optionFor(i+1,raw.answers[i],checked);
+    if (!option || option.locked) return null;
+    checked.push(option.id);
+  }
+  const route=buildStory(checked);
+  const position=route.findIndex(node => node.id===raw.nodeID);
+  return position<0 ? null : {answers:checked,index:position};
+}
+function readSave(key) {
+  try { return validatedSave(JSON.parse(localStorage.getItem(key))); }
+  catch (_) { return null; }
+}
+function storeSave(key,announce=false) {
+  if (!playing) {
+    if (announce) notify("Begin or continue the conference before saving.");
+    return;
+  }
+  try {
+    localStorage.setItem(key,JSON.stringify(saveData()));
+    if (announce) notify("Your decisions and place in the story have been saved.");
+  } catch (_) {
+    if (announce) notify("Browser storage is unavailable. You can still play and print your worksheet.");
+  }
+}
+function loadSave(key) {
+  const saved=readSave(key);
+  if (!saved) { notify("No valid save is available in this slot."); return; }
+  closeModal();
+  setAuto(false);
+  answers=saved.answers;
+  rebuild();
+  index=saved.index;
+  lastNodeID="";
+  $("worksheet").replaceChildren();
+  render(true);
+}
+
+function cancelPlayback() {
+  cancelAnimationFrame(frameRequest);
+  clearTimeout(automaticTimer);
+  typing=false;
+}
+function queueAuto() {
+  clearTimeout(automaticTimer);
+  const node=story[index];
+  if (!automatic || !playing || typing || !node || node.kind ||
+      $("modal").open || !$("word-tooltip").hidden || document.hidden) return;
+  automaticTimer=setTimeout(advance,Math.max(2100,node.text.trim().split(/\s+/).length*230));
+}
+function finishTyping() {
+  cancelAnimationFrame(frameRequest);
+  typing=false;
+  visibleChars=textChars.length;
+  putText($("dialogue-text"),textChars.join(""));
+  $("advance").innerHTML='Continue <span>▸</span>';
+  $("counter").textContent="Underlined words: hover or tap · Words: G";
+  queueAuto();
+}
+function tick(timestamp) {
+  if (!typing) return;
+  if (!typingStart) typingStart=timestamp;
+  visibleChars=Math.min(textChars.length,Math.floor((timestamp-typingStart)/Math.max(1,preferences.speed)));
+  $("dialogue-text").textContent=textChars.slice(0,visibleChars).join("");
+  if (visibleChars>=textChars.length) finishTyping();
+  else frameRequest=requestAnimationFrame(tick);
+}
+function writeLine(text,instant=false) {
+  textChars=Array.from(text);
+  visibleChars=0; typingStart=0;
+  $("dialogue-text").textContent="";
+  $("dialogue-text").scrollTop=0;
+  if (instant || preferences.speed===0) finishTyping();
+  else {
+    typing=true;
+    $("counter").textContent="Click to reveal · Words: G";
+    $("advance").innerHTML='Reveal line <span>▸</span>';
+    frameRequest=requestAnimationFrame(tick);
+  }
+}
+function updateBackground(name) {
+  $$(".backdrop").forEach(el => el.classList.toggle("current",el.id==="bg-"+name));
+}
+const MOTIONS={
+  nod:[
+    {transform:"translateY(0) scale(1)"},
+    {transform:"translateY(7px) scale(.995)",offset:.35},
+    {transform:"translateY(-2px) scale(1.01)",offset:.7},
+    {transform:"translateY(0) scale(1)"}
+  ],
+  firm:[
+    {transform:"translateY(0) scale(1)"},
+    {transform:"translateY(-5px) scale(1.035)",offset:.35},
+    {transform:"translateY(0) scale(1)"}
+  ],
+  serious:[
+    {transform:"translateY(0) scale(1)"},
+    {transform:"translateY(3px) scale(1.025)",offset:.55},
+    {transform:"translateY(0) scale(1)"}
+  ]
+};
+function updateActors(node,animate=true) {
+  Object.keys(PEOPLE).forEach(id => {
+    const actor=$("actor-"+id);
+    const position=node.cast.indexOf(id);
+    const shown=position>=0;
+    actor.classList.toggle("shown",shown);
+    actor.classList.toggle("speaking",shown && node.focus===id);
+    actor.classList.toggle("solo",shown && node.cast.length===1);
+    actor.classList.toggle("left",shown && node.cast.length>1 && position===0);
+    actor.classList.toggle("right",shown && (node.cast.length===1 || position===1));
+    actor.setAttribute("aria-hidden",String(!shown));
+    const shell=actor.querySelector(".photo-shell");
+    shell.getAnimations?.().forEach(animation => animation.cancel());
+    if (shown && node.focus===id && animate && !reducedMotion && shell.animate) {
+      shell.animate(MOTIONS[node.emotion || "serious"],{
+        duration:node.emotion==="firm" ? 650 : 850,
+        easing:"cubic-bezier(.22,.65,.35,1)"
+      });
+    }
+  });
+}
+
+function renderChoices(node) {
+  const selected=answers[node.number-1];
+  $("choice-eyebrow").textContent="Decision "+String(node.number).padStart(2,"0")+" · "+DECISION_NAMES[node.number-1];
+  $("choice-title").textContent=node.title;
+  putText($("choice-context"),node.context);
+  $("choice-list").replaceChildren();
+  optionsFor(node.number,answers).forEach((option,i) => {
+    const card=document.createElement("article");
+    card.className="choice";
+    card.classList.toggle("locked",Boolean(option.locked));
+    card.classList.toggle("selected",selected===option.id);
+    const titleID="option-"+node.number+"-"+i;
+    card.innerHTML=
+      '<span class="choice-number" aria-hidden="true">'+(selected===option.id ? "✓" : i+1)+'</span>'+
+      '<div class="choice-copy"><h3 id="'+titleID+'">'+glossaryHTML(option.label)+'</h3>'+
+      '<p class="option-text">'+glossaryHTML(option.text)+'</p>'+
+      (option.locked ? '<p class="lock-reason">'+escapeHTML(option.reason)+'</p>' : "")+
+      '</div>';
+    const button=document.createElement("button");
+    button.className="secondary choose-button";
+    button.textContent=selected===option.id ? "Chosen" : option.locked ? "Unavailable" : "Choose "+(i+1)+" →";
+    button.disabled=Boolean(option.locked || selected);
+    button.setAttribute("aria-label",
+      selected===option.id ? "Chosen: "+option.label :
+      option.locked ? option.reason : "Choose option "+(i+1)+": "+option.label);
+    button.addEventListener("click",() => choose(i));
+    card.append(button);
+    $("choice-list").append(card);
+  });
+  $("choice-note").textContent=selected
+    ? "Reviewing a recorded decision. Revising it replaces this decision and every later one."
+    : "Hover or tap underlined words. Use a Choose button—or keys 1, 2 or 3—to decide.";
+  $("choice-review").hidden=!selected;
+}
+function renderEnding(node) {
+  $("end-title").textContent=node.ending.title;
+  putText($("end-narrative"),node.ending.narrative);
+  $("end-facts").innerHTML=node.ending.facts.map(fact => "<li>"+glossaryHTML(fact)+"</li>").join("");
+  refreshWorksheet();
+}
+function render(instant=false) {
+  hideTooltip();
+  cancelPlayback();
+  const node=story[index];
+  if (!node) return;
+  playing=true;
+  $("title").hidden=true;
+  ["hud","actors","toolbar"].forEach(id => $(id).hidden=false);
+  $("dialogue").hidden=Boolean(node.kind);
+  $("note-overlay").hidden=node.kind!=="note";
+  $("choices-overlay").hidden=node.kind!=="choice";
+  $("ending").hidden=node.kind!=="end";
+  $("memory-title").hidden=node.bg!=="memory";
+  $("scene-quote").hidden=!node.quote;
+  $("scene-quote").textContent=node.quote || "";
+  updateBackground(node.bg);
+  updateActors(node,node.id!==lastNodeID);
+  $("chapter-label").textContent=ACTS[node.act];
+  $("location").textContent=(node.date ? node.date+" · " : "")+DEFAULT_LOCATIONS[node.bg];
+  const decisionsSoFar=story.slice(0,index+1).filter(n =>
+    n.kind==="choice" && answers[n.number-1]).length;
+  $("decision-count").textContent=decisionsSoFar+" / 4";
+  $("progress").firstElementChild.style.width=
+    (node.kind==="end" ? 100 : Math.min(97,index/30*100))+"%";
+
+  if (!node.kind) {
+    $("speaker").textContent=node.speaker;
+    $("dialogue").classList.toggle("narration",!PEOPLE[node.who]);
+    $("accessible-dialogue").textContent=node.speaker+". "+node.text;
+    writeLine(node.text,instant);
+  } else {
+    $("accessible-dialogue").textContent="";
+    if (node.kind==="note") {
+      $("brief-text").innerHTML=BRIEF_PARAGRAPHS.map(p => "<p>"+glossaryHTML(p)+"</p>").join("");
+    }
+    if (node.kind==="choice") renderChoices(node);
+    if (node.kind==="end") { setAuto(false); renderEnding(node); }
+  }
+
+  if (node.id==="awake" && node.id!==lastNodeID && !reducedMotion) {
+    const svg=$("bg-study").querySelector("svg");
+    svg.animate?.([
+      {transform:"scale(1.035) translateY(8px)"},
+      {transform:"scale(1.02) translateY(-4px)",offset:.35},
+      {transform:"scale(1) translateY(0)"}
+    ],{duration:900,easing:"ease-out"});
+  }
+  const count=findTerms(currentSceneText()).length;
+  $("words-button").textContent="Words"+(count ? " ("+count+")" : "");
+  lastNodeID=node.id;
+  storeSave(KEYS.auto);
+}
+function advance() {
+  if (!playing || $("modal").open) return;
+  const node=story[index];
+  if (node.kind==="end" || (node.kind==="choice" && !answers[node.number-1])) return;
+  if (typing) { finishTyping(); return; }
+  if (index<story.length-1) {
+    index++;
+    playTone(392,.018,.15);
+    render();
+  }
+}
+function nextInstant() {
+  if (!playing || $("modal").open) return;
+  setAuto(false);
+  if (typing) finishTyping();
+  const before=index;
+  advance();
+  if (index!==before && typing) finishTyping();
+}
+function goBack() {
+  if (!playing || $("modal").open || index===0) return;
+  setAuto(false);
+  index--;
+  render(true);
+}
+function choose(optionIndex) {
+  if (!playing || $("modal").open) return;
+  const node=story[index];
+  if (node.kind!=="choice" || answers.length!==node.number-1) return;
+  const option=optionsFor(node.number,answers)[optionIndex];
+  if (!option || option.locked) return;
+  setAuto(false);
+  answers.push(option.id);
+  rebuild();
+  index=story.findIndex(n => n.id==="answer"+node.number);
+  playTone(523.25,.045,.6);
+  render();
+  $("advance").focus({preventScroll:true});
+}
+function confirmAction(title,message,label,callback) {
+  openModal(title);
+  const p=document.createElement("p");
+  p.textContent=message;
+  const row=document.createElement("div");
+  row.className="button-row";
+  const yes=document.createElement("button");
+  yes.className="primary"; yes.textContent=label;
+  yes.addEventListener("click",() => { closeModal(); callback(); });
+  const no=document.createElement("button");
+  no.className="secondary"; no.textContent="Cancel";
+  no.addEventListener("click",closeModal);
+  row.append(yes,no);
+  $("modal-body").append(p,row);
+}
+function revise() {
+  const node=story[index];
+  if (!node || node.kind!=="choice" || !answers[node.number-1]) return;
+  const number=node.number;
+  confirmAction("Revise Decision "+number+"?",
+    "This removes this decision and every later decision from the current route. Your worksheet and ending will follow your new choices. Your separate manual save is not changed.",
+    "Revise from here",() => {
+      answers=answers.slice(0,number-1);
+      rebuild();
+      index=story.findIndex(n => n.id==="d"+number);
+      $("worksheet").replaceChildren();
+      setAuto(false);
+      render(true);
+      $("choice-title").focus({preventScroll:true});
+    });
+}
+function startNew() {
+  closeModal(); setAuto(false);
+  answers=[]; rebuild(); index=0; lastNodeID="";
+  $("worksheet").replaceChildren();
+  render();
+}
+function begin() {
+  if (readSave(KEYS.auto)) {
+    confirmAction("Start a new conference?",
+      "Your automatic save will be replaced. A separate manual save will remain available.",
+      "Start new conference",startNew);
+  } else startNew();
+}
+function home() {
+  if (playing) storeSave(KEYS.auto);
+  closeModal(); hideTooltip(); cancelPlayback(); setAuto(false);
+  playing=false;
+  ["hud","actors","toolbar","dialogue","note-overlay","choices-overlay","ending","memory-title","scene-quote"]
+    .forEach(id => $(id).hidden=true);
+  $("title").hidden=false;
+  $("progress").firstElementChild.style.width="0";
+  updateBackground("study");
+  $("resume-button").hidden=!readSave(KEYS.auto);
+}
+function setAuto(enabled) {
+  automatic=enabled;
+  $("auto-button").textContent=enabled ? "Auto: on" : "Auto: off";
+  $("auto-button").classList.toggle("on",enabled);
+  $("auto-button").setAttribute("aria-pressed",String(enabled));
+  clearTimeout(automaticTimer);
+  if (enabled) queueAuto();
+}
+function openModal(title) {
+  hideTooltip();
+  if (typing) finishTyping();
+  clearTimeout(automaticTimer);
+  if (!$("modal").open) previousFocus=document.activeElement;
+  $("modal-title").textContent=title;
+  $("modal-body").replaceChildren();
+  if (!$("modal").open) $("modal").showModal();
+}
+function closeModal() {
+  if ($("modal").open) $("modal").close();
+}
+$("modal").addEventListener("close",() => {
+  if (previousFocus?.isConnected && !previousFocus.closest("[hidden]") && !previousFocus.classList.contains("term")) {
+    try { previousFocus.focus({preventScroll:true}); } catch (_) {}
+  }
+  queueAuto();
+});
+$("close-modal").addEventListener("click",closeModal);
+$("modal").addEventListener("click",event => {
+  if (event.target!==$("modal")) return;
+  const r=$("modal").getBoundingClientRect();
+  if (event.clientX<r.left || event.clientX>r.right || event.clientY<r.top || event.clientY>r.bottom) closeModal();
+});
+
+function settings() {
+  openModal("Reading room");
+  $("modal-body").innerHTML=`
+    <div class="settings-row">
+      <label for="speed-input">Typewriter delay <span id="speed-value"></span></label>
+      <input id="speed-input" type="range" min="0" max="50" step="1">
+      <div class="smallprint">0 = instant text. Click a line to reveal it immediately.
+      Underlined vocabulary becomes available when the line is fully revealed.</div>
+    </div>
+    <div class="settings-row">
+      <label for="size-input">Dialogue size <span id="size-value"></span></label>
+      <input id="size-input" type="range" min="19" max="29" step="1">
+    </div>
+    <div class="settings-row">
+      <div class="button-row">
+        <button class="secondary" data-action="sound">Toggle music and ambience</button>
+        <button class="secondary" data-action="fullscreen">Toggle fullscreen</button>
+      </div>
+      <p class="smallprint">Music and ambience play only when enabled.</p>
+    </div>
+    <div class="settings-row">
+      <button class="primary" id="offline-button" data-action="offline">Download offline HTML</button>
+      <p class="smallprint">Embeds all five portraits in a fresh copy of the game.
+      Internet access is needed for the initial downloads. Your browser save is separate.</p>
+    </div>
+    <div class="button-row" style="margin-top:20px">
+      <button class="secondary" data-action="credits">Photograph credits</button>
+      <button class="secondary" data-action="help">Controls</button>
+      <button class="secondary" data-action="home">Title screen</button>
+    </div>`;
+  $("speed-input").value=preferences.speed;
+  $("size-input").value=preferences.size;
+  function labels() {
+    $("speed-value").textContent=preferences.speed ? preferences.speed+" ms" : "Instant";
+    $("size-value").textContent=preferences.size+" px";
+  }
+  labels();
+  $("speed-input").addEventListener("input",() => {
+    preferences.speed=Number($("speed-input").value); labels(); storePreferences();
+  });
+  $("size-input").addEventListener("input",() => {
+    preferences.size=Number($("size-input").value);
+    document.documentElement.style.setProperty("--dialog-size",preferences.size+"px");
+    labels(); storePreferences();
+  });
+}
+function help() {
+  openModal("How to play");
+  $("modal-body").innerHTML=`
+    <h3>Read, listen, decide</h3>
+    <p>Click the dialogue or press <strong>Space</strong> to reveal a line, then continue.
+    At a decision, use a <strong>Choose</strong> button or keys <strong>1, 2 and 3</strong>.</p>
+    <h3>Word help</h3>
+    <p>Hover over, tap, or use Tab to focus an <strong>underlined word</strong>.
+    Its meaning appears without advancing the story or choosing an answer.
+    Tap elsewhere or press Escape to close the meaning.</p>
+    <p><strong>Words</strong> opens a window containing vocabulary from the current
+    dialogue or decision. It also offers an <strong>All words</strong> list and search.
+    Word help pauses automatic reading. Press Auto again when ready.</p>
+    <p>Underlined words appear when the current line is fully revealed.
+    You can open Words while a line is still appearing.</p>
+    <h3>Reviewing decisions</h3>
+    <p>Back / Next and the arrow keys review scenes. Reviewing does not change your choices.
+    At an earlier decision, use <strong>Revise this decision</strong> to replace it and all later choices.</p>
+    <h3>Your documents</h3>
+    <p><strong>Brief</strong> reviews the countries’ concerns.
+    <strong>Log</strong> records your route.
+    At the ending, print your personalised reflection worksheet.</p>
+    <h3>Keyboard</h3>
+    <p>Space / Enter / →: continue · ←: back · 1–3: choose<br>
+    G: words · H: log · B: brief · A: auto<br>
+    S: save · L: load · M: sound · F: fullscreen</p>
+    <h3>Saving</h3>
+    <p>Automatic progress and the manual Save/Load slot are separate.
+    Continue on the title screen restores automatic progress.</p>
+    <p class="smallprint">Some browsers restrict storage for local files.
+    The game and printing still work without storage.</p>`;
+}
+function credits() {
+  openModal("Photograph credits");
+  Object.values(PEOPLE).forEach(person => {
+    const article=document.createElement("article");
+    article.className="log-entry";
+    article.innerHTML="<h3>"+escapeHTML(person.name)+"</h3><p>"+
+      escapeHTML(person.credit)+'</p><a target="_blank" rel="noopener noreferrer" href="https://commons.wikimedia.org/wiki/File:'+
+      encodeURIComponent(person.file)+'">Photograph and rights information ↗</a>';
+    $("modal-body").append(article);
+  });
+  const p=document.createElement("p");
+  p.className="smallprint";
+  p.textContent="Scenery uses SVG artwork. Music and ambience use local synthesis.";
+  $("modal-body").append(p);
+}
+function dossier() {
+  openModal("The delegation brief");
+  $("modal-body").innerHTML=`
+    <div class="dossier-card">
+      <h3>China</h3>
+      <p>Recover Jiaozhou’s leased territory and the related railway, mining and other rights.
+      Protect China’s sovereignty, territorial integrity and the interests of its people.</p>
+      <p class="smallprint">Source A: China argues that foreign rights were obtained through pressure and threats.
+      The dispute concerns particular territory and rights—not the transfer of the whole province.</p>
+    </div>
+    <div class="dossier-card">
+      <h3>Japan</h3>
+      <p>Have the conference recognise its claim to Germany’s former rights.
+      Keep important economic and strategic advantages, including railway and mining privileges.</p>
+      <p class="smallprint">Source B: Japan points to its defeat of Germany and the agreements of 1915 and 1918.
+      Its promise to discuss returning the leased territory does not mean it accepts China’s conditions.</p>
+    </div>
+    <div class="dossier-card">
+      <h3>United States</h3>
+      <p>Create the League of Nations and keep the wider peace settlement together.
+      Wilson fears that Japan may refuse to cooperate. America also wants equal opportunities to trade.</p>
+      <p class="smallprint">Source C: Support for China competes with Wilson’s concern for the League.</p>
+    </div>
+    <div class="dossier-card">
+      <h3>Britain and France</h3>
+      <p>Both promised wartime support for Japan’s Shandong claims.
+      Britain values its international relationships.
+      France wants a peace settlement that protects it in Europe.</p>
+    </div>`;
+}
+function history() {
+  openModal("Your conference record");
+  if (!playing) {
+    $("modal-body").innerHTML="<p>Begin or continue the conference to view your record.</p>";
+    return;
+  }
+  story.slice(0,index+1).forEach(node => {
+    if (!node.text && node.kind!=="choice") return;
+    const entry=document.createElement("article");
+    entry.className="log-entry";
+    const heading=document.createElement("h3");
+    heading.textContent=node.kind==="choice"
+      ? "Decision "+node.number+" · "+DECISION_NAMES[node.number-1] : node.speaker;
+    const p=document.createElement("p");
+    p.textContent=node.kind==="choice"
+      ? (answers[node.number-1] ? optionFor(node.number,answers[node.number-1]).label : "Awaiting your decision.")
+      : node.text;
+    entry.append(heading,p);
+    $("modal-body").append(entry);
+  });
+  $("modal-body").scrollTop=$("modal-body").scrollHeight;
+}
+
+const HISTORICAL_SUMMARY=
+  "The Treaty of Versailles assigned Germany’s former rights in Shandong to Japan. "+
+  "Protests began in Beijing on 4 May 1919. The Chinese delegation did not sign the treaty on 28 June. "+
+  "A separate agreement between China and Japan in 1922 provided for return of the leased territory "+
+  "and Chinese recovery of the railway through payment arrangements.";
+
+function historical() {
+  openModal("What happened next?");
+  $("modal-body").innerHTML=`
+    <h3>4 May 1919 · Protests in China</h3>
+    <p>News of the Shandong settlement helped spark the May Fourth protests.
+    They began before the refusal to sign and increased pressure on the delegation.</p>
+    <h3>28 June 1919 · China did not sign</h3>
+    <p>The Chinese delegation did not sign the Treaty of Versailles.
+    Its efforts to avoid accepting the Shandong clauses had not obtained an acceptable arrangement.</p>
+    <h3>1922 · Further negotiations</h3>
+    <p>Talks during the Washington Conference produced a separate agreement between China and Japan.
+    It provided for return of the leased territory and arrangements for China to recover the railway through payment.</p>
+    <p>This later agreement required further negotiation. It was not an automatic result of one speech or of refusing to sign.</p>
+    <h3>Your route</h3>
+    <p>Which parts of your ending match this history? Which parts differ?
+    Think about what China could decide and what still depended on other countries.</p>`;
+}
+
+/* Personal worksheet: identifying heading only on page one. */
+function worksheetHeader() {
+  return `<div class="worksheet-heading">
+    <div>Kowloon True Light School</div>
+    <div>S3 History</div>
+    <div>The Shandong Problem in Paris Peace Conference</div>
+  </div>
+  <div class="student-fields">
+    <span>Name: __________________</span>
+    <span>Class: ________(&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;)</span>
+    <span>Date: ______________</span>
+  </div>`;
+}
+function lines(count) {
+  return Array.from({length:count},() => '<div class="write-line"></div>').join("");
+}
+function routeCode(a) {
+  return a.map((id,i) => {
+    const position=optionsFor(i+1,a).findIndex(option => option.id===id);
+    return (i+1)+String.fromCharCode(65+position);
+  }).join(" – ");
+}
+function worksheetHTML() {
+  if (answers.length!==4) return "";
+  const end=endingFor(answers);
+  const rows=answers.map((id,i) => {
+    const option=optionFor(i+1,id);
+    return `<tr>
+      <td>${i+1}. ${escapeHTML(DECISION_NAMES[i])}</td>
+      <td><strong>${escapeHTML(option.label)}</strong><br>${escapeHTML(option.text)}</td>
+      <td>${escapeHTML(responseFor(i+1,answers).record)}</td>
+    </tr>`;
+  }).join("");
+  return `
+  <section class="worksheet-page">
+    ${worksheetHeader()}
+    <div class="ws-section">My decision-making journey</div>
+    <p style="font-size:10pt;margin:7px 0">Role: Wellington Koo &nbsp; | &nbsp;
+      Route: ${escapeHTML(routeCode(answers))}</p>
+    <table class="ws-table">
+      <colgroup><col style="width:19%"><col style="width:46%"><col style="width:35%"></colgroup>
+      <thead><tr><th>Decision</th><th>What I chose</th><th>What happened next</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="ws-ending">
+      <strong>My ending: ${escapeHTML(end.title)}</strong>
+      <ul>${end.facts.map(fact => "<li>"+escapeHTML(fact)+"</li>").join("")}</ul>
+    </div>
+    <div class="ws-history"><strong>Historical reference</strong><br>${escapeHTML(HISTORICAL_SUMMARY)}</div>
+    <div class="ws-footer">Decision record · 1 / 2</div>
+  </section>
+
+  <section class="worksheet-page">
+    <div class="ws-section" style="text-align:center;margin-top:0;font-size:12pt">
+      Reflection — Through the eyes of Wellington Koo
+    </div>
+
+    <div class="ws-question"><strong>1. Was your ending a good ending for China?</strong></div>
+    <p class="ws-prompt">Use your decision record and closing report. Consider China’s right to govern
+      Shandong, its people’s interests and its ability to continue seeking the return of the disputed rights.
+      If no problem was fully solved, explain what was protected or partly achieved.</p>
+    <table class="ws-table ws-evaluation">
+      <thead><tr>
+        <th>Problems solved, Chinese interests protected, or partial gains</th>
+        <th>Problems that remained, or new risks created</th>
+      </tr></thead>
+      <tbody><tr><td></td><td></td></tr></tbody>
+    </table>
+    <p class="ws-prompt"><strong>Your judgement:</strong> How far was this a good ending?
+      Explain which result matters most. ${escapeHTML(end.question)}</p>
+    ${lines(4)}
+
+    <div class="ws-question"><strong>2. As Wellington Koo, what was the most difficult part of the conference?</strong></div>
+    <p class="ws-prompt">Choose one moment. What did you hope would happen?
+      How did another delegation respond? Explain what surprised or troubled you,
+      and why this made your task difficult.</p>
+    ${lines(5)}
+
+    <div class="ws-question"><strong>3. Looking back, would you keep or change one of your own decisions?</strong></div>
+    <p class="ws-prompt">Identify the decision. If changing it, choose another option that was available
+      at that point. Explain how your choice would help defend China’s interests and what difficulty
+      would still remain because of another country’s concerns. Use Source B or C, or your class knowledge.</p>
+    ${lines(5)}
+
+    <div class="ws-footer">Reflection · ${escapeHTML(routeCode(answers))} · 2 / 2</div>
+  </section>`;
+}
+function refreshWorksheet() {
+  $("worksheet").innerHTML=worksheetHTML();
+}
+function worksheet() {
+  if (answers.length!==4) { notify("Complete all four decisions to produce your worksheet."); return; }
+  setAuto(false);
+  refreshWorksheet();
+  openModal("My reflection worksheet");
+  const row=document.createElement("div");
+  row.className="button-row";
+  const print=document.createElement("button");
+  print.className="primary"; print.textContent="Print / save as PDF";
+  print.addEventListener("click",printWorksheet);
+  const download=document.createElement("button");
+  download.className="secondary"; download.textContent="Download worksheet HTML";
+  download.addEventListener("click",downloadWorksheet);
+  row.append(print,download);
+  const hint=document.createElement("p");
+  hint.className="smallprint";
+  hint.textContent="A4 portrait. Use 100% scale and turn off browser headers and footers. Check the print preview before printing.";
+  const preview=document.createElement("div");
+  preview.id="worksheet-preview";
+  preview.innerHTML=worksheetHTML();
+  $("modal-body").append(row,hint,preview);
+}
+function printWorksheet() {
+  if (answers.length!==4) return;
+  refreshWorksheet(); closeModal(); setAuto(false);
+  const launch=() => requestAnimationFrame(() => requestAnimationFrame(() => window.print()));
+  if (document.fullscreenElement && document.exitFullscreen) {
+    document.exitFullscreen().then(launch).catch(launch);
+  } else launch();
+}
+function downloadFile(blob,filename) {
+  const url=URL.createObjectURL(blob);
+  const link=document.createElement("a");
+  link.href=url; link.download=filename;
+  document.body.append(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url),60000);
+}
+function downloadWorksheet() {
+  if (answers.length!==4) return;
+  const styles=document.querySelector("style").textContent;
+  const content='<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'+
+    '<meta name="viewport" content="width=device-width, initial-scale=1">'+
+    '<title>Shandong — Personal Reflection Worksheet</title><style>'+styles+
+    'html,body{display:block;height:auto;overflow:auto;background:#ddd;color:#000;color-scheme:light}'+
+    '#worksheet{display:block;max-width:210mm;margin:20px auto;background:white;padding:17mm 19mm}'+
+    '.worksheet-page+.worksheet-page{margin-top:20mm}'+
+    '@media print{#worksheet{padding:0;margin:0;max-width:none}.worksheet-page+.worksheet-page{margin-top:0}}'+
+    '</style></head><body><div id="worksheet">'+worksheetHTML()+'</div></body></html>';
+  downloadFile(new Blob([content],{type:"text/html;charset=utf-8"}),
+    "Shandong-reflection-"+routeCode(answers).replaceAll(" – ","-")+".html");
+}
+
+/* Music and ambience */
+let audio=null,master=null,soundEnabled=false,musicTimer=0,musicStep=0;
+function playTone(frequency,volume=.03,duration=1.8,delay=0) {
+  if (!audio || !master || !soundEnabled || document.hidden) return;
+  const now=audio.currentTime+delay;
+  const oscillator=audio.createOscillator();
+  const gain=audio.createGain();
+  oscillator.type="sine";
+  oscillator.frequency.setValueAtTime(frequency,now);
+  gain.gain.setValueAtTime(0,now);
+  gain.gain.linearRampToValueAtTime(volume,now+.025);
+  gain.gain.exponentialRampToValueAtTime(.0001,now+duration);
+  oscillator.connect(gain); gain.connect(master);
+  oscillator.start(now); oscillator.stop(now+duration+.1);
+  oscillator.onended=() => { oscillator.disconnect(); gain.disconnect(); };
+}
+function musicPulse() {
+  if (!soundEnabled || !audio || document.hidden) return;
+  const act=playing ? story[index]?.act || 1 : 1;
+  const motifs={
+    1:[261.63,329.63,392,329.63,293.66,261.63],
+    2:[220,261.63,329.63,293.66,246.94,220],
+    3:[196,261.63,293.66,246.94,220,196]
+  };
+  const notes=motifs[act];
+  playTone(notes[musicStep%notes.length],.055,2.8);
+  if (musicStep%3===0) playTone(notes[musicStep%notes.length]/2,.035,3.3,.2);
+  musicStep++;
+}
+async function toggleSound() {
+  try {
+    if (!audio) {
+      const AudioContext=window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) throw new Error("Audio unavailable");
+      audio=new AudioContext();
+      master=audio.createGain(); master.gain.value=0; master.connect(audio.destination);
+      [130.81,196,261.63].forEach((frequency,i) => {
+        const oscillator=audio.createOscillator(),gain=audio.createGain();
+        oscillator.type="sine"; oscillator.frequency.value=frequency;
+        oscillator.detune.value=i%2 ? -4 : 3;
+        gain.gain.value=[.06,.035,.018][i];
+        oscillator.connect(gain); gain.connect(master); oscillator.start();
+      });
+      const length=audio.sampleRate*3;
+      const buffer=audio.createBuffer(1,length,audio.sampleRate);
+      const values=buffer.getChannelData(0);
+      for(let i=0;i<length;i++) values[i]=Math.random()*2-1;
+      const noise=audio.createBufferSource(); noise.buffer=buffer; noise.loop=true;
+      const filter=audio.createBiquadFilter(); filter.type="lowpass"; filter.frequency.value=370;
+      const gain=audio.createGain(); gain.gain.value=.03;
+      noise.connect(filter); filter.connect(gain); gain.connect(master); noise.start();
+    }
+    await audio.resume();
+    soundEnabled=!soundEnabled;
+    master.gain.setTargetAtTime(soundEnabled && !document.hidden ? .35 : 0,audio.currentTime,.5);
+    $("sound-button").textContent=soundEnabled ? "Sound on" : "Sound off";
+    $("sound-button").setAttribute("aria-pressed",String(soundEnabled));
+    clearInterval(musicTimer);
+    if (soundEnabled) { musicPulse(); musicTimer=setInterval(musicPulse,2400); }
+  } catch (_) { notify("Sound is unavailable in this browser."); }
+}
+async function fullscreen() {
+  hideTooltip();
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else if ($("game").requestFullscreen) await $("game").requestFullscreen();
+    else notify("Fullscreen is not available in this browser.");
+  } catch (_) { notify("Fullscreen could not be opened."); }
+}
+
+/* Portrait loading and standalone export */
+async function resolveCommonsURL(person,signal) {
+  const query=new URLSearchParams({
+    action:"query",format:"json",origin:"*",prop:"imageinfo",iiprop:"url",
+    titles:"File:"+person.file
+  });
+  const response=await fetch("https://commons.wikimedia.org/w/api.php?"+query,{credentials:"omit",signal});
+  if (!response.ok) throw new Error("Portrait lookup failed");
+  const data=await response.json();
+  const url=Object.values(data.query?.pages || {})[0]?.imageinfo?.[0]?.url;
+  if (!url) throw new Error("Portrait not found");
+  return url;
+}
+function setupPortrait(img) {
+  const id=img.dataset.photo;
+  let triedLookup=false;
+  img.decoding="async"; img.draggable=false;
+  img.addEventListener("load",() => img.parentElement.classList.remove("failed"));
+  img.addEventListener("error",async () => {
+    img.parentElement.classList.add("failed");
+    if (triedLookup || embedded[id]) return;
+    triedLookup=true;
+    const controller=new AbortController();
+    const timer=setTimeout(() => controller.abort(),15000);
+    try {
+      const url=await resolveCommonsURL(PEOPLE[id],controller.signal);
+      ASSETS[id]=url; img.src=url;
+    } catch (_) {}
+    finally { clearTimeout(timer); }
+  });
+  img.src=ASSETS[id];
+}
+function blobToDataURL(blob) {
+  return new Promise((resolve,reject) => {
+    const reader=new FileReader();
+    reader.onload=() => resolve(reader.result);
+    reader.onerror=reject; reader.readAsDataURL(blob);
+  });
+}
+async function fetchPortrait(id) {
+  if (ASSETS[id].startsWith("data:image/")) return ASSETS[id];
+  const controller=new AbortController();
+  const timer=setTimeout(() => controller.abort(),30000);
+  try {
+    let response;
+    try {
+      response=await fetch(ASSETS[id],{mode:"cors",credentials:"omit",signal:controller.signal});
+      if (!response.ok || !(response.headers.get("content-type") || "").startsWith("image/")) {
+        throw new Error("Retry portrait lookup");
+      }
+    } catch (error) {
+      if (controller.signal.aborted) throw error;
+      const url=await resolveCommonsURL(PEOPLE[id],controller.signal);
+      response=await fetch(url,{mode:"cors",credentials:"omit",signal:controller.signal});
+    }
+    if (!response.ok) throw new Error("Portrait download failed");
+    const blob=await response.blob();
+    if (!blob.type.startsWith("image/")) throw new Error("Not an image");
+    return await blobToDataURL(blob);
+  } finally { clearTimeout(timer); }
+}
+async function exportOffline() {
+  if (exportBusy) return;
+  exportBusy=true;
+  const button=$("offline-button");
+  if (button) { button.disabled=true; button.textContent="Embedding portraits…"; }
+  try {
+    const data={};
+    for (const id of Object.keys(PEOPLE)) {
+      data[id]=await fetchPortrait(id);
+      if (button) button.textContent="Portraits embedded: "+Object.keys(data).length+" / 5";
+    }
+    const fresh=new DOMParser().parseFromString(ORIGINAL_HTML,"text/html");
+    fresh.getElementById("embedded-assets").textContent=JSON.stringify(data).replace(/</g,"\\u003c");
+    downloadFile(new Blob(["<!DOCTYPE html>\n",fresh.documentElement.outerHTML],{
+      type:"text/html;charset=utf-8"
+    }),"china-at-the-peace-table-offline.html");
+    notify("Offline game downloaded with all five portraits embedded.");
+    if (button) button.textContent="Download offline HTML again";
+  } catch (_) {
+    notify("Could not embed every portrait. Check your connection or browser restrictions and try again.");
+    if (button) button.textContent="Try offline download again";
+  } finally {
+    exportBusy=false;
+    if (button) button.disabled=false;
+  }
+}
+
+const actions={
+  begin,
+  restart:() => confirmAction("Begin again?",
+    "Your automatic route will be replaced. Print or download your worksheet first if you want to keep it.",
+    "Start again",startNew),
+  home,resume:() => loadSave(KEYS.auto),advance,next:nextInstant,back:goBack,
+  revise,words,dossier,history,auto:() => setAuto(!automatic),
+  save:() => storeSave(KEYS.manual,true),load:() => loadSave(KEYS.manual),
+  settings,help,credits,sound:toggleSound,fullscreen,worksheet,historical,offline:exportOffline
+};
+document.addEventListener("click",event => {
+  const control=event.target.closest("[data-action]");
+  if (!control || control.disabled) return;
+  actions[control.dataset.action]?.();
+});
+$("dialogue").addEventListener("click",event => {
+  if (!event.target.closest(".term")) advance();
+});
+document.addEventListener("keydown",event => {
+  if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || $("modal").open) return;
+  if (event.target.matches("input,textarea,select,[contenteditable=true]")) return;
+  if (event.target.closest("button,a") && (event.key===" " || event.key==="Enter")) return;
+  const key=event.key.toLowerCase();
+  const mapping={m:toggleSound,f:fullscreen};
+  if (playing) Object.assign(mapping,{
+    " ":advance,enter:advance,arrowright:advance,arrowleft:goBack,
+    "1":() => choose(0),"2":() => choose(1),"3":() => choose(2),
+    g:words,h:history,b:dossier,a:() => setAuto(!automatic),
+    s:() => storeSave(KEYS.manual,true),l:() => loadSave(KEYS.manual)
+  });
+  if (mapping[key]) { event.preventDefault(); mapping[key](); }
+});
+let lastWheel=0,wheelAmount=0,wheelDirection=0,lastWheelEvent=0;
+$("game").addEventListener("wheel",event => {
+  if (!playing || $("modal").open || event.ctrlKey || !event.deltaY) return;
+  if (event.target.closest("#word-tooltip")) return;
+  const panel=event.target.closest(".paper-note,.choices-content,.ending-content,#dialogue-text");
+  if (panel && panel.scrollHeight>panel.clientHeight+2) return;
+  if (tipAnchor) { hideTooltip(); return; }
+  event.preventDefault();
+  const now=performance.now(),direction=Math.sign(event.deltaY);
+  if (direction!==wheelDirection || now-lastWheelEvent>180) wheelAmount=0;
+  wheelDirection=direction; lastWheelEvent=now;
+  if (now-lastWheel<300) return;
+  wheelAmount+=event.deltaY*(event.deltaMode===1 ? 16 : event.deltaMode===2 ? innerHeight : 1);
+  if (Math.abs(wheelAmount)<26) return;
+  const requested=Math.sign(wheelAmount);
+  wheelAmount=0; lastWheel=now;
+  if (requested<0) goBack(); else nextInstant();
+},{passive:false});
+document.addEventListener("dragstart",event => {
+  if (event.target.closest("#game")) event.preventDefault();
+});
+document.addEventListener("visibilitychange",() => {
+  clearTimeout(automaticTimer);
+  if (document.hidden && typing) finishTyping();
+  if (audio && master) master.gain.setTargetAtTime(
+    soundEnabled && !document.hidden ? .35 : 0,audio.currentTime,.3);
+  if (!document.hidden) queueAuto();
+});
+window.addEventListener("pagehide",() => { if (playing) storeSave(KEYS.auto); });
+window.addEventListener("beforeprint",() => {
+  setAuto(false); hideTooltip();
+  if (answers.length===4) refreshWorksheet();
+});
+
+Object.entries(PEOPLE).forEach(([id,person]) => {
+  const figure=document.createElement("figure");
+  figure.className="actor"; figure.id="actor-"+id;
+  figure.setAttribute("aria-hidden","true");
+  figure.innerHTML=
+    '<div class="photo-shell"><img data-photo="'+id+'" alt="'+escapeHTML(person.name)+'">'+
+    '<div class="photo-fallback"><span>'+person.initials+'</span><small>'+
+    escapeHTML(person.name)+'<br>Portrait unavailable</small></div></div>'+
+    '<figcaption>'+escapeHTML(person.caption)+'</figcaption>';
+  $("actors").append(figure);
+});
+$$("[data-photo]").forEach(setupPortrait);
+if (!reducedMotion) {
+  for(let i=0;i<20;i++) {
+    const mote=document.createElement("i");
+    mote.style.left=((i*37)%100)+"%";
+    mote.style.top=((i*19)%80+10)+"%";
+    mote.style.animationDelay=(-i*1.3)+"s";
+    mote.style.animationDuration=(13+(i%6)*3)+"s";
+    $("dust").append(mote);
+  }
+}
+rebuild();
+home();
+})();
+</script>
+</body>
+</html>

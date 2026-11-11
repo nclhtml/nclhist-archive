@@ -39,10 +39,18 @@ export default function GeneratorDocumentTools({
   const [draft, setDraft] = useState(null);
   const [pastedResult, setPastedResult] = useState("");
 
+  /*
+   * Keep the last response even when parsing fails.
+   * This is separate from the editable paste box and draft.
+   */
+  const [rawAiResult, setRawAiResult] = useState("");
+  const [rawAiError, setRawAiError] = useState("");
+
   const running = useRef(false);
   const mounted = useRef(false);
   const promptRef = useRef(null);
   const pdfInputRef = useRef(null);
+  const diagnosticRef = useRef(null);
 
   const blocked = disabled || busy || importing;
   const selected = slots.find(item => item.slot === slot);
@@ -358,23 +366,135 @@ export default function GeneratorDocumentTools({
   }
 
   function receiveDraft(result) {
+    let rawText;
+
     try {
-      const parsed = parseGeneratorDraft(result.text);
+      rawText = typeof result === "string"
+        ? result
+        : typeof result?.text === "string"
+          ? result.text
+          : JSON.stringify(result ?? null, null, 2);
+    } catch {
+      setDraft(null);
+      setRawAiError(
+        "The AI response could not be converted into readable text."
+      );
+      setMessage(
+        "The AI response could not be read. " +
+        "Any previously captured response remains available below."
+      );
+      return;
+    }
+
+    /*
+     * Capture BEFORE validation.
+     * A parsing error must not destroy the response.
+     */
+    setRawAiResult(rawText);
+    setRawAiError("");
+    setDraft(null);
+
+    try {
+      const parsed = parseGeneratorDraft(rawText);
 
       setDraft(parsed);
 
       setMessage(
-        "AI draft received and its structure checked. " +
-        "Review the warnings and compare it with the originals " +
-        "before applying it."
+        "AI draft received and checked. " +
+        "Review all warnings, including any automatic table repairs, " +
+        "and compare the draft with the originals before applying it. " +
+        "The original AI response is available below."
       );
     } catch (error) {
-      setDraft(null);
+      const explanation =
+        error.message || "Could not read the AI draft.";
+
+      setRawAiError(explanation);
 
       setMessage(
-        error.message || "Could not read the AI draft."
+        explanation + "\n\n" +
+        "The response has been preserved under " +
+        "“Last AI response and troubleshooting”. " +
+        "Copy or download its diagnostic report for help."
       );
     }
+  }
+
+  function diagnosticReport() {
+    return [
+      "DOCUMENT GENERATOR IMPORT DIAGNOSTIC",
+      "",
+      "Validation result:",
+      rawAiError ||
+        "Parsing and document normalization completed. " +
+        "This does not verify transcription accuracy.",
+      "",
+      "The response below is the captured response before normalization.",
+      "Inspection claims inside it are AI-reported, not independently verified.",
+      "",
+      "----- BEGIN CAPTURED RESPONSE -----",
+      rawAiResult,
+      "----- END CAPTURED RESPONSE -----"
+    ].join("\n");
+  }
+
+  async function copyDiagnosticReport() {
+    if (blocked || !rawAiResult) return;
+
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard access is unavailable.");
+      }
+
+      await navigator.clipboard.writeText(diagnosticReport());
+
+      if (mounted.current) {
+        setMessage(
+          "Diagnostic report copied. It includes the validation result " +
+          "and the captured AI response. Review it for private information " +
+          "before sharing it."
+        );
+      }
+    } catch {
+      diagnosticRef.current?.focus();
+      diagnosticRef.current?.select();
+
+      if (mounted.current) {
+        setMessage(
+          "Automatic copying was blocked. The diagnostic report is " +
+          "selected below. Press Ctrl+C, or Command+C on a Mac."
+        );
+      }
+    }
+  }
+
+  function downloadDiagnosticReport() {
+    if (blocked || !rawAiResult) return;
+
+    const blob = new Blob(
+      [diagnosticReport()],
+      { type: "text/plain;charset=utf-8" }
+    );
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = "generator-import-diagnostic.txt";
+
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+
+    window.setTimeout(
+      () => URL.revokeObjectURL(url),
+      30000
+    );
+
+    setMessage(
+      "Diagnostic report downloaded. It includes document contents, " +
+      "so review it for private information before sharing it."
+    );
   }
 
   function checkPastedResult() {
@@ -833,6 +953,107 @@ export default function GeneratorDocumentTools({
           Clear pasted result
         </button>
       </div>
+
+      {rawAiResult && (
+        <section className="msg-import-draft">
+          <h3>Last AI response and troubleshooting</h3>
+
+          <p className="msg-note">
+            The last captured response is kept here even if validation
+            fails or you discard the draft. Copy or download this report
+            before leaving or reloading the page. A newly checked response
+            replaces this one.
+          </p>
+
+          {rawAiError && (
+            <p
+              className="msg-warning"
+              style={{ whiteSpace: "pre-wrap" }}
+            >
+              Validation error: {rawAiError}
+            </p>
+          )}
+
+          <p className="msg-note">
+            This report contains the AI response and may contain private
+            document information. Review it before sending it to anyone.
+          </p>
+
+          <label className="msg-field">
+            <span>
+              Diagnostic report — includes the captured response before repair
+            </span>
+
+            <textarea
+              ref={diagnosticRef}
+              readOnly
+              rows={12}
+              value={diagnosticReport()}
+              style={{
+                width: "100%",
+                height: "18rem",
+                fontFamily: "monospace"
+              }}
+            />
+          </label>
+
+          <div className="msg-actions">
+            <button
+              type="button"
+              className="msg-primary"
+              disabled={blocked}
+              onClick={copyDiagnosticReport}
+            >
+              Copy diagnostic report
+            </button>
+
+            <button
+              type="button"
+              disabled={blocked}
+              onClick={downloadDiagnosticReport}
+            >
+              Download diagnostic report (.txt)
+            </button>
+
+            <button
+              type="button"
+              disabled={blocked}
+              onClick={() => {
+                setPastedResult(rawAiResult);
+                setDraft(null);
+                setMessage(
+                  "Captured response copied into the result box. " +
+                  "Edit it there, then click “Check pasted result”."
+                );
+              }}
+            >
+              Put response into result box
+            </button>
+
+            <button
+              type="button"
+              className="msg-danger"
+              disabled={blocked}
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    "Clear the captured response and its diagnostic report? " +
+                    "Download or copy it first if you need it."
+                  )
+                ) {
+                  return;
+                }
+
+                setRawAiResult("");
+                setRawAiError("");
+                setMessage("Captured diagnostic report cleared.");
+              }}
+            >
+              Clear captured response
+            </button>
+          </div>
+        </section>
+      )}
 
       {draft && (
         <div className="msg-import-draft">

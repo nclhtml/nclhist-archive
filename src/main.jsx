@@ -56,6 +56,43 @@ import {
 
 const SUPER_ADMIN = "clng@ktls.edu.hk";
 
+const PeaceTableGame = React.lazy(
+  () => import("./features/peace-table/PeaceTableGame.jsx")
+);
+
+function PublicGameBoundary({ children }) {
+  return (
+    <Routes>
+      <Route
+        path="/peace-table"
+        element={
+          <React.Suspense
+            fallback={
+              <div
+                role="status"
+                style={{
+                  minHeight: "100dvh",
+                  display: "grid",
+                  placeItems: "center",
+                  background: "#090b09",
+                  color: "#eee3ca",
+                  fontFamily: "Georgia, serif",
+                }}
+              >
+                Opening the conference…
+              </div>
+            }
+          >
+            <PeaceTableGame />
+          </React.Suspense>
+        }
+      />
+
+      <Route path="*" element={children} />
+    </Routes>
+  );
+}
+
 // ==========================================
 // 1. GLOBAL AUTHENTICATION CONTEXT
 // ==========================================
@@ -1045,10 +1082,11 @@ const Layout = ({ children }) => {
 // ==========================================
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <AuthProvider>
-      <LanguageProvider>
-        <BrowserRouter>
-          <Layout>
+    <BrowserRouter>
+      <PublicGameBoundary>
+        <AuthProvider>
+          <LanguageProvider>
+            <Layout>
             <Routes>
               <Route path="/" element={<App />} />
               <Route path="/archive-pdf" element={<VersionPdfPage />} />
@@ -1114,9 +1152,10 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="/exercises" element={<Exercises />} />
               <Route path="/exercise/:exerciseId/:studentEmail?" element={<ExerciseRunner />} />
             </Routes>
-          </Layout>
-        </BrowserRouter>
-      </LanguageProvider>
-    </AuthProvider>
+            </Layout>
+          </LanguageProvider>
+        </AuthProvider>
+      </PublicGameBoundary>
+    </BrowserRouter>
   </React.StrictMode>,
 );

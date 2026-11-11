@@ -23,7 +23,7 @@ export default function SiteNavigation({ isAdmin, isPhoneLayout }) {
       links: [
         { to: '/dashboard', label: 'Student Dashboard' },
         { to: '/list', label: 'Saved Lists' },
-        { to: '/exercises', label: 'Interactive Exercises' }
+        { to: '/exercises', label: 'Interactive Exercises' },
       ]
     },
     ...(isAdmin

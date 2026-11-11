@@ -189,9 +189,11 @@ export default function PoeImportPanel({
     const [busy, setBusy] = useState(false);
     const [message, setMessage] = useState('');
     const [resultText, setResultText] = useState('');
+    const [resultInfo, setResultInfo] = useState(null);
 
     const mounted = useRef(false);
     const running = useRef(false);
+    const rawResultRef = useRef(null);
 
     const files = [
         ...entries,
@@ -221,9 +223,13 @@ export default function PoeImportPanel({
         if (!sameFiles(previousFiles.current, files)) {
             previousFiles.current = files;
             setConsent(false);
-            setResultText('');
             setMessage('');
             latestCallbacks.current.onInvalidate?.();
+
+            /*
+             * Keep the previous response available for recovery.
+             * Changing input files does not delete its download.
+             */
         }
     });
 
@@ -248,6 +254,110 @@ export default function PoeImportPanel({
     const updateMessage = value => {
         if (mounted.current) setMessage(value);
     };
+
+    function downloadRecoveryFile(contents, filename) {
+        const blob = new Blob(
+            [contents],
+            { type: 'text/plain;charset=utf-8' }
+        );
+
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+
+        link.href = url;
+        link.download = filename;
+
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+
+        window.setTimeout(
+            () => URL.revokeObjectURL(url),
+            30000
+        );
+    }
+
+    async function copyAiResponse() {
+        if (!resultText) return;
+
+        try {
+            if (!navigator.clipboard?.writeText) {
+                throw new Error('Clipboard access is unavailable.');
+            }
+
+            await navigator.clipboard.writeText(resultText);
+
+            updateMessage(
+                'Captured AI response copied. It may contain private ' +
+                'document information. Review it before sharing.'
+            );
+        } catch {
+            rawResultRef.current?.focus();
+            rawResultRef.current?.select();
+
+            updateMessage(
+                'Automatic copying was blocked. The AI response is selected ' +
+                'below. Press Ctrl+C, or Command+C on a Mac.'
+            );
+        }
+    }
+
+    function downloadAiResponse() {
+        if (!resultText) return;
+
+        /*
+         * Use .txt because the response may be invalid or incomplete JSON.
+         * This downloads the captured text, not a fabricated Word document.
+         */
+        downloadRecoveryFile(
+            resultText,
+            'poe-ai-response.txt'
+        );
+    }
+
+    function downloadDiagnosticReport() {
+        if (!resultText) return;
+
+        const validationStatus =
+            resultInfo?.valid === false
+                ? 'Rejected by backend validation. Not sent to the editor.'
+                : resultInfo?.valid === true
+                    ? 'Passed backend validation. Browser validation and human review may still be required.'
+                    : 'Legacy response: no explicit backend validation status was supplied.';
+
+        const report = [
+            'POE IMPORT DIAGNOSTIC REPORT',
+            '',
+            `Received at: ${resultInfo?.receivedAt || 'Unknown'}`,
+            `Model: ${resultInfo?.model || 'Unknown'}`,
+            `Job ID: ${resultInfo?.jobId || 'Unknown'}`,
+            `Stage: ${resultInfo?.stage || 'Unknown'}`,
+            `Finish reason: ${resultInfo?.finishReason || 'Not supplied'}`,
+            '',
+            'VALIDATION STATUS',
+            validationStatus,
+            '',
+            'VALIDATION ERROR',
+            resultInfo?.validationError || 'No backend validation error was supplied.',
+            '',
+            'INPUT FILE MANIFEST',
+            JSON.stringify(resultInfo?.files || [], null, 2),
+            '',
+            'PRIVACY AND INTERPRETATION',
+            'This report contains document contents and may contain personal information.',
+            'Review it before sharing. AI inspection claims are not independent verification.',
+            'The captured text is from before normalization; the configured API key, if present, is redacted.',
+            '',
+            '----- BEGIN CAPTURED AI RESPONSE -----',
+            resultText,
+            '----- END CAPTURED AI RESPONSE -----',
+        ].join('\n');
+
+        downloadRecoveryFile(
+            report,
+            'poe-import-diagnostic.txt'
+        );
+    }
 
     const generate = async () => {
         if (running.current || disabled || !consent || !files.length) return;
@@ -308,7 +418,12 @@ export default function PoeImportPanel({
 
         running.current = true;
         setBusy(true);
-        setResultText('');
+
+        /*
+         * Keep the previous captured response until another response
+         * actually arrives. A failed upload or network request should
+         * not destroy the previous recovery copy.
+         */
         latestCallbacks.current.onInvalidate?.();
         latestCallbacks.current.onBusyChange?.(true);
 
@@ -446,35 +561,108 @@ const prompt = mode === 'generator'
                 );
             }
 
-            if (typeof response.data?.text !== 'string') {
-                throw new Error('The backend returned no JSON draft.');
+            const result = response.data;
+
+            /*
+             * New backend: rawText is the response before normalization.
+             * Older backend: retain compatibility with its text field.
+             */
+            const capturedText =
+                typeof result?.rawText === 'string'
+                    ? result.rawText
+                    : typeof result?.text === 'string'
+                        ? result.text
+                        : '';
+
+            if (capturedText) {
+                setResultText(capturedText);
+
+                setResultInfo({
+                    model: result.model || '',
+                    jobId: result.jobId || jobId,
+                    stage: result.stage || 'legacy-response',
+                    finishReason: result.finishReason || '',
+                    valid:
+                        result.valid === false
+                            ? false
+                            : result.valid === true
+                                ? true
+                                : null,
+                    validationError:
+                        typeof result.validationError === 'string'
+                            ? result.validationError
+                            : '',
+                    receivedAt: new Date().toISOString(),
+                    files: manifest.map(file => ({
+                        role: file.role,
+                        name: file.name,
+                        pageCount: file.pageCount,
+                    })),
+                });
             }
 
-            setResultText(response.data.text);
+            /*
+             * A rejected response is recoverable, not importable.
+             * In particular, do not bypass a failed inspection audit.
+             */
+            if (result?.valid === false) {
+                updateMessage(
+                    'Poe returned a response, but validation rejected it.\n\n' +
+                    (
+                        result.validationError ||
+                        'The returned response does not meet the import requirements.'
+                    ) +
+                    '\n\nNothing was applied to the editor or form.\n' +
+                    (
+                        capturedText
+                            ? 'Use “Copy AI response”, “Download AI response”, or ' +
+                              '“Download diagnostic report” below.'
+                            : 'The backend supplied no response text to download.'
+                    ) +
+                    '\n\nPoe points may have been used. No automatic retry was performed.'
+                );
+
+                return;
+            }
+
+            if (
+                typeof result?.text !== 'string' ||
+                !result.text.trim()
+            ) {
+                throw new Error(
+                    'The backend returned no validated JSON draft. ' +
+                    'Any captured response remains available below.'
+                );
+            }
 
             latestCallbacks.current.onDraft?.({
-                text: response.data.text,
+                text: result.text,
                 files: selected,
             });
 
             updateMessage(
-                `Draft received from ${response.data.model}.\n` +
+                `Draft received from ${result.model || 'Poe'}.\n` +
                 `The backend sent all ${manifest.length} listed PDFs.\n` +
                 'The model reported complete inspection, but that claim does not ' +
                 'prove the extraction is correct. Check the PDFs yourself.\n\n' +
-(mode === 'generator'
-                    ? 'The draft is ready below. Review its warnings, then click ' +
-                    '"Apply PDF draft to editor". This replaces the current editor ' +
-                    'only after you confirm. Save it separately if you want to keep it.'
-                    : mode === 'sample'
-                        ? 'The JSON has been placed in the sample importer below. ' +
-                        'Click Fill Sample Form, review it, then use Upload Data.'
-                        : 'Open the English or Chinese tab and click ' +
-                        '"Fill Form from Poe Draft" in the Questions toolbar. ' +
-                        'Review the result before Upload Data.') +
-                (response.data.warnings?.length
-                    ? '\n\nMODEL WARNINGS:\n' + response.data.warnings.join('\n')
-                    : '')
+                (
+                    mode === 'generator'
+                        ? 'The response was sent to the draft checker below. ' +
+                          'If accepted, review its warnings and use ' +
+                          '“Apply AI draft to editor”. If the browser rejects it, ' +
+                          'the captured response is still downloadable here.'
+                        : mode === 'sample'
+                            ? 'The JSON was sent to the sample importer below. ' +
+                              'Check its validation messages before filling or saving the form.'
+                            : 'The JSON was sent to the question importer. ' +
+                              'Check its validation messages and review the draft before Upload Data.'
+                ) +
+                (
+                    Array.isArray(result.warnings) && result.warnings.length
+                        ? '\n\nMODEL WARNINGS:\n' + result.warnings.join('\n')
+                        : ''
+                ) +
+                '\n\nThe captured AI response is available for copying and downloading below.'
             );
         } catch (error) {
             updateMessage(
@@ -643,18 +831,84 @@ const prompt = mode === 'generator'
             )}
 
             {resultText && (
-                <details className="text-xs">
-                    <summary className="cursor-pointer font-bold text-blue-800">
-                        Show returned JSON / manual recovery copy
-                    </summary>
-                    <textarea
-                        readOnly
-                        rows={10}
-                        value={resultText}
-                        onFocus={event => event.target.select()}
-                        className="w-full mt-2 p-2 border rounded font-mono text-xs"
-                    />
-                </details>
+                <section className="text-xs bg-white border border-blue-200 rounded-lg p-3 space-y-3">
+                    <h4 className="font-bold text-blue-900">
+                        Captured AI response — copy and download
+                    </h4>
+
+                    {resultInfo?.valid === false && (
+                        <p className="text-amber-900 whitespace-pre-wrap">
+                            This response failed backend validation.
+                            It was not sent to the editor.
+                            {'\n\n'}
+                            {resultInfo.validationError}
+                        </p>
+                    )}
+
+                    <p className="text-slate-700">
+                        These downloads contain Poe&apos;s returned text—not
+                        your uploaded PDF and not a Word document.
+                        They remain available even when validation fails.
+                    </p>
+
+                    <p className="text-slate-600">
+                        Received: {resultInfo?.receivedAt || 'Unknown'}
+                        {' · '}
+                        Job: {resultInfo?.jobId || 'Unknown'}
+                    </p>
+
+                    <p className="text-amber-900">
+                        Download before leaving or reloading this page.
+                        A newly captured response replaces this one.
+                        The response may contain private information:
+                        review it before sharing.
+                    </p>
+
+                    <div className="flex flex-wrap gap-2">
+                        <button
+                            type="button"
+                            onClick={copyAiResponse}
+                            className="px-3 py-2 border border-blue-300 rounded font-bold text-blue-900"
+                        >
+                            Copy AI response
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={downloadAiResponse}
+                            className="px-3 py-2 border border-blue-300 rounded font-bold text-blue-900"
+                        >
+                            Download AI response (.txt)
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={downloadDiagnosticReport}
+                            className="px-3 py-2 border border-blue-300 rounded font-bold text-blue-900"
+                        >
+                            Download diagnostic report (.txt)
+                        </button>
+                    </div>
+
+                    <label className="block">
+                        <span className="block font-bold text-slate-700 mb-1">
+                            Captured response before normalization
+                        </span>
+
+                        <textarea
+                            ref={rawResultRef}
+                            readOnly
+                            rows={10}
+                            value={resultText}
+                            onFocus={event => event.target.select()}
+                            style={{
+                                width: '100%',
+                                minHeight: '14rem',
+                            }}
+                            className="w-full p-2 border rounded font-mono text-xs"
+                        />
+                    </label>
+                </section>
             )}
         </div>
     );

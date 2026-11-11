@@ -17,6 +17,166 @@ const PRESETS = [
   "eight"
 ];
 
+/*
+ * Repair redundant table metadata only when the supplied
+ * cell matrices give one clear, rectangular table shape.
+ *
+ * Never remove rows, remove columns, change cell contents,
+ * translate text, or guess where missing cells belong.
+ *
+ * reject() must throw.
+ * report() receives a human-readable repair warning.
+ */
+function repairImportedTable(
+  source,
+  reject,
+  report = () => {}
+) {
+  if (source.type !== "table") return source;
+
+  const label = typeof source.label === "string"
+    ? source.label.slice(0, 30).trim()
+    : "";
+
+  const name = label ? `Source ${label}` : "A table source";
+  const matrices = [];
+
+  for (const key of ["cells", "cellsZh"]) {
+    const value = source[key];
+
+    // The existing normalizer creates an absent-language matrix.
+    if (value === undefined) continue;
+
+    if (
+      !Array.isArray(value) ||
+      value.length < 1 ||
+      value.length > 60
+    ) {
+      reject(
+        `${name}: ${key} must contain between 1 and 60 rows.`
+      );
+    }
+
+    if (
+      !Array.isArray(value[0]) ||
+      value[0].length < 1 ||
+      value[0].length > 10
+    ) {
+      reject(
+        `${name}: ${key} must contain between 1 and 10 columns.`
+      );
+    }
+
+    const columns = value[0].length;
+
+    if (
+      value.some(row =>
+        !Array.isArray(row) ||
+        row.length !== columns
+      )
+    ) {
+      reject(
+        `${name}: ${key} has rows with different lengths. ` +
+        "Automatic repair was stopped to avoid guessing where " +
+        "missing cells belong. Keep the raw AI response for review."
+      );
+    }
+
+    matrices.push({
+      key,
+      rows: value.length,
+      columns
+    });
+  }
+
+  // Without a matrix, retain the existing strict validation.
+  if (!matrices.length) return source;
+
+  const { rows, columns } = matrices[0];
+
+  if (
+    matrices.some(matrix =>
+      matrix.rows !== rows ||
+      matrix.columns !== columns
+    )
+  ) {
+    reject(
+      `${name}: cells and cellsZh describe different table sizes. ` +
+      "Automatic repair was stopped to avoid losing or moving text. " +
+      "Keep the raw AI response for review."
+    );
+  }
+
+  let widths = source.widths;
+  const repairs = [];
+
+  if (source.rows !== rows || source.columns !== columns) {
+    repairs.push(
+      `set the table size to ${rows} rows × ${columns} columns ` +
+      "from the supplied cells, including header rows and label columns"
+    );
+  }
+
+  if (widths === undefined) {
+    widths = Array(columns).fill(1);
+    repairs.push(`created ${columns} equal column widths`);
+  } else {
+    if (
+      !Array.isArray(widths) ||
+      widths.length > 10 ||
+      widths.some(width =>
+        typeof width !== "number" ||
+        !Number.isFinite(width) ||
+        width < 1 ||
+        width > 1000
+      )
+    ) {
+      reject(
+        `${name}: column widths must be numbers between 1 and 1000, ` +
+        "with at most 10 entries."
+      );
+    }
+
+    if (widths.length !== columns) {
+      /*
+       * An equal-width list has no positional information to lose.
+       * A nonuniform list does, so do not guess its intended mapping.
+       */
+      const equalWidths =
+        widths.length === 0 ||
+        widths.every(width => width === widths[0]);
+
+      if (!equalWidths) {
+        reject(
+          `${name}: there are ${columns} columns but ` +
+          `${widths.length} unequal column widths. ` +
+          "Automatic repair cannot determine which width belongs " +
+          "to which column."
+        );
+      }
+
+      widths = Array(columns).fill(widths[0] || 1);
+      repairs.push(
+        `rebuilt the equal-width list with ${columns} entries`
+      );
+    }
+  }
+
+  if (repairs.length) {
+    report(
+      `${name}: automatic structural repair — ${repairs.join("; ")}. ` +
+      "No cell contents were changed. Compare the table with the original."
+    );
+  }
+
+  return {
+    ...source,
+    rows,
+    columns,
+    widths
+  };
+}
+
 function fail(message) {
   throw new functions.https.HttpsError(
     "invalid-argument",
@@ -175,7 +335,14 @@ function normalizeGeneratorDocument(raw) {
       26,
       "sources"
     ).map(rawSource => {
-      const source = object(rawSource, "source");
+      const source = repairImportedTable(
+        object(rawSource, "source"),
+        fail,
+        warning => console.warn(
+          "Generator document structural repair:",
+          warning
+        )
+      );
 
       const rows = number(source.rows, 3, 1, 60, true);
       const columns = number(source.columns, 2, 1, 10, true);
@@ -375,11 +542,22 @@ description: text(source.description, 10000),
           40
         ),
 
+        /*
+         * An unused worksheet heading may have an unknown form.
+         * Store the editor's default without enabling the heading.
+         * An enabled heading must still use a supported form.
+         */
         level: choice(
-          rawWorksheet.level,
+          rawWorksheet.enabled !== true &&
+          (
+            rawWorksheet.level === "" ||
+            rawWorksheet.level === null
+          )
+            ? undefined
+            : rawWorksheet.level,
           ["S4", "S5", "S6"],
           "S4",
-          "form"
+          "worksheet form: choose S4, S5 or S6 when the heading is enabled"
         ),
 
         assessmentEn: text(
@@ -686,13 +864,29 @@ the extract instead; do not relocate it automatically.
 If there is no outside caption, use captionEnabled false and blank
 caption/captionZh.
 Do not invent word explanations or translate an absent caption.
-For tables, use type "table", all cell contents, and matching rows,
-columns, widths, cells and cellsZh.
-Both cell matrices must have exactly rows x columns entries.
-Use blank cells for the absent language.
+For tables, use type "table" and preserve all cell contents.
+Build cells FIRST, then derive rows and columns from that matrix.
+Count every header row in rows.
+Count every column in columns, including a leftmost year or
+row-label column whose heading may be blank.
+Eight data rows plus one header row means rows: 9.
+A year column plus four statistics columns means columns: 5.
+That example needs five widths, such as [1,1,1,1,1].
+headerRow: true does not remove the header from the row count.
+
+Before returning, verify every table:
+rows === cells.length;
+every cells row has exactly columns entries;
+cellsZh.length === rows;
+every cellsZh row has exactly columns entries;
+widths.length === columns.
+Each width must be a number from 1 to 1000.
+Use a full-size matrix of empty strings for an absent language.
+Never delete transcribed cells to match mistaken dimensions.
+
 For extract or picture sources, use rows:1, columns:1, widths:[1],
 cells:[[""]], cellsZh:[[""]].
-Tables support at most 60 rows and 10 columns.
+Tables support at most 60 total rows and 10 total columns.
 Never truncate a larger or complex merged-cell table silently:
 explain the limitation in warnings and preserve its readable
 content in an extract instead.
@@ -729,9 +923,16 @@ English bold-italic emphasis may be represented as ***text***.
 Chinese emphasis may be represented as ***文字***.
 Do not add emphasis that was not present.
 Do not include student names or completed student details.
-Worksheet heading settings should be enabled only if that heading
-actually appears. Do not guess the academic year or form.
-If the worksheet heading is not supported, leave enabled false.
+Worksheet heading settings should be enabled only if a supported heading
+actually appears and its form can be identified as S4, S5 or S6.
+Do not guess the academic year or the actual form.
+If the heading is absent, unsupported, or its form is unknown,
+use enabled false.
+The level field must always contain "S4", "S5" or "S6".
+When enabled is false and the form is unknown, use "S4" solely as
+the required inactive editor default. This does not identify the
+original paper as S4 and must not enable or invent a printed heading.
+Never return an empty string or null for level.
 Ignore page numbers and repeated page furniture.
 
 COMPLETENESS

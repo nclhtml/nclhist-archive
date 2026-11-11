@@ -406,10 +406,17 @@ if (mode === "generator") {
 
     try {
       document = normalizeGeneratorDocument(data.document);
-    } catch {
+    } catch (error) {
+      const explanation =
+        typeof error?.message === "string"
+          ? error.message
+          : "Unknown document validation error.";
+
       fail(
         "failed-precondition",
-        "Poe returned a document that does not match the editor format. Nothing was applied."
+        "Poe returned a document that does not match the editor format. " +
+        explanation +
+        " Nothing was applied."
       );
     }
 
@@ -852,30 +859,86 @@ QUESTION-PAGE GAP CHECK
       const responseData = await response.json();
       const choice = responseData.choices?.[0];
 
-      if (choice?.finish_reason === "length") {
-        fail(
-          "failed-precondition",
-          "Poe reached its output limit. The incomplete response was not imported."
-        );
-      }
+      /*
+       * Capture the provider's text BEFORE checking completion,
+       * parsing JSON, or validating the editor format.
+       *
+       * Return it only through this authenticated callable response.
+       * Do not log the document text or create a public download URL.
+       */
+      const providerText = choice?.message?.content;
 
       if (
-        choice?.finish_reason &&
-        choice.finish_reason !== "stop"
+        typeof providerText !== "string" ||
+        !providerText.trim()
       ) {
         fail(
           "failed-precondition",
-          "Poe did not finish with a normal completed response."
+          "Poe returned no usable text. There is no AI response text " +
+          "available to download from this request."
         );
       }
 
-      let text = choice?.message?.content;
+      /*
+       * Preserve formatting and contents, except that the configured
+       * API key must never be included in a recovery response.
+       *
+       * Do not use redactPoeDiagnostic() here: that helper shortens
+       * text and would destroy the document being recovered.
+       */
+      const secret = POE_API_KEY.value();
 
-      if (typeof text !== "string" || !text.trim()) {
-        fail("failed-precondition", "Poe returned no usable draft.");
+      const rawText = secret
+        ? providerText.split(secret).join("[REDACTED API KEY]")
+        : providerText;
+
+      const finishReason =
+        typeof choice?.finish_reason === "string"
+          ? choice.finish_reason
+          : "";
+
+      function recoveryResult(stage, message) {
+        const validationError = secret
+          ? String(message).split(secret).join("[REDACTED API KEY]")
+          : String(message);
+
+        /*
+         * This is a successful transport of a REJECTED draft.
+         * valid:false means the browser must not send it to onDraft.
+         */
+        return {
+          valid: false,
+          text: "",
+          rawText,
+          validationError,
+          stage,
+          finishReason,
+          model: MODEL,
+          jobId: input.jobId,
+          files: manifest,
+          warnings: [],
+        };
       }
 
-      text = text.trim();
+      if (finishReason === "length") {
+        return recoveryResult(
+          "completion",
+          "Poe reached its output limit. The response is incomplete " +
+          "and was not imported. Its returned text is available " +
+          "for copying and downloading."
+        );
+      }
+
+      if (finishReason && finishReason !== "stop") {
+        return recoveryResult(
+          "completion",
+          `Poe stopped with finish reason "${finishReason}". ` +
+          "The response was not imported. Its returned text is " +
+          "available for copying and downloading."
+        );
+      }
+
+      let text = rawText.trim();
 
       const fence = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
       if (fence) text = fence[1].trim();
@@ -885,17 +948,42 @@ QUESTION-PAGE GAP CHECK
       try {
         draft = JSON.parse(text);
       } catch {
-        fail(
-          "failed-precondition",
-          "Poe returned invalid or incomplete JSON. Your form was not changed."
+        return recoveryResult(
+          "json-parsing",
+          "Poe returned invalid or incomplete JSON. Nothing was applied. " +
+          "Download the diagnostic report to inspect the returned text."
         );
       }
 
-      validateOutput(draft, input.mode, files);
+      try {
+        /*
+         * Retain all existing checks, including attachment inspection,
+         * page ranges and document normalization.
+         */
+        validateOutput(draft, input.mode, files);
+      } catch (error) {
+        return recoveryResult(
+          "output-validation",
+          typeof error?.message === "string"
+            ? error.message
+            : "The AI response failed output validation. Nothing was applied."
+        );
+      }
 
       return {
+        valid: true,
+
+        // Validated/normalized contents for the existing importer.
         text: JSON.stringify(draft, null, 2),
+
+        // Captured contents before JSON parsing and normalization.
+        rawText,
+
+        validationError: "",
+        stage: "validated",
+        finishReason,
         model: MODEL,
+        jobId: input.jobId,
         files: manifest,
         warnings: draft.warnings,
       };

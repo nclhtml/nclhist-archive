@@ -9,6 +9,8 @@ import {
   loadStudentClass,
 } from "./exerciseAccess";
 
+import PublicPeaceTableCard from "./features/peace-table/PublicPeaceTableCard.jsx";
+
 export default function Exercises() {
   const { user, authLoading } = useAuth();
 
@@ -262,28 +264,44 @@ useEffect(() => {
     setLoadingProgress(false);
   };
 
-  if (loading) return <div className="p-8 flex justify-center"><Loader2 className="animate-spin text-blue-600" /></div>;
+  if (loading) {
+    return (
+      <div className="max-w-5xl mx-auto p-6 w-full">
+        <PublicPeaceTableCard />
 
-  if (loadError) {
-  return (
-    <div className="max-w-5xl mx-auto p-6">
-      <div
-        className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-4"
-        role="alert"
-      >
-        <p>{loadError}</p>
-
-        <button
-          type="button"
-          onClick={fetchData}
-          className="mt-3 font-bold underline"
+        <div
+          className="p-8 flex justify-center"
+          role="status"
+          aria-label="Loading assigned exercises"
         >
-          Retry
-        </button>
+          <Loader2 className="animate-spin text-blue-600" />
+        </div>
       </div>
-    </div>
-  );
-}
+    );
+  }
+
+if (loadError) {
+    return (
+      <div className="max-w-5xl mx-auto p-6 w-full">
+        <PublicPeaceTableCard />
+
+        <div
+          className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-4"
+          role="alert"
+        >
+          <p>{loadError}</p>
+
+          <button
+            type="button"
+            onClick={fetchData}
+            className="mt-3 font-bold underline"
+          >
+            Retry assigned exercises
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-5xl mx-auto p-6">
@@ -306,6 +324,8 @@ useEffect(() => {
           </button>
         )}
       </div>
+
+      <PublicPeaceTableCard />
 
       {/* Admin Form */}
       {showForm && user?.isAdmin && (
@@ -365,7 +385,9 @@ useEffect(() => {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {exercises.length === 0 && (
           <div className="col-span-full py-12 text-center text-slate-500 bg-white border border-slate-200 rounded-xl border-dashed">
-            No exercises assigned to you currently.
+            {user
+              ? "No account-based exercises are assigned to you currently. The public game above is still available."
+              : "The public game above needs no sign-in. Sign in only if you want to access exercises assigned to your account."}
           </div>
         )}
         {exercises.map(ex => (

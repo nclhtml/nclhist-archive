@@ -30,8 +30,23 @@ const NUMBER_WIDTH = 480;
  * Leave a small safety allowance at the right edge.
  * Sources are no longer inside a second table cell.
  */
-const CONTENT_WIDTH =
-  TEXT_WIDTH - NUMBER_WIDTH - 120;
+/*
+ * Maximum width for source tables and their containing groups:
+ * 16.1 cm.
+ *
+ * Word uses twips: 1 inch = 1440 twips and 1 inch = 2.54 cm.
+ * Round down so the stored width never exceeds 16.1 cm.
+ *
+ * Also retain the existing allowance within the page text area.
+ */
+const MAX_SOURCE_WIDTH = Math.floor(
+  16.1 * 1440 / 2.54
+);
+  
+const CONTENT_WIDTH = Math.min(
+  TEXT_WIDTH - NUMBER_WIDTH - 120,
+  MAX_SOURCE_WIDTH
+);
 
 const FONT = {
   ascii: "Times New Roman",
@@ -658,14 +673,14 @@ function cell(width, children, options = {}) {
   });
 }
 
-function table(widths, rows, visible = false) {
+function table(widths, rows, visible = false, leftIndent = 0) {
   const border = visible ? visibleBorder : noBorder;
 
   return new Table({
     alignment: AlignmentType.LEFT,
 
     indent: {
-      size: 0,
+      size: leftIndent,
       type: WidthType.DXA
     },
 
@@ -792,10 +807,26 @@ function unbrokenGroup(children) {
   });
 }
 
+/*
+ * Source tables are now top-level Word tables, not tables
+ * nested inside an outer source cell.
+ *
+ * Align their left edge with the indented source headings.
+ * The supplied widths already total CONTENT_WIDTH.
+ */
+function sourceTable(widths, rows, visible = false) {
+  return table(
+    widths,
+    rows,
+    visible,
+    NUMBER_WIDTH
+  );
+}
+
 function tableSource(source, language) {
   const widths = scaledWidths(source.widths);
 
-  return table(
+  return sourceTable(
     widths,
 
     source.cells.map((row, rowIndex) =>
@@ -838,7 +869,7 @@ function extractSource(source, language) {
     .map(value => value.trim())
     .filter(Boolean);
 
-  return table(
+  return sourceTable(
     [CONTENT_WIDTH],
 
     [
@@ -877,7 +908,7 @@ function extractSource(source, language) {
 }
 
 function pictureSource(source) {
-  return table(
+  return sourceTable(
     [CONTENT_WIDTH],
 
     [
@@ -1453,6 +1484,7 @@ function buildQuestionPaper(data) {
 
           {
             language,
+            indented: true,
             bold: true,
             before: 280,
             after: 280,
@@ -1465,6 +1497,7 @@ function buildQuestionPaper(data) {
         sourceChildren.push(
           paragraph(source.description, {
             language,
+            indented: true,
             justify: true,
             after: 200,
             keepNext: true
@@ -1486,18 +1519,6 @@ if (source.type === "table") {
         );
       }
 
-      /*
-       * The caption follows the source table directly.
-       *
-       * It is outside the source border but inside the
-       * same non-splitting source group.
-       *
-       * No indentation: its text starts at the source
-       * border's left edge.
-       *
-       * The paragraph helper uses single line spacing.
-       * No extra before/after spacing is added.
-       */
 if (
         source.captionEnabled &&
         source.caption.trim()
@@ -1505,14 +1526,23 @@ if (
         sourceChildren.push(
           paragraph(source.caption, {
             language,
+            indented: true,
             before: 80, // 4 pt
             after: 0
           })
         );
       }
 
+      /*
+       * Insert the source heading, description, table and caption
+       * directly into the document.
+       *
+       * Do not wrap the source table inside another table cell:
+       * that creates competing width constraints and can affect
+       * right-border rendering in Word, PDF and printing.
+       */
       children.push(
-        unbrokenGroup(sourceChildren),
+        ...sourceChildren,
         tinySeparator()
       );
     });
